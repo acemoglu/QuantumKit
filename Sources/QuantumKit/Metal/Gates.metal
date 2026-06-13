@@ -120,3 +120,18 @@ kernel void cnot_gate(device float* realBuffer [[buffer(0)]],
         imagBuffer[i1] = tempI;
     }
 }
+
+// Measurement (Probability Calculation)
+kernel void compute_probabilities(device float* realBuffer [[buffer(0)]],
+                                  device float* imagBuffer [[buffer(1)]],
+                                  device float* probBuffer [[buffer(2)]],
+                                  uint id [[thread_position_in_grid]]) {
+                                      
+    float r = realBuffer[id];
+    float i = imagBuffer[id];
+    
+    // Born rule: P(A) = |amplitude|^2
+    probBuffer[id] = (r * r) + (i * i);
+}
+
+

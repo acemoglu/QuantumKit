@@ -12,7 +12,6 @@ public struct StateVector {
     public let qubitCount: Int
     public let stateCount: Int
     
-    // Standart Swift Array yerine doğrudan Unified Memory işaretçileri!
     public let realBuffer: MTLBuffer
     public let imagBuffer: MTLBuffer
     
@@ -35,7 +34,7 @@ public struct StateVector {
         self.realBuffer = rBuf
         self.imagBuffer = iBuf
         
-        // CPU üzerinden belleğe ulaşıp ilk değerleri yazıyoruz
+        
         let realPointer = realBuffer.contents().assumingMemoryBound(to: QFloat.self)
         let imagPointer = imagBuffer.contents().assumingMemoryBound(to: QFloat.self)
         
