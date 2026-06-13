@@ -33,3 +33,90 @@ kernel void hadamard_gate(device float* realBuffer [[buffer(0)]],
     realBuffer[i1] = (r0 - r1) * M_SQRT1_2_F;
     imagBuffer[i1] = (im0 - im1) * M_SQRT1_2_F;
 }
+
+kernel void pauli_x_gate(device float* realBuffer [[buffer(0)]],
+                         device float* imagBuffer [[buffer(1)]],
+                         constant uint& targetQubit [[buffer(2)]],
+                         uint id [[thread_position_in_grid]]) {
+
+    uint mask = (1 << targetQubit) - 1;
+    uint i0 = ((id >> targetQubit) << (targetQubit + 1)) | (id & mask);
+    uint i1 = i0 | (1 << targetQubit);
+
+    // Swap amplitudes completely
+    float tempR = realBuffer[i0];
+    float tempI = imagBuffer[i0];
+
+    realBuffer[i0] = realBuffer[i1];
+    imagBuffer[i0] = imagBuffer[i1];
+
+    realBuffer[i1] = tempR;
+    imagBuffer[i1] = tempI;
+}
+
+kernel void pauli_y_gate(device float* realBuffer [[buffer(0)]],
+                         device float* imagBuffer [[buffer(1)]],
+                         constant uint& targetQubit [[buffer(2)]],
+                         uint id [[thread_position_in_grid]]) {
+
+    uint mask = (1 << targetQubit) - 1;
+    uint i0 = ((id >> targetQubit) << (targetQubit + 1)) | (id & mask);
+    uint i1 = i0 | (1 << targetQubit);
+
+    float r0 = realBuffer[i0];
+    float im0 = imagBuffer[i0];
+    
+    float r1 = realBuffer[i1];
+    float im1 = imagBuffer[i1];
+
+    // Y gate applies: |0> -> i|1>, |1> -> -i|0>
+    // Complex multiplication rules dictate this specific cross-assignment
+    realBuffer[i0] = im1;
+    imagBuffer[i0] = -r1;
+
+    realBuffer[i1] = -im0;
+    imagBuffer[i1] = r0;
+}
+
+
+kernel void pauli_z_gate(device float* realBuffer [[buffer(0)]],
+                         device float* imagBuffer [[buffer(1)]],
+                         constant uint& targetQubit [[buffer(2)]],
+                         uint id [[thread_position_in_grid]]) {
+
+    uint mask = (1 << targetQubit) - 1;
+    uint i0 = ((id >> targetQubit) << (targetQubit + 1)) | (id & mask);
+    uint i1 = i0 | (1 << targetQubit);
+
+    // State |0> (index i0) remains unchanged.
+    // State |1> (index i1) flips its phase (-1).
+    realBuffer[i1] = -realBuffer[i1];
+    imagBuffer[i1] = -imagBuffer[i1];
+}
+
+// Note: Buffer 2  expects a uint2 (Control and Target qubits)
+kernel void cnot_gate(device float* realBuffer [[buffer(0)]],
+                      device float* imagBuffer [[buffer(1)]],
+                      constant uint2& qubits [[buffer(2)]],
+                      uint id [[thread_position_in_grid]]) {
+
+    uint controlQubit = qubits.x;
+    uint targetQubit = qubits.y;
+
+    // Base parallel split on the target qubit
+    uint mask = (1 << targetQubit) - 1;
+    uint i0 = ((id >> targetQubit) << (targetQubit + 1)) | (id & mask);
+    uint i1 = i0 | (1 << targetQubit);
+
+    // Apply the Pauli-X swap only if the control bit is 1. Bitwise check on the state index ensures exact entanglement
+    if ((i0 & (1 << controlQubit)) != 0) {
+        float tempR = realBuffer[i0];
+        float tempI = imagBuffer[i0];
+
+        realBuffer[i0] = realBuffer[i1];
+        imagBuffer[i0] = imagBuffer[i1];
+
+        realBuffer[i1] = tempR;
+        imagBuffer[i1] = tempI;
+    }
+}
