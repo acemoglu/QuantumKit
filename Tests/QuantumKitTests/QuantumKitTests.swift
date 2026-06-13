@@ -102,24 +102,26 @@ final class QuantumKitTests: XCTestCase {
     }
 
     func testModularExponentiationScaffold() throws {
-        var circuit = try QuantumCircuit(qubitCount: 8)
+        var circuit = try QuantumCircuit(qubitCount: 22)
 
         XCTAssertNoThrow(try circuit.applyModularExponentiation(
             a: 3,
             modulus: 7,
             controlRegister: 0...2,
-            targetRegister: 3...7
+            targetRegister: 3...7,
+            ancillaRegister: 8...21
         ))
     }
 
     func testModularExponentiationRejectsInvalidParameters() throws {
-        var circuit = try QuantumCircuit(qubitCount: 6)
+        var circuit = try QuantumCircuit(qubitCount: 22)
 
         XCTAssertThrowsError(try circuit.applyModularExponentiation(
             a: 2,
             modulus: 1,
             controlRegister: 0...1,
-            targetRegister: 2...5
+            targetRegister: 2...5,
+            ancillaRegister: 6...21
         )) { error in
             XCTAssertTrue(error is QuantumCircuitError)
         }
@@ -128,7 +130,8 @@ final class QuantumKitTests: XCTestCase {
             a: 2,
             modulus: 5,
             controlRegister: 0...3,
-            targetRegister: 2...5
+            targetRegister: 2...5,
+            ancillaRegister: 6...21
         )) { error in
             XCTAssertTrue(error is QuantumCircuitError)
         }
@@ -137,7 +140,8 @@ final class QuantumKitTests: XCTestCase {
             a: -1,
             modulus: 5,
             controlRegister: 0...1,
-            targetRegister: 2...5
+            targetRegister: 2...5,
+            ancillaRegister: 6...21
         )) { error in
             XCTAssertTrue(error is QuantumCircuitError)
         }
