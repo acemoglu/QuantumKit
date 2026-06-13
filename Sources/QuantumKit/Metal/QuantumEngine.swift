@@ -26,6 +26,8 @@ public struct Pipelines {
     let pauliZ: MTLComputePipelineState
     let cnot: MTLComputePipelineState
     
+    let probabilities: MTLComputePipelineState
+    
     init(device: MTLDevice, library: MTLLibrary) throws {
         guard let hFunc = library.makeFunction(name: "hadamard_gate") else { throw QuantumEngineError.functionNotFound("hadamard_gate") }
         self.hadamard = try device.makeComputePipelineState(function: hFunc)
@@ -42,6 +44,9 @@ public struct Pipelines {
         guard let cxFunc = library.makeFunction(name: "cnot_gate") else { throw QuantumEngineError.functionNotFound("cnot_gate") }
         self.cnot = try device.makeComputePipelineState(function: cxFunc)
         
+        guard let probFunc = library.makeFunction(name: "compute_probabilities") else { throw QuantumEngineError.functionNotFound("compute_probabilities") }
+        self.probabilities = try device.makeComputePipelineState(function: probFunc)
+
     }
 }
 
@@ -163,6 +168,28 @@ public class QuantumEngine {
         commandBuffer.waitUntilCompleted()
     }
     
+    
+    public func executeProbabilityKernel(on state: StateVector, outputBuffer: MTLBuffer) throws {
+        guard let commandBuffer = commandQueue.makeCommandBuffer(),
+              let computeEncoder = commandBuffer.makeComputeCommandEncoder() else {
+            throw QuantumEngineError.commandBufferCreationFailed
+        }
+        
+        computeEncoder.setComputePipelineState(pipelines.probabilities)
+        computeEncoder.setBuffer(state.realBuffer, offset: 0, index: 0)
+        computeEncoder.setBuffer(state.imagBuffer, offset: 0, index: 1)
+        computeEncoder.setBuffer(outputBuffer, offset: 0, index: 2)
+        
+        let threadsPerGrid = MTLSize(width: state.stateCount, height: 1, depth: 1)
+        let w = pipelines.probabilities.threadExecutionWidth
+        let threadsPerThreadgroup = MTLSize(width: min(w, state.stateCount), height: 1, depth: 1)
+        
+        computeEncoder.dispatchThreads(threadsPerGrid, threadsPerThreadgroup: threadsPerThreadgroup)
+        
+        computeEncoder.endEncoding()
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted() 
+    }
     
 }
 
