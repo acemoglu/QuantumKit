@@ -39,6 +39,7 @@ public struct StateVector {
         let realPointer = realBuffer.contents().assumingMemoryBound(to: QFloat.self)
         let imagPointer = imagBuffer.contents().assumingMemoryBound(to: QFloat.self)
         
+        
         realPointer.assign(repeating: 0.0, count: stateCount)
         imagPointer.assign(repeating: 0.0, count: stateCount)
         
