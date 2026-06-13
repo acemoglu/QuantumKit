@@ -121,6 +121,36 @@ kernel void cnot_gate(device float* realBuffer [[buffer(0)]],
     }
 }
 
+// RZ: |0> *= e^{-i theta/2}, |1> *= e^{i theta/2}
+kernel void rz_gate(device float* realBuffer [[buffer(0)]],
+                    device float* imagBuffer [[buffer(1)]],
+                    constant uint& targetQubit [[buffer(2)]],
+                    constant float& theta [[buffer(3)]],
+                    uint id [[thread_position_in_grid]]) {
+
+    uint mask = (1 << targetQubit) - 1;
+    uint i0 = ((id >> targetQubit) << (targetQubit + 1)) | (id & mask);
+    uint i1 = i0 | (1 << targetQubit);
+
+    float r0 = realBuffer[i0];
+    float im0 = imagBuffer[i0];
+
+    float r1 = realBuffer[i1];
+    float im1 = imagBuffer[i1];
+
+    float halfTheta = theta * 0.5f;
+    float cosH = cos(halfTheta);
+    float sinH = sin(halfTheta);
+
+    // i0 multiplied by (cosH - i sinH)
+    realBuffer[i0] = r0 * cosH + im0 * sinH;
+    imagBuffer[i0] = im0 * cosH - r0 * sinH;
+
+    // i1 multiplied by (cosH + i sinH)
+    realBuffer[i1] = r1 * cosH - im1 * sinH;
+    imagBuffer[i1] = im1 * cosH + r1 * sinH;
+}
+
 // Measurement (Probability Calculation)
 kernel void compute_probabilities(device float* realBuffer [[buffer(0)]],
                                   device float* imagBuffer [[buffer(1)]],

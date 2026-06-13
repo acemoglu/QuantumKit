@@ -33,7 +33,7 @@ public struct QuantumCircuit {
         switch gate {
         case .h(let target), .x(let target), .y(let target), .z(let target):
             try validateQubitIndex(target)
-        case .rx(_, let target):
+        case .rx(_, let target), .rz(_, let target):
             try validateQubitIndex(target)
         case .cx(let control, let target):
             try validateQubitIndex(control)
@@ -62,6 +62,12 @@ public struct QuantumCircuit {
     @discardableResult
     public mutating func rx(theta: QFloat, _ target: Int) throws -> QuantumCircuit {
         try applyValidated(.rx(theta: theta, target: target))
+        return self
+    }
+
+    @discardableResult
+    public mutating func rz(theta: QFloat, _ target: Int) throws -> QuantumCircuit {
+        try applyValidated(.rz(theta: theta, target: target))
         return self
     }
 

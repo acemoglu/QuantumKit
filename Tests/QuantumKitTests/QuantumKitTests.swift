@@ -28,4 +28,27 @@ final class QuantumKitTests: XCTestCase {
 
         XCTAssertTrue(isZeroZero || isOneOne, "Entanglement broken! Collapsed into an impossible state: \(result)")
     }
+    
+    func testQuantumFourierTransform() throws {
+            let qubitCount = 3
+            let engine = try QuantumEngine()
+            
+            guard let device = MTLCreateSystemDefaultDevice() else {
+                XCTFail("Apple Silicon GPU bulunamadı!")
+                return
+            }
+            let state = try StateVector(qubitCount: qubitCount, device: device)
+            var circuit = try QuantumCircuit(qubitCount: qubitCount)
+            
+            try circuit.applyQFT()
+            
+            try engine.execute(circuit, on: state)
+            
+            let result = try QuantumMeasurement.measure(state: state, engine: engine)
+            
+            print("🌊 QFT ÇÖKÜŞ SONUCU (3 Qubit): \(result)")
+            
+            XCTAssertEqual(result.count, qubitCount, "Çöken dizinin uzunluğu kübit sayısına eşit olmalı!")
+        }
+    
 }

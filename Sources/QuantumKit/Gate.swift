@@ -22,5 +22,8 @@ public enum Gate {
     
     /// Parametrized rotation around the X-axis
     case rx(theta:QFloat, target:Int)
-        
+
+    /// Parametrized rotation around the Z-axis
+    case rz(theta:QFloat, target:Int)
+
 }

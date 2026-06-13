@@ -1,3 +1,10 @@
+//
+//  File.swift
+//  QuantumKit
+//
+//  Created by Bugra Acemoglu on 13.06.2026.
+//
+
 import Foundation
 import Metal
 
@@ -20,6 +27,7 @@ public struct Pipelines {
     let pauliY: MTLComputePipelineState
     let pauliZ: MTLComputePipelineState
     let cnot: MTLComputePipelineState
+    let rotZ: MTLComputePipelineState
 
     let probabilities: MTLComputePipelineState
 
@@ -38,6 +46,9 @@ public struct Pipelines {
 
         guard let cxFunc = library.makeFunction(name: "cnot_gate") else { throw QuantumEngineError.functionNotFound("cnot_gate") }
         self.cnot = try device.makeComputePipelineState(function: cxFunc)
+
+        guard let rzFunc = library.makeFunction(name: "rz_gate") else { throw QuantumEngineError.functionNotFound("rz_gate") }
+        self.rotZ = try device.makeComputePipelineState(function: rzFunc)
 
         guard let probFunc = library.makeFunction(name: "compute_probabilities") else { throw QuantumEngineError.functionNotFound("compute_probabilities") }
         self.probabilities = try device.makeComputePipelineState(function: probFunc)
@@ -163,6 +174,14 @@ public class QuantumEngine {
                 dispatchPairwiseGate(encoder: computeEncoder, pipeline: pipelines.cnot, state: state) { encoder in
                     var qubits = SIMD2<UInt32>(x: UInt32(control), y: UInt32(target))
                     encoder.setBytes(&qubits, length: MemoryLayout<SIMD2<UInt32>>.stride, index: 2)
+                }
+
+            case .rz(let theta, let target):
+                dispatchPairwiseGate(encoder: computeEncoder, pipeline: pipelines.rotZ, state: state) { encoder in
+                    var targetQubit = UInt32(target)
+                    encoder.setBytes(&targetQubit, length: MemoryLayout<UInt32>.stride, index: 2)
+                    var thetaValue = Float(theta)
+                    encoder.setBytes(&thetaValue, length: MemoryLayout<Float>.stride, index: 3)
                 }
 
             case .rx:
