@@ -16,7 +16,7 @@ public struct TRNGCollapse {
         let status = SecRandomCopyBytes(kSecRandomDefault, randomBytes.count, &randomBytes)
         
         if status == errSecSuccess {
-            let randomUInt32 = randomBytes.withUnsafeBytes { $0.load(as: UInt32.self)}
+            let randomUInt32 = randomBytes.withUnsafeBytes { $0.load(as: UInt32.self) }
             return Float32(randomUInt32) / Float32(UInt32.max)
             
         } else {

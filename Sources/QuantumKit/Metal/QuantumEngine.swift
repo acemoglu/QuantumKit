@@ -5,6 +5,7 @@
 //  Created by Bugra Acemoglu on 13.06.2026.
 //
 
+import Foundation
 import Metal
 
 public enum QuantumEngineError: Error {
@@ -56,6 +57,24 @@ public class QuantumEngine {
     private let commandQueue: MTLCommandQueue
     private let pipelines: Pipelines
     
+    private static func loadMetalLibrary(device: MTLDevice) throws -> MTLLibrary {
+        if let library = device.makeDefaultLibrary() {
+            return library
+        }
+
+        let bundle = Bundle.module
+        let candidateURLs = [
+            bundle.url(forResource: "Gates", withExtension: "metal", subdirectory: "Metal"),
+            bundle.url(forResource: "Gates", withExtension: "metal"),
+        ]
+
+        guard let metalURL = candidateURLs.compactMap({ $0 }).first else {
+            throw QuantumEngineError.libraryNotFound
+        }
+
+        let source = try String(contentsOf: metalURL, encoding: .utf8)
+        return try device.makeLibrary(source: source, options: nil)
+    }
         
     public init() throws {
         guard let defaultDevice = MTLCreateSystemDefaultDevice() else { throw QuantumEngineError.deviceNotFound }
@@ -64,7 +83,7 @@ public class QuantumEngine {
         guard let queue = device.makeCommandQueue() else { throw QuantumEngineError.commandQueueCreationFailed }
         self.commandQueue = queue
         
-        guard let library = device.makeDefaultLibrary() else { throw QuantumEngineError.libraryNotFound }
+        let library = try Self.loadMetalLibrary(device: device)
         self.pipelines = try Pipelines(device: device, library: library)
     }
     
