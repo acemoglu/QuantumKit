@@ -114,8 +114,7 @@ extension QuantumCircuit {
         try applyUMA(carryIn, registerB[0], registerA[0])
     }
 
-    /// Exact inverse of `applyQuantumAdd` (Cuccaro MAJ/UMA topology run in reverse order).
-    /// Computes |a⟩|b⟩ → |a⟩|b − a⟩, borrow captured in `carryOut`.
+    /// Computes |a⟩|b⟩ → |a⟩|b − a⟩ via two's-complement addition (b + ~a + 1).
     /// `registerA` and `registerB` must be non-empty and of equal length.
     /// `carryIn` must be |0⟩; `carryOut` receives the final borrow bit.
     public mutating func applyQuantumSubtract(
@@ -136,17 +135,22 @@ extension QuantumCircuit {
 
         let n = registerA.count
 
-        try applyMAJ(carryIn, registerB[0], registerA[0])
-        for i in 1..<n {
-            try applyMAJ(registerA[i - 1], registerB[i], registerA[i])
+        for i in 0..<n {
+            try x(registerA[i])
         }
+        try x(carryIn)
 
-        try cx(registerA[n - 1], carryOut)
+        try applyQuantumAdd(
+            registerA: registerA,
+            registerB: registerB,
+            carryIn: carryIn,
+            carryOut: carryOut
+        )
 
-        for i in stride(from: n - 1, through: 1, by: -1) {
-            try applyUMA(registerA[i - 1], registerB[i], registerA[i])
+        try x(carryIn)
+        for i in 0..<n {
+            try x(registerA[i])
         }
-        try applyUMA(carryIn, registerB[0], registerA[0])
     }
 
     // MARK: - Controlled Ripple-Carry Adder helpers
@@ -225,8 +229,7 @@ extension QuantumCircuit {
                                b: registerB[0], a: registerA[0], ancilla: ancilla)
     }
 
-    /// Exact inverse of `applyControlledQuantumAdd`.
-    /// Semantics: |ctrl⟩|a⟩|b⟩ → |ctrl⟩|a⟩|b − ctrl·a⟩.
+    /// Semantics: |ctrl⟩|a⟩|b⟩ → |ctrl⟩|a⟩|b − ctrl·a⟩ via two's-complement addition.
     private mutating func applyControlledQuantumSubtract(
         control: Int,
         registerA: [Int],
@@ -249,27 +252,30 @@ extension QuantumCircuit {
 
         let n = registerA.count
 
-        try applyControlledMAJ(ctrl: control, c: carryIn,
-                               b: registerB[0], a: registerA[0], ancilla: ancilla)
-        for i in 1..<n {
-            try applyControlledMAJ(ctrl: control, c: registerA[i - 1],
-                                   b: registerB[i], a: registerA[i], ancilla: ancilla)
+        for i in 0..<n {
+            try cx(control, registerA[i])
         }
+        try cx(control, carryIn)
 
-        try ccx(control, registerA[n - 1], carryOut)
+        try applyControlledQuantumAdd(
+            control: control,
+            registerA: registerA,
+            registerB: registerB,
+            carryIn: carryIn,
+            carryOut: carryOut,
+            ancilla: ancilla
+        )
 
-        for i in stride(from: n - 1, through: 1, by: -1) {
-            try applyControlledUMA(ctrl: control, c: registerA[i - 1],
-                                   b: registerB[i], a: registerA[i], ancilla: ancilla)
+        try cx(control, carryIn)
+        for i in 0..<n {
+            try cx(control, registerA[i])
         }
-        try applyControlledUMA(ctrl: control, c: carryIn,
-                               b: registerB[0], a: registerA[0], ancilla: ancilla)
     }
 
     // MARK: - Modular Arithmetic (VBE scaffold)
 
     /// Vedral-Barenco-Ekert modular addition: |x⟩ → |(x + a) mod N⟩.
-    /// `ancillaRegister` layout: `[constantReg (n) | carryIn | carryOut | c3xAncilla]`.
+    /// `ancillaRegister` layout: `[constantReg (n) | carryInAdd | carryOutAdd | carryInSub | carryOutSub | c3xAncilla]`.
     /// Classical `a` is synthesised into `constantReg` via controlled-X encoding (assumes |0⟩ initial state).
     public mutating func applyModularAdd(
         a: Int,
@@ -287,9 +293,9 @@ extension QuantumCircuit {
             throw QuantumCircuitError.invalidAlgorithmParameter(reason: "registerX must not be empty")
         }
         let n = registerX.count
-        guard ancillaRegister.count >= n + 3 else {
+        guard ancillaRegister.count >= n + 5 else {
             throw QuantumCircuitError.invalidAlgorithmParameter(
-                reason: "ancillaRegister requires at least registerX.count + 3 qubits (constantReg, carryIn, carryOut, c3xAncilla)"
+                reason: "ancillaRegister requires at least registerX.count + 5 qubits (constantReg, carryInAdd, carryOutAdd, carryInSub, carryOutSub, c3xAncilla)"
             )
         }
 
@@ -297,9 +303,11 @@ extension QuantumCircuit {
         for idx in ancillaRegister { try validateRegisterIndex(idx) }
 
         let constantReg = Array(ancillaRegister[0..<n])
-        let carryIn = ancillaRegister[n]
-        let carryOut = ancillaRegister[n + 1]
-        let c3xAncilla = ancillaRegister[n + 2]
+        let carryInAdd = ancillaRegister[n]
+        let carryOutAdd = ancillaRegister[n + 1]
+        let carryInSub = ancillaRegister[n + 2]
+        let carryOutSub = ancillaRegister[n + 3]
+        let c3xAncilla = ancillaRegister[n + 4]
 
         let addend = a % N
 
@@ -308,8 +316,8 @@ extension QuantumCircuit {
         try applyQuantumAdd(
             registerA: constantReg,
             registerB: registerX,
-            carryIn: carryIn,
-            carryOut: carryOut
+            carryIn: carryInAdd,
+            carryOut: carryOutAdd
         )
         try encodeClassicalValue(addend, bitCount: n, register: constantReg)
 
@@ -318,22 +326,24 @@ extension QuantumCircuit {
         try applyQuantumSubtract(
             registerA: constantReg,
             registerB: registerX,
-            carryIn: carryIn,
-            carryOut: carryOut
+            carryIn: carryInSub,
+            carryOut: carryOutSub
         )
         try encodeClassicalValue(N, bitCount: n, register: constantReg)
 
-        // Step 3: if underflow (borrow = 1), add N back → |(x + a) mod N⟩
+        // Step 3: if underflow (no carry out), add N back → |(x + a) mod N⟩
+        try x(carryOutSub)
         try encodeClassicalValue(N, bitCount: n, register: constantReg)
         try applyControlledQuantumAdd(
-            control: carryOut,
+            control: carryOutSub,
             registerA: constantReg,
             registerB: registerX,
-            carryIn: carryIn,
-            carryOut: carryOut,
+            carryIn: carryInSub,
+            carryOut: carryOutAdd,
             ancilla: c3xAncilla
         )
         try encodeClassicalValue(N, bitCount: n, register: constantReg)
+        try x(carryOutSub)
     }
 
     /// Controlled modular addition: |ctrl⟩|x⟩ → |ctrl⟩|(x + ctrl·a) mod N⟩.
@@ -354,9 +364,9 @@ extension QuantumCircuit {
             throw QuantumCircuitError.invalidAlgorithmParameter(reason: "registerX must not be empty")
         }
         let n = registerX.count
-        guard ancillaRegister.count >= n + 3 else {
+        guard ancillaRegister.count >= n + 5 else {
             throw QuantumCircuitError.invalidAlgorithmParameter(
-                reason: "ancillaRegister requires at least registerX.count + 3 qubits (constantReg, carryIn, carryOut, c3xAncilla)"
+                reason: "ancillaRegister requires at least registerX.count + 5 qubits (constantReg, carryInAdd, carryOutAdd, carryInSub, carryOutSub, c3xAncilla)"
             )
         }
 
@@ -365,9 +375,11 @@ extension QuantumCircuit {
         for idx in ancillaRegister { try validateRegisterIndex(idx) }
 
         let constantReg = Array(ancillaRegister[0..<n])
-        let carryIn = ancillaRegister[n]
-        let carryOut = ancillaRegister[n + 1]
-        let c3xAncilla = ancillaRegister[n + 2]
+        let carryInAdd = ancillaRegister[n]
+        let carryOutAdd = ancillaRegister[n + 1]
+        let carryInSub = ancillaRegister[n + 2]
+        let carryOutSub = ancillaRegister[n + 3]
+        let c3xAncilla = ancillaRegister[n + 4]
 
         let addend = a % N
 
@@ -376,8 +388,8 @@ extension QuantumCircuit {
             control: control,
             registerA: constantReg,
             registerB: registerX,
-            carryIn: carryIn,
-            carryOut: carryOut,
+            carryIn: carryInAdd,
+            carryOut: carryOutAdd,
             ancilla: c3xAncilla
         )
         try applyControlledClassicalValue(control: control, value: addend, bitCount: n, register: constantReg)
@@ -387,22 +399,24 @@ extension QuantumCircuit {
             control: control,
             registerA: constantReg,
             registerB: registerX,
-            carryIn: carryIn,
-            carryOut: carryOut,
+            carryIn: carryInSub,
+            carryOut: carryOutSub,
             ancilla: c3xAncilla
         )
         try applyControlledClassicalValue(control: control, value: N, bitCount: n, register: constantReg)
 
+        try cx(control, carryOutSub)
         try applyControlledClassicalValue(control: control, value: N, bitCount: n, register: constantReg)
         try applyControlledQuantumAdd(
-            control: carryOut,
+            control: carryOutSub,
             registerA: constantReg,
             registerB: registerX,
-            carryIn: carryIn,
-            carryOut: carryOut,
+            carryIn: carryInSub,
+            carryOut: carryOutAdd,
             ancilla: c3xAncilla
         )
         try applyControlledClassicalValue(control: control, value: N, bitCount: n, register: constantReg)
+        try cx(control, carryOutSub)
     }
 
     /// Doubly-controlled modular addition conditioned on both `control1` and `control2` being |1⟩.
@@ -415,9 +429,9 @@ extension QuantumCircuit {
         ancillaRegister: [Int],
         scratchFlag: Int
     ) throws {
-        guard ancillaRegister.count >= registerX.count + 3 else {
+        guard ancillaRegister.count >= registerX.count + 5 else {
             throw QuantumCircuitError.invalidAlgorithmParameter(
-                reason: "ancillaRegister requires at least registerX.count + 3 qubits (constantReg, carryIn, carryOut, c3xAncilla)"
+                reason: "ancillaRegister requires at least registerX.count + 5 qubits (constantReg, carryInAdd, carryOutAdd, carryInSub, carryOutSub, c3xAncilla)"
             )
         }
         try validateRegisterIndex(control1)
@@ -529,7 +543,7 @@ extension QuantumCircuit {
 
         let targetIndices = Array(targetRegister)
         let ancillaIndices = Array(ancillaRegister)
-        let requiredAncillaCount = (targetIndices.count * 2) + 4
+        let requiredAncillaCount = (targetIndices.count * 2) + 6
         guard ancillaIndices.count >= requiredAncillaCount else {
             throw QuantumCircuitError.invalidAlgorithmParameter(
                 reason: "ancillaRegister requires at least (2 * targetRegister.count) + 4 qubits"
@@ -571,9 +585,9 @@ extension QuantumCircuit {
         }
 
         let n = targetRegister.count
-        guard ancillaRegister.count >= (n * 2) + 4 else {
+        guard ancillaRegister.count >= (n * 2) + 6 else {
             throw QuantumCircuitError.invalidAlgorithmParameter(
-                reason: "ancillaRegister requires at least (2 * targetRegister.count) + 4 qubits (accumulator, constantReg, carryIn, carryOut, c3xAncilla, scratchFlag)"
+                reason: "ancillaRegister requires at least (2 * targetRegister.count) + 6 qubits (accumulator, constantReg, carryInAdd, carryOutAdd, carryInSub, carryOutSub, c3xAncilla, scratchFlag)"
             )
         }
 
@@ -582,8 +596,8 @@ extension QuantumCircuit {
         for idx in ancillaRegister { try validateRegisterIndex(idx) }
 
         let accumulator = Array(ancillaRegister[0..<n])
-        let adderAncilla = Array(ancillaRegister[n..<(2 * n + 3)])
-        let scratchFlag = ancillaRegister[(2 * n) + 3]
+        let adderAncilla = Array(ancillaRegister[n..<(2 * n + 5)])
+        let scratchFlag = ancillaRegister[(2 * n) + 5]
 
         let multiplier = a % N
 
