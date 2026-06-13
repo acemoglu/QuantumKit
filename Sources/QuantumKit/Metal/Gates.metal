@@ -190,4 +190,95 @@ kernel void compute_probabilities(device float* realBuffer [[buffer(0)]],
     probBuffer[id] = (r * r) + (i * i);
 }
 
+constant uint scanBlockSize [[function_constant(0)]];
+
+inline uint prefix_scan_block_size() {
+    return scanBlockSize > 0 ? scanBlockSize : 256;
+}
+
+inline void threadgroup_inclusive_scan(threadgroup float* sharedData, uint localID, uint groupSize) {
+    for (uint stride = 1; stride < groupSize; stride <<= 1) {
+        float accumulated = 0.0f;
+        if (localID >= stride) {
+            accumulated = sharedData[localID - stride];
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        sharedData[localID] += accumulated;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+}
+
+// Phase 0: block-local inclusive scan on `dataBuffer`, storing each block total in `blockSums`.
+// Phase 2: add exclusive block offsets from scanned `blockSums` into `dataBuffer`.
+kernel void prefix_sum_probabilities(device float* dataBuffer [[buffer(0)]],
+                                     device float* blockSums [[buffer(1)]],
+                                     constant uint& elementCount [[buffer(2)]],
+                                     constant uint& phase [[buffer(3)]],
+                                     uint globalID [[thread_position_in_grid]],
+                                     uint localID [[thread_index_in_threadgroup]],
+                                     uint groupID [[threadgroup_position_in_grid]],
+                                     uint groupSize [[threads_per_threadgroup]]) {
+    const uint blockSize = prefix_scan_block_size();
+    threadgroup float sharedData[256];
+
+    if (phase == 0) {
+        const uint index = groupID * groupSize + localID;
+        const float value = (index < elementCount) ? dataBuffer[index] : 0.0f;
+        sharedData[localID] = value;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        threadgroup_inclusive_scan(sharedData, localID, groupSize);
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        if (index < elementCount) {
+            dataBuffer[index] = sharedData[localID];
+        }
+
+        const uint blockEnd = min((groupID + 1) * groupSize, elementCount);
+        if (blockEnd > 0 && index == blockEnd - 1) {
+            blockSums[groupID] = sharedData[localID];
+        }
+        return;
+    }
+
+    if (phase == 2) {
+        const uint index = groupID * groupSize + localID;
+        if (index >= elementCount) {
+            return;
+        }
+
+        const float blockOffset = (groupID > 0) ? blockSums[groupID - 1] : 0.0f;
+        dataBuffer[index] += blockOffset;
+    }
+}
+
+kernel void find_collapsed_state(device const float* cdfBuffer [[buffer(0)]],
+                                 constant float& diceRoll [[buffer(1)]],
+                                 constant uint& elementCount [[buffer(2)]],
+                                 device uint* collapsedIndex [[buffer(3)]],
+                                 uint threadID [[thread_position_in_grid]]) {
+    if (threadID != 0 || elementCount == 0) {
+        return;
+    }
+
+    uint low = 0;
+    uint high = elementCount - 1;
+    uint result = elementCount - 1;
+
+    while (low <= high) {
+        const uint mid = (low + high) >> 1;
+        if (diceRoll < cdfBuffer[mid]) {
+            result = mid;
+            if (mid == 0) {
+                break;
+            }
+            high = mid - 1;
+        } else {
+            low = mid + 1;
+        }
+    }
+
+    collapsedIndex[0] = result;
+}
+
 

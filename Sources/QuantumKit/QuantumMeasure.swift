@@ -11,33 +11,8 @@ import Metal
 public struct QuantumMeasurement {
     
     public static func measure(state: StateVector, engine: QuantumEngine) throws -> [Int] {
-        
-        let stateCount = state.stateCount
-        let bufferSize = stateCount * MemoryLayout<QFloat>.stride
-        
-        guard let probBuffer = state.realBuffer.device.makeBuffer(length: bufferSize, options: .storageModeShared)
-        else {
-            fatalError("Probability Buffer alligment failed.")
-        }
-        
-        try engine.executeProbabilityKernel(on: state, outputBuffer: probBuffer)
-                
-        let probPointer = probBuffer.contents().assumingMemoryBound(to: QFloat.self)
         let diceRoll = TRNGCollapse.generateHardwareFloat()
-        
-        
-        var cumulative: QFloat = 0.0
-        var collapsedIndex: Int = 0
-        
-        for i in 0..<stateCount {
-            cumulative += probPointer[i]
-            if diceRoll < cumulative {
-                collapsedIndex = i
-                break
-            }
-        }
-        if diceRoll >= cumulative { collapsedIndex = stateCount - 1 }
-        
+        let collapsedIndex = try engine.executeMeasurementCollapse(on: state, diceRoll: diceRoll)
         return toBitArray(value: collapsedIndex, qubitCount: state.qubitCount)
     }
 

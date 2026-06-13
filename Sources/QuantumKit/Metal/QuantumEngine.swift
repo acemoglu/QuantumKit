@@ -17,6 +17,7 @@ public enum QuantumEngineError: Error {
     case commandBufferCreationFailed
     case commandQueueCreationFailed
     case qubitCountMismatch(circuit: Int, state: Int)
+    case bufferAllocationFailed(requiredBytes: Int)
 
 }
 
@@ -31,6 +32,8 @@ public struct Pipelines {
     let rotZ: MTLComputePipelineState
 
     let probabilities: MTLComputePipelineState
+    let prefixSum: MTLComputePipelineState
+    let collapseSearch: MTLComputePipelineState
 
     init(device: MTLDevice, library: MTLLibrary) throws {
         guard let hFunc = library.makeFunction(name: "hadamard_gate") else { throw QuantumEngineError.functionNotFound("hadamard_gate") }
@@ -57,10 +60,18 @@ public struct Pipelines {
         guard let probFunc = library.makeFunction(name: "compute_probabilities") else { throw QuantumEngineError.functionNotFound("compute_probabilities") }
         self.probabilities = try device.makeComputePipelineState(function: probFunc)
 
+        guard let prefixSumFunc = library.makeFunction(name: "prefix_sum_probabilities") else { throw QuantumEngineError.functionNotFound("prefix_sum_probabilities") }
+        self.prefixSum = try device.makeComputePipelineState(function: prefixSumFunc)
+
+        guard let collapseFunc = library.makeFunction(name: "find_collapsed_state") else { throw QuantumEngineError.functionNotFound("find_collapsed_state") }
+        self.collapseSearch = try device.makeComputePipelineState(function: collapseFunc)
+
     }
 }
 
 public class QuantumEngine {
+
+    private static let scanBlockSize = 256
 
     private let device: MTLDevice
     private let commandQueue: MTLCommandQueue
@@ -202,6 +213,126 @@ public class QuantumEngine {
         computeEncoder.endEncoding()
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
+    }
+
+    private func makeSharedBuffer(length: Int) throws -> MTLBuffer {
+        guard length > 0,
+              let buffer = device.makeBuffer(length: length, options: .storageModeShared) else {
+            throw QuantumEngineError.bufferAllocationFailed(requiredBytes: max(length, 0))
+        }
+        return buffer
+    }
+
+    private func dispatchPrefixSumPhase(
+        encoder: MTLComputeCommandEncoder,
+        pipeline: MTLComputePipelineState,
+        dataBuffer: MTLBuffer,
+        blockSumsBuffer: MTLBuffer,
+        elementCount: Int,
+        phase: UInt32
+    ) {
+        let blockSize = Self.scanBlockSize
+        let threadCount = max(elementCount, 1)
+        var countValue = UInt32(elementCount)
+        var phaseValue = phase
+
+        encoder.setComputePipelineState(pipeline)
+        encoder.setBuffer(dataBuffer, offset: 0, index: 0)
+        encoder.setBuffer(blockSumsBuffer, offset: 0, index: 1)
+        encoder.setBytes(&countValue, length: MemoryLayout<UInt32>.stride, index: 2)
+        encoder.setBytes(&phaseValue, length: MemoryLayout<UInt32>.stride, index: 3)
+
+        let threadsPerGrid = MTLSize(width: threadCount, height: 1, depth: 1)
+        let threadsPerThreadgroup = MTLSize(width: min(blockSize, threadCount), height: 1, depth: 1)
+        encoder.dispatchThreads(threadsPerGrid, threadsPerThreadgroup: threadsPerThreadgroup)
+    }
+
+    private func encodeInclusivePrefixSum(
+        encoder: MTLComputeCommandEncoder,
+        buffer: MTLBuffer,
+        elementCount: Int,
+        blockSumsA: MTLBuffer,
+        blockSumsB: MTLBuffer
+    ) {
+        guard elementCount > 1 else { return }
+
+        let blockSize = Self.scanBlockSize
+        let numBlocks = (elementCount + blockSize - 1) / blockSize
+
+        dispatchPrefixSumPhase(
+            encoder: encoder,
+            pipeline: pipelines.prefixSum,
+            dataBuffer: buffer,
+            blockSumsBuffer: blockSumsA,
+            elementCount: elementCount,
+            phase: 0
+        )
+
+        if numBlocks > 1 {
+            encodeInclusivePrefixSum(
+                encoder: encoder,
+                buffer: blockSumsA,
+                elementCount: numBlocks,
+                blockSumsA: blockSumsB,
+                blockSumsB: blockSumsA
+            )
+
+            dispatchPrefixSumPhase(
+                encoder: encoder,
+                pipeline: pipelines.prefixSum,
+                dataBuffer: buffer,
+                blockSumsBuffer: blockSumsA,
+                elementCount: elementCount,
+                phase: 2
+            )
+        }
+    }
+
+    public func executeMeasurementCollapse(on state: StateVector, diceRoll: Float) throws -> Int {
+        let stateCount = state.stateCount
+        let probabilityBytes = stateCount * MemoryLayout<QFloat>.stride
+        let topLevelBlockCount = max((stateCount + Self.scanBlockSize - 1) / Self.scanBlockSize, 1)
+        let secondLevelBlockCount = max((topLevelBlockCount + Self.scanBlockSize - 1) / Self.scanBlockSize, 1)
+        let blockSumsABytes = topLevelBlockCount * MemoryLayout<QFloat>.stride
+        let blockSumsBBytes = secondLevelBlockCount * MemoryLayout<QFloat>.stride
+
+        let probBuffer = try makeSharedBuffer(length: probabilityBytes)
+        let blockSumsA = try makeSharedBuffer(length: blockSumsABytes)
+        let blockSumsB = try makeSharedBuffer(length: blockSumsBBytes)
+        let collapsedBuffer = try makeSharedBuffer(length: MemoryLayout<UInt32>.stride)
+
+        guard let commandBuffer = commandQueue.makeCommandBuffer(),
+              let computeEncoder = commandBuffer.makeComputeCommandEncoder() else {
+            throw QuantumEngineError.commandBufferCreationFailed
+        }
+
+        dispatchFullStateKernel(encoder: computeEncoder, pipeline: pipelines.probabilities, state: state) { encoder in
+            encoder.setBuffer(probBuffer, offset: 0, index: 2)
+        }
+
+        encodeInclusivePrefixSum(
+            encoder: computeEncoder,
+            buffer: probBuffer,
+            elementCount: stateCount,
+            blockSumsA: blockSumsA,
+            blockSumsB: blockSumsB
+        )
+
+        var diceRollValue = diceRoll
+        var elementCount = UInt32(stateCount)
+        computeEncoder.setComputePipelineState(pipelines.collapseSearch)
+        computeEncoder.setBuffer(probBuffer, offset: 0, index: 0)
+        computeEncoder.setBytes(&diceRollValue, length: MemoryLayout<Float>.stride, index: 1)
+        computeEncoder.setBytes(&elementCount, length: MemoryLayout<UInt32>.stride, index: 2)
+        computeEncoder.setBuffer(collapsedBuffer, offset: 0, index: 3)
+        computeEncoder.dispatchThreads(MTLSize(width: 1, height: 1, depth: 1), threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1))
+
+        computeEncoder.endEncoding()
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+
+        let collapsedPointer = collapsedBuffer.contents().assumingMemoryBound(to: UInt32.self)
+        return Int(collapsedPointer[0])
     }
 
     public func executeProbabilityKernel(on state: StateVector, outputBuffer: MTLBuffer) throws {
