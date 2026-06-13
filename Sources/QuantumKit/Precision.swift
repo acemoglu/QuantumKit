@@ -7,4 +7,4 @@
 
 import Foundation
 
-public typealias QFloat = Float64
+public typealias QFloat = Float32
