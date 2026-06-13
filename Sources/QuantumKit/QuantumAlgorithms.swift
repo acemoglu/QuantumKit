@@ -29,8 +29,81 @@ extension QuantumCircuit {
         }
     }
 
+    public mutating func applySwap(q1: Int, q2: Int) throws {
+        try cx(q1, q2)
+        try cx(q2, q1)
+        try cx(q1, q2)
+    }
+
     public mutating func applyBellState(control: Int = 0, target: Int = 1) throws {
         try h(control)
         try cx(control, target)
+    }
+
+    public mutating func applyModularExponentiation(
+        a: Int,
+        modulus N: Int,
+        controlRegister: ClosedRange<Int>,
+        targetRegister: ClosedRange<Int>
+    ) throws {
+        guard N > 1 else {
+            throw QuantumCircuitError.invalidAlgorithmParameter(reason: "Modulus must be greater than 1")
+        }
+
+        guard a >= 0 else {
+            throw QuantumCircuitError.invalidAlgorithmParameter(reason: "Base must be non-negative")
+        }
+
+        guard !controlRegister.isEmpty, !targetRegister.isEmpty else {
+            throw QuantumCircuitError.invalidAlgorithmParameter(reason: "Control and target registers must not be empty")
+        }
+
+        for index in controlRegister {
+            try validateRegisterIndex(index)
+        }
+
+        for index in targetRegister {
+            try validateRegisterIndex(index)
+        }
+
+        if controlRegister.overlaps(targetRegister) {
+            throw QuantumCircuitError.invalidAlgorithmParameter(reason: "Control and target registers must not overlap")
+        }
+
+        let runningBase = a % N
+        var currentMultiplier = runningBase
+
+        for controlQubit in controlRegister {
+            // TODO: Implement controlled modular multiplication:
+            //       |c>|y> -> |c>|(y * currentMultiplier) mod N> when c = |1>
+            
+            try applyControlledModularMultiply(
+                multiplier: currentMultiplier,
+                modulus: N,
+                control: controlQubit,
+                targetRegister: targetRegister
+            )
+
+            currentMultiplier = (currentMultiplier * currentMultiplier) % N
+        }
+    }
+
+    private mutating func applyControlledModularMultiply(
+        multiplier: Int,
+        modulus: Int,
+        control: Int,
+        targetRegister: ClosedRange<Int>
+    ) throws {
+        // TODO: Decompose into quantum adders/multipliers using ccx and swap primitives.
+        _ = multiplier
+        _ = modulus
+        _ = control
+        _ = targetRegister
+    }
+
+    private func validateRegisterIndex(_ index: Int) throws {
+        guard index >= 0, index < qubitCount else {
+            throw QuantumCircuitError.qubitIndexOutOfBounds(index: index, qubitCount: qubitCount)
+        }
     }
 }

@@ -8,6 +8,7 @@
 public enum QuantumCircuitError: Error {
     case invalidQubitCount(Int)
     case qubitIndexOutOfBounds(index: Int, qubitCount: Int)
+    case invalidAlgorithmParameter(reason: String)
 }
 
 public struct QuantumCircuit {
@@ -38,6 +39,10 @@ public struct QuantumCircuit {
         case .cx(let control, let target):
             try validateQubitIndex(control)
             try validateQubitIndex(target)
+        case .ccx(let control1, let control2, let target):
+            try validateQubitIndex(control1)
+            try validateQubitIndex(control2)
+            try validateQubitIndex(target)
         }
 
         gates.append(gate)
@@ -56,6 +61,12 @@ public struct QuantumCircuit {
     @discardableResult
     public mutating func cx(_ control: Int, _ target: Int) throws -> QuantumCircuit {
         try applyValidated(.cx(control: control, target: target))
+        return self
+    }
+
+    @discardableResult
+    public mutating func ccx(_ control1: Int, _ control2: Int, _ target: Int) throws -> QuantumCircuit {
+        try applyValidated(.ccx(control1: control1, control2: control2, target: target))
         return self
     }
 

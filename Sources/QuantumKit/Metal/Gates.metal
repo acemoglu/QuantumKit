@@ -151,6 +151,32 @@ kernel void rz_gate(device float* realBuffer [[buffer(0)]],
     imagBuffer[i1] = im1 * cosH + r1 * sinH;
 }
 
+// Note: Buffer 2 expects a uint3 (control1, control2, target)
+kernel void ccx_gate(device float* realBuffer [[buffer(0)]],
+                     device float* imagBuffer [[buffer(1)]],
+                     constant uint3& qubits [[buffer(2)]],
+                     uint id [[thread_position_in_grid]]) {
+
+    uint control1 = qubits.x;
+    uint control2 = qubits.y;
+    uint targetQubit = qubits.z;
+
+    uint mask = (1 << targetQubit) - 1;
+    uint i0 = ((id >> targetQubit) << (targetQubit + 1)) | (id & mask);
+    uint i1 = i0 | (1 << targetQubit);
+
+    if ((i0 & (1 << control1)) != 0 && (i0 & (1 << control2)) != 0) {
+        float tempR = realBuffer[i0];
+        float tempI = imagBuffer[i0];
+
+        realBuffer[i0] = realBuffer[i1];
+        imagBuffer[i0] = imagBuffer[i1];
+
+        realBuffer[i1] = tempR;
+        imagBuffer[i1] = tempI;
+    }
+}
+
 // Measurement (Probability Calculation)
 kernel void compute_probabilities(device float* realBuffer [[buffer(0)]],
                                   device float* imagBuffer [[buffer(1)]],

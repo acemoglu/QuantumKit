@@ -19,6 +19,9 @@ public enum Gate {
     
     /// Entangles two qubits. Controlled-NOT gate
     case cx(control:Int, target:Int)
+
+    /// Toffoli gate (CCX): X on target when both controls are |1>
+    case ccx(control1:Int, control2:Int, target:Int)
     
     /// Parametrized rotation around the X-axis
     case rx(theta:QFloat, target:Int)
