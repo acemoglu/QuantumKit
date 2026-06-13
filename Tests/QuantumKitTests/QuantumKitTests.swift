@@ -143,6 +143,57 @@ final class QuantumKitTests: XCTestCase {
         }
     }
 
+    func testQuantumAdder() throws {
+        let engine = try QuantumEngine()
+
+        guard let device = makeDevice() else {
+            XCTFail("Apple Silicon GPU not found!")
+            return
+        }
+
+        let state = try StateVector(qubitCount: 6, device: device)
+        var circuit = try QuantumCircuit(qubitCount: 6)
+
+        // Encode a = 1 (binary 01): set qubit 0 (LSB of registerA)
+        try circuit.x(0)
+        // Encode b = 2 (binary 10): set qubit 3 (MSB of registerB)
+        try circuit.x(3)
+
+        // registerA = [0, 1], registerB = [2, 3], carryIn = 4, carryOut = 5
+        // Expected: 1 + 2 = 3 (binary 11) stored in registerB [2, 3]
+        try circuit.applyQuantumAdd(
+            registerA: [0, 1],
+            registerB: [2, 3],
+            carryIn: 4,
+            carryOut: 5
+        )
+
+        try engine.execute(circuit, on: state)
+
+        let result = try QuantumMeasurement.measure(state: state, engine: engine)
+
+        // Big-endian result layout for 6 qubits: result[k] = state of qubit(5 - k)
+        //   result[0] = qubit 5 (carryOut)
+        //   result[1] = qubit 4 (carryIn)
+        //   result[2] = qubit 3 (registerB MSB)
+        //   result[3] = qubit 2 (registerB LSB)
+        //   result[4] = qubit 1 (registerA MSB)
+        //   result[5] = qubit 0 (registerA LSB)
+        print("➕ QUANTUM ADDER RESULT (1 + 2 = 3): \(result)")
+
+        // Sum 3 = binary 11 in registerB (qubits 2 and 3)
+        XCTAssertEqual(result[2], 1, "registerB MSB (qubit 3) should be 1 — sum = 3")
+        XCTAssertEqual(result[3], 1, "registerB LSB (qubit 2) should be 1 — sum = 3")
+
+        // Ancilla qubits restored
+        XCTAssertEqual(result[0], 0, "carryOut (qubit 5) should be 0 — no overflow for 1+2")
+        XCTAssertEqual(result[1], 0, "carryIn (qubit 4) should remain 0")
+
+        // registerA preserved (a = 1 = binary 01: qubit 0 = 1, qubit 1 = 0)
+        XCTAssertEqual(result[4], 0, "registerA MSB (qubit 1) should be restored to 0")
+        XCTAssertEqual(result[5], 1, "registerA LSB (qubit 0) should be restored to 1")
+    }
+
     func testCCXRejectsOutOfBoundsIndex() throws {
         var circuit = try QuantumCircuit(qubitCount: 3)
 
