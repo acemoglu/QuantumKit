@@ -31,11 +31,12 @@ public struct QuantumMeasurement {
         
         for i in 0..<stateCount {
             cumulative += probPointer[i]
-            if diceRoll <= cumulative {
+            if diceRoll < cumulative {
                 collapsedIndex = i
                 break
             }
         }
+        if diceRoll >= cumulative { collapsedIndex = stateCount - 1 }
         
         return toBitArray(value: collapsedIndex, qubitCount: state.qubitCount)
     }

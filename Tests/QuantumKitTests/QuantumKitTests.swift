@@ -11,11 +11,11 @@ final class QuantumKitTests: XCTestCase {
             XCTFail("Apple Silicon GPU not found!")
             return
         }
-        let state = StateVector(qubitCount: 2, device: device)
+        let state = try StateVector(qubitCount: 28, device: device)
 
-        var circuit = QuantumCircuit(qubitCount: 2)
-        circuit.h(0)
-        circuit.cx(0, 1)
+        var circuit = try QuantumCircuit(qubitCount: 28)
+        try circuit.h(0)
+        try circuit.cx(0, 1)
 
         try engine.execute(circuit, on: state)
 
