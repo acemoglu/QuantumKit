@@ -151,6 +151,34 @@ kernel void rz_gate(device float* realBuffer [[buffer(0)]],
     imagBuffer[i1] = im1 * cosH + r1 * sinH;
 }
 
+// RX: |psi'> = exp(-i * theta/2 * X) |psi|
+kernel void rx_gate(device float* realBuffer [[buffer(0)]],
+                    device float* imagBuffer [[buffer(1)]],
+                    constant uint& targetQubit [[buffer(2)]],
+                    constant float& theta [[buffer(3)]],
+                    uint id [[thread_position_in_grid]]) {
+    uint mask = (1 << targetQubit) - 1;
+    uint i0 = ((id >> targetQubit) << (targetQubit + 1)) | (id & mask);
+    uint i1 = i0 | (1 << targetQubit);
+
+    float r0 = realBuffer[i0];
+    float im0 = imagBuffer[i0];
+    float r1 = realBuffer[i1];
+    float im1 = imagBuffer[i1];
+
+    float halfTheta = theta * 0.5f;
+    float cosH = cos(halfTheta);
+    float sinH = sin(halfTheta);
+
+    // psi0' = cosH * psi0 - i * sinH * psi1
+    realBuffer[i0] = (cosH * r0) + (sinH * im1);
+    imagBuffer[i0] = (cosH * im0) - (sinH * r1);
+
+    // psi1' = -i * sinH * psi0 + cosH * psi1
+    realBuffer[i1] = (sinH * im0) + (cosH * r1);
+    imagBuffer[i1] = (-sinH * r0) + (cosH * im1);
+}
+
 // Note: Buffer 2 expects a uint3 (control1, control2, target)
 kernel void ccx_gate(device float* realBuffer [[buffer(0)]],
                      device float* imagBuffer [[buffer(1)]],
@@ -279,6 +307,19 @@ kernel void find_collapsed_state(device const float* cdfBuffer [[buffer(0)]],
     }
 
     collapsedIndex[0] = result;
+}
+
+kernel void collapse_state_vector(device float* realBuffer [[buffer(0)]],
+                                  device float* imagBuffer [[buffer(1)]],
+                                  constant uint& collapsedIndex [[buffer(2)]],
+                                  uint id [[thread_position_in_grid]]) {
+    if (id == collapsedIndex) {
+        realBuffer[id] = 1.0f;
+        imagBuffer[id] = 0.0f;
+    } else {
+        realBuffer[id] = 0.0f;
+        imagBuffer[id] = 0.0f;
+    }
 }
 
 

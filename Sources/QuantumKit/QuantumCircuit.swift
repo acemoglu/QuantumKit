@@ -39,10 +39,20 @@ public struct QuantumCircuit {
         case .cx(let control, let target):
             try validateQubitIndex(control)
             try validateQubitIndex(target)
+            guard control != target else {
+                throw QuantumCircuitError.invalidAlgorithmParameter(
+                    reason: "CNOT requires distinct control and target qubits"
+                )
+            }
         case .ccx(let control1, let control2, let target):
             try validateQubitIndex(control1)
             try validateQubitIndex(control2)
             try validateQubitIndex(target)
+            guard control1 != control2, control1 != target, control2 != target else {
+                throw QuantumCircuitError.invalidAlgorithmParameter(
+                    reason: "CCX requires three distinct qubits (control1, control2, target)"
+                )
+            }
         }
 
         gates.append(gate)

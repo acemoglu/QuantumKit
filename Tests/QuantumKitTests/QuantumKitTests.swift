@@ -7,6 +7,48 @@ final class QuantumKitTests: XCTestCase {
     private func makeDevice() -> MTLDevice? {
         MTLCreateSystemDefaultDevice()
     }
+    
+    func testMassiveGHZStateGPUPerformance() throws {
+            let engine = try QuantumEngine()
+
+            guard let device = makeDevice() else {
+                XCTFail("Apple Silicon GPU not found!")
+                return
+            }
+
+            // 24 Kübit = Yaklaşık 16.7 Milyon Paralel Durum (State)
+            let qubitCount = 28
+            let state = try StateVector(qubitCount: qubitCount, device: device)
+            var circuit = try QuantumCircuit(qubitCount: qubitCount)
+
+            // 1. Evreni tam ortadan iki ihtimale bölüyoruz
+            try circuit.h(0)
+            
+            // 2. Tüm kübitleri birbirine "Domino Taşı" gibi dolanık hale getiriyoruz
+            // Bu işlem GPU'yu tam kapasite çalıştıracak devasa bir zincirdir.
+            for i in 0..<(qubitCount - 1) {
+                try circuit.cx(i, i + 1)
+            }
+
+            let startTime = CFAbsoluteTimeGetCurrent()
+            
+            // 16.7 milyon durumu Metal'de hesapla
+            try engine.execute(circuit, on: state)
+            
+            // Parallel Prefix Sum ve GPU Binary Search ile ölçüm yap
+            let result = try QuantumMeasurement.measure(state: state, engine: engine)
+            
+            let timeElapsed = CFAbsoluteTimeGetCurrent() - startTime
+            
+            print("🌌 28-QUBIT SUPER-ENTANGLEMENT COLLAPSE [Süre: \(String(format: "%.4f", timeElapsed)) saniye]")
+            print("Sonuç dizisi: \(result)")
+
+            // Kusursuz dolanıklık kanıtı: Evren ya tamamen 0 ya da tamamen 1 çökmeli!
+            let isAllZeros = result.allSatisfy { $0 == 0 }
+            let isAllOnes = result.allSatisfy { $0 == 1 }
+
+            XCTAssertTrue(isAllZeros || isAllOnes, "Kuantum zinciri koptu! Sistem fiziğe aykırı davrandı.")
+        }
 
     func testBellStateEntanglement() throws {
         let engine = try QuantumEngine()
