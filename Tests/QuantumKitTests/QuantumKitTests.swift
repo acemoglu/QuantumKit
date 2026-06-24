@@ -64,7 +64,7 @@ final class QuantumKitTests: XCTestCase {
         try engine.execute(circuit, on: state)
 
         var rng: QuantumRNG = .seeded(42)
-        let result = try QuantumMeasurement.sampleCounts(state: state, engine: engine, shots: 1_000, rng: &rng)
+        let result = try QuantumMeasurement.sampleCountsRNG(state: state, engine: engine, shots: 1_000, rng: &rng)
 
         XCTAssertEqual(result.shots, 1_000)
         let bitstrings = result.bitstringCounts(qubitCount: 2)
@@ -74,8 +74,40 @@ final class QuantumKitTests: XCTestCase {
         XCTAssertNil(bitstrings["10"])
 
         var replayRNG: QuantumRNG = .seeded(42)
-        let replay = try QuantumMeasurement.sampleCounts(state: state, engine: engine, shots: 1_000, rng: &replayRNG)
+        let replay = try QuantumMeasurement.sampleCountsRNG(state: state, engine: engine, shots: 1_000, rng: &replayRNG)
         XCTAssertEqual(replay, result)
+    }
+
+    func testPartialMeasurementOnBellState() throws {
+        let engine = try QuantumEngine()
+
+        guard let device = makeDevice() else {
+            XCTFail("Apple Silicon GPU not found!")
+            return
+        }
+
+        let state = try StateVector(qubitCount: 2, device: device)
+        var circuit = try QuantumCircuit(qubitCount: 2)
+        try circuit.applyBellState()
+        try engine.execute(circuit, on: state)
+
+        let marginal = try QuantumMeasurement.partialProbabilities(state: state, engine: engine, qubits: [0])
+        XCTAssertEqual(marginal.count, 2)
+        XCTAssertEqual(marginal[0], 0.5, accuracy: 1e-5)
+        XCTAssertEqual(marginal[1], 0.5, accuracy: 1e-5)
+
+        var rng: QuantumRNG = .seeded(7)
+        let result = try QuantumMeasurement.sampleCountsRNG(
+            state: state,
+            engine: engine,
+            qubits: [0],
+            shots: 1_000,
+            rng: &rng
+        )
+
+        let bitstrings = result.bitstringCounts(qubits: [0])
+        XCTAssertEqual(bitstrings.keys.sorted(), ["0", "1"])
+        XCTAssertEqual(bitstrings.values.reduce(0, +), 1_000)
     }
 
     func testBellStateEntanglement() throws {

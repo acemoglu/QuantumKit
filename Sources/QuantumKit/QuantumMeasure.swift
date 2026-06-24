@@ -10,16 +10,18 @@ import Metal
 
 public enum QuantumMeasurementError: Error {
     case invalidShotCount(Int)
+    case emptyQubitSelection
+    case qubitIndexOutOfBounds(index: Int, qubitCount: Int)
 }
 
 public struct QuantumMeasurement {
 
     public static func measure(state: StateVector, engine: QuantumEngine) throws -> [Int] {
         var rng: QuantumRNG = .hardware
-        return try measure(state: state, engine: engine, rng: &rng)
+        return try measureRNG(state: state, engine: engine, rng: &rng)
     }
 
-    public static func measure(
+    public static func measureRNG(
         state: StateVector,
         engine: QuantumEngine,
         rng: inout QuantumRNG
@@ -49,10 +51,10 @@ public struct QuantumMeasurement {
         shots: Int
     ) throws -> ShotCounts {
         var rng: QuantumRNG = .hardware
-        return try sampleCounts(state: state, engine: engine, shots: shots, rng: &rng)
+        return try sampleCountsRNG(state: state, engine: engine, shots: shots, rng: &rng)
     }
 
-    public static func sampleCounts(
+    public static func sampleCountsRNG(
         state: StateVector,
         engine: QuantumEngine,
         shots: Int,
@@ -63,6 +65,58 @@ public struct QuantumMeasurement {
         }
 
         let distribution = try probabilities(state: state, engine: engine)
+        return try buildHistogram(from: distribution, shots: shots, rng: &rng)
+    }
+
+    /// Marginal Born-rule probabilities for a subset of qubits.
+    public static func partialProbabilities(
+        state: StateVector,
+        engine: QuantumEngine,
+        qubits: [Int]
+    ) throws -> [QFloat] {
+        try validateQubits(qubits, qubitCount: state.qubitCount)
+
+        let fullDistribution = try probabilities(state: state, engine: engine)
+        var marginal = [QFloat](repeating: 0, count: 1 << qubits.count)
+
+        for (stateIndex, probability) in fullDistribution.enumerated() {
+            let outcome = partialOutcomeIndex(stateIndex: stateIndex, qubits: qubits)
+            marginal[outcome] += probability
+        }
+
+        return marginal
+    }
+
+    public static func sampleCounts(
+        state: StateVector,
+        engine: QuantumEngine,
+        qubits: [Int],
+        shots: Int
+    ) throws -> ShotCounts {
+        var rng: QuantumRNG = .hardware
+        return try sampleCountsRNG(state: state, engine: engine, qubits: qubits, shots: shots, rng: &rng)
+    }
+
+    public static func sampleCountsRNG(
+        state: StateVector,
+        engine: QuantumEngine,
+        qubits: [Int],
+        shots: Int,
+        rng: inout QuantumRNG
+    ) throws -> ShotCounts {
+        guard shots > 0 else {
+            throw QuantumMeasurementError.invalidShotCount(shots)
+        }
+
+        let distribution = try partialProbabilities(state: state, engine: engine, qubits: qubits)
+        return try buildHistogram(from: distribution, shots: shots, rng: &rng)
+    }
+
+    private static func buildHistogram(
+        from distribution: [QFloat],
+        shots: Int,
+        rng: inout QuantumRNG
+    ) throws -> ShotCounts {
         var histogram: [Int: Int] = [:]
         histogram.reserveCapacity(min(shots, distribution.count))
 
@@ -72,6 +126,25 @@ public struct QuantumMeasurement {
         }
 
         return ShotCounts(shots: shots, counts: histogram)
+    }
+
+    private static func validateQubits(_ qubits: [Int], qubitCount: Int) throws {
+        guard !qubits.isEmpty else {
+            throw QuantumMeasurementError.emptyQubitSelection
+        }
+
+        for index in qubits where index < 0 || index >= qubitCount {
+            throw QuantumMeasurementError.qubitIndexOutOfBounds(index: index, qubitCount: qubitCount)
+        }
+    }
+
+    private static func partialOutcomeIndex(stateIndex: Int, qubits: [Int]) -> Int {
+        var outcome = 0
+        for (position, qubit) in qubits.enumerated() {
+            let bit = (stateIndex >> qubit) & 1
+            outcome |= bit << position
+        }
+        return outcome
     }
 
     private static func sampleIndex(from distribution: [QFloat], rng: inout QuantumRNG) -> Int {
