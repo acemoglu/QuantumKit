@@ -7,36 +7,71 @@ public struct NoiseModel: Sendable, Equatable {
     /// After a gate, each affected qubit independently gets a random Pauli (X/Y/Z) with probability `p`.
     public var depolarizingProbability: QFloat
 
-    /// Per-qubit amplitude damping (T1) probability `p` in `[0, 1]`.
-    /// After a gate, each affected qubit is reset to |0⟩ with probability `p`.
+    /// Fixed per-gate amplitude damping probability. Mutually exclusive with ``t1``/``gateTime``;
+    /// use one model or the other.
     public var amplitudeDampingProbability: QFloat
 
-    /// Per-qubit phase damping / dephasing (T2) probability `p` in `[0, 1]`.
-    /// After a gate, each affected qubit independently gets a Z gate with probability `p`.
+    /// T1 relaxation time (same units as ``gateTime``). With ``gateTime``, per-gate
+    /// damping uses `p = 1 - exp(-gateTime / t1)`.
+    public var t1: QFloat
+
+    /// Duration attributed to each gate for T1 damping (same units as ``t1``).
+    public var gateTime: QFloat
+
+    /// Per-gate phase damping / dephasing probability `p` in `[0, 1]`.
     public var phaseDampingProbability: QFloat
 
-    /// Symmetric readout bit-flip probability `p` in `[0, 1]` with `p01 = p10 = p/2`.
-    /// Applied only to reported classical measurement outcomes; the quantum state is unchanged.
-    public var readoutErrorProbability: QFloat
+    /// Readout bit-flip probability 0 → 1.
+    public var readoutFlip0To1: QFloat
+
+    /// Readout bit-flip probability 1 → 0.
+    public var readoutFlip1To0: QFloat
 
     public init(
         depolarizingProbability: QFloat = 0,
         amplitudeDampingProbability: QFloat = 0,
+        t1: QFloat = 0,
+        gateTime: QFloat = 0,
         phaseDampingProbability: QFloat = 0,
-        readoutErrorProbability: QFloat = 0
+        readoutErrorProbability: QFloat = 0,
+        readoutFlip0To1: QFloat = 0,
+        readoutFlip1To0: QFloat = 0
     ) {
         self.depolarizingProbability = Self.clamp(depolarizingProbability)
-        self.amplitudeDampingProbability = Self.clamp(amplitudeDampingProbability)
         self.phaseDampingProbability = Self.clamp(phaseDampingProbability)
-        self.readoutErrorProbability = Self.clamp(readoutErrorProbability)
+        self.t1 = max(t1, 0)
+        self.gateTime = max(gateTime, 0)
+
+        if t1 > 0 && gateTime > 0 {
+            self.amplitudeDampingProbability = 0
+        } else {
+            self.amplitudeDampingProbability = Self.clamp(amplitudeDampingProbability)
+        }
+
+        if readoutErrorProbability > 0 {
+            let halfP = Self.clamp(readoutErrorProbability) / 2
+            self.readoutFlip0To1 = halfP
+            self.readoutFlip1To0 = halfP
+        } else {
+            self.readoutFlip0To1 = Self.clamp(readoutFlip0To1)
+            self.readoutFlip1To0 = Self.clamp(readoutFlip1To0)
+        }
     }
 
     public var appliesDepolarizing: Bool {
         depolarizingProbability > 0
     }
 
+    /// Per-gate T1 damping probability from either the time model or the fixed parameter.
+    public var effectiveAmplitudeDampingProbability: QFloat {
+        if usesT1TimeModel {
+            return 1 - exp(-gateTime / t1)
+        }
+        return amplitudeDampingProbability
+    }
+
     public var appliesAmplitudeDamping: Bool {
-        amplitudeDampingProbability > 0
+        effectiveAmplitudeDampingProbability > 0
     }
 
     public var appliesPhaseDamping: Bool {
@@ -44,7 +79,16 @@ public struct NoiseModel: Sendable, Equatable {
     }
 
     public var appliesReadoutError: Bool {
-        readoutErrorProbability > 0
+        readoutFlip0To1 > 0 || readoutFlip1To0 > 0
+    }
+
+    /// Symmetric readout alias: `p01 + p10` (setting via init maps `p01 = p10 = p/2`).
+    public var readoutErrorProbability: QFloat {
+        readoutFlip0To1 + readoutFlip1To0
+    }
+
+    public var usesT1TimeModel: Bool {
+        t1 > 0 && gateTime > 0
     }
 
     /// Gate-time noise channels that require per-gate execution (disables batching).
@@ -56,12 +100,15 @@ public struct NoiseModel: Sendable, Equatable {
         hasGateNoise || appliesReadoutError
     }
 
-    /// Flips a single classical bit with symmetric readout error (`p01 = p10 = p/2`).
+    /// Flips a single classical bit using asymmetric readout error rates.
     public func flipReadoutBit(_ bit: Int, rng: inout QuantumRNG) -> Int {
         guard appliesReadoutError else { return bit }
-        let halfP = readoutErrorProbability / 2
-        guard halfP > 0, rng.nextUnitFloat() < halfP else { return bit }
-        return 1 - bit
+        if bit == 0 {
+            guard readoutFlip0To1 > 0, rng.nextUnitFloat() < readoutFlip0To1 else { return 0 }
+            return 1
+        }
+        guard readoutFlip1To0 > 0, rng.nextUnitFloat() < readoutFlip1To0 else { return 1 }
+        return 0
     }
 
     /// Flips each bit in a packed outcome index independently.

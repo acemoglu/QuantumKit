@@ -364,6 +364,23 @@ kernel void collapse_qubit_to_zero(device float* realBuffer [[buffer(0)]],
     imagBuffer[i1] = 0.0f;
 }
 
+kernel void dephase_qubit_state_vector(device float* realBuffer [[buffer(0)]],
+                                       device float* imagBuffer [[buffer(1)]],
+                                       constant uint& targetQubit [[buffer(2)]],
+                                       uint id [[thread_position_in_grid]]) {
+    uint mask = (1 << targetQubit) - 1;
+    uint i0 = ((id >> targetQubit) << (targetQubit + 1)) | (id & mask);
+    uint i1 = i0 | (1 << targetQubit);
+
+    float r0 = sqrt(realBuffer[i0] * realBuffer[i0] + imagBuffer[i0] * imagBuffer[i0]);
+    float r1 = sqrt(realBuffer[i1] * realBuffer[i1] + imagBuffer[i1] * imagBuffer[i1]);
+
+    realBuffer[i0] = r0;
+    imagBuffer[i0] = 0.0f;
+    realBuffer[i1] = 0.0f;
+    imagBuffer[i1] = r1;
+}
+
 kernel void normalize_state_vector(device float* realBuffer [[buffer(0)]],
                                    device float* imagBuffer [[buffer(1)]],
                                    constant float& invNorm [[buffer(2)]],

@@ -322,7 +322,123 @@ final class QuantumKitTests: XCTestCase {
         _ = try engine.executeRNG(circuit, on: state, rng: &rng, noise: noise)
 
         let expectation = try QuantumMeasurement.expectationX(state: state, engine: engine, qubit: 0)
-        XCTAssertEqual(expectation, -1, accuracy: 1e-5)
+        XCTAssertEqual(expectation, 0, accuracy: 1e-5)
+    }
+
+    func testT1GateTimeAmplitudeDampingProbability() {
+        let gateTime = QFloat(0.69314718)
+        let noise = NoiseModel(t1: 1, gateTime: gateTime)
+        XCTAssertTrue(noise.usesT1TimeModel)
+        XCTAssertEqual(noise.effectiveAmplitudeDampingProbability, 0.5, accuracy: 1e-5)
+    }
+
+    func testT1GateTimeResetsExcitedQubit() throws {
+        let engine = try QuantumEngine()
+
+        guard let device = makeDevice() else {
+            XCTFail("Apple Silicon GPU not found!")
+            return
+        }
+
+        let state = try StateVector(qubitCount: 1, device: device)
+        var circuit = try QuantumCircuit(qubitCount: 1)
+        try circuit.x(0)
+
+        var rng: QuantumRNG = .seeded(11)
+        let noise = NoiseModel(t1: 1, gateTime: 10)
+        _ = try engine.executeRNG(circuit, on: state, rng: &rng, noise: noise)
+
+        let expectation = try QuantumMeasurement.expectationZ(state: state, engine: engine, qubit: 0)
+        XCTAssertEqual(expectation, 1, accuracy: 1e-5)
+    }
+
+    func testAsymmetricReadoutErrorFlipsDirectionally() throws {
+        let engine = try QuantumEngine()
+
+        guard let device = makeDevice() else {
+            XCTFail("Apple Silicon GPU not found!")
+            return
+        }
+
+        let oneState = try StateVector(qubitCount: 1, device: device)
+        var oneCircuit = try QuantumCircuit(qubitCount: 1)
+        try oneCircuit.x(0)
+        try engine.execute(oneCircuit, on: oneState)
+
+        var rngOne: QuantumRNG = .seeded(42)
+        let flipOneToZero = NoiseModel(readoutFlip0To1: 0, readoutFlip1To0: 1)
+        let measuredOne = try QuantumMeasurement.measureRNG(
+            state: oneState,
+            engine: engine,
+            rng: &rngOne,
+            noise: flipOneToZero
+        )
+        XCTAssertEqual(measuredOne, [0])
+
+        let zeroState = try StateVector(qubitCount: 1, device: device)
+        var rngZero: QuantumRNG = .seeded(42)
+        let flipZeroToOne = NoiseModel(readoutFlip0To1: 1, readoutFlip1To0: 0)
+        let measuredZero = try QuantumMeasurement.measureRNG(
+            state: zeroState,
+            engine: engine,
+            rng: &rngZero,
+            noise: flipZeroToOne
+        )
+        XCTAssertEqual(measuredZero, [1])
+    }
+
+    func testMidCircuitMeasureWithReadoutFlipPreservesCollapsedState() throws {
+        let engine = try QuantumEngine()
+
+        guard let device = makeDevice() else {
+            XCTFail("Apple Silicon GPU not found!")
+            return
+        }
+
+        let state = try StateVector(qubitCount: 1, device: device)
+        var circuit = try QuantumCircuit(qubitCount: 1)
+        try circuit.h(0)
+        try circuit.measure(0)
+
+        var rng: QuantumRNG = .seeded(123)
+        let noise = NoiseModel(readoutFlip0To1: 0, readoutFlip1To0: 1)
+        let execution = try engine.executeRNG(circuit, on: state, rng: &rng, noise: noise)
+
+        XCTAssertEqual(execution.measurementOutcomes.count, 1)
+        XCTAssertEqual(execution.measurementOutcomes[0][0], 0)
+
+        let expectation = try QuantumMeasurement.expectationZ(state: state, engine: engine, qubit: 0)
+        let trueBit = expectation > 0 ? 0 : 1
+        XCTAssertEqual(expectation, trueBit == 0 ? 1 : -1, accuracy: 1e-5)
+        if trueBit == 1 {
+            XCTAssertEqual(execution.measurementOutcomes[0][0], 0)
+        }
+    }
+
+    func testRunSampleCountsWithReadoutNoiseOnly() throws {
+        let engine = try QuantumEngine()
+
+        guard let device = makeDevice() else {
+            XCTFail("Apple Silicon GPU not found!")
+            return
+        }
+
+        var circuit = try QuantumCircuit(qubitCount: 1)
+        try circuit.x(0)
+
+        var rng: QuantumRNG = .seeded(7)
+        let noise = NoiseModel(readoutFlip0To1: 0, readoutFlip1To0: 1)
+        let counts = try QuantumMeasurement.runSampleCountsRNG(
+            circuit: circuit,
+            engine: engine,
+            device: device,
+            shots: 1,
+            rng: &rng,
+            noise: noise
+        )
+
+        XCTAssertEqual(counts.shots, 1)
+        XCTAssertEqual(counts.counts[0], 1)
     }
 
     func testReadoutErrorFlipsClassicalOutcomeNotState() throws {

@@ -42,6 +42,7 @@ public struct Pipelines {
     let partialCollapse: MTLComputePipelineState
     let resetQubit: MTLComputePipelineState
     let collapseQubitToZero: MTLComputePipelineState
+    let dephaseQubit: MTLComputePipelineState
     let normalize: MTLComputePipelineState
 
     init(device: MTLDevice, library: MTLLibrary) throws {
@@ -89,6 +90,9 @@ public struct Pipelines {
 
         guard let collapseQubitToZeroFunc = library.makeFunction(name: "collapse_qubit_to_zero") else { throw QuantumEngineError.functionNotFound("collapse_qubit_to_zero") }
         self.collapseQubitToZero = try device.makeComputePipelineState(function: collapseQubitToZeroFunc)
+
+        guard let dephaseQubitFunc = library.makeFunction(name: "dephase_qubit_state_vector") else { throw QuantumEngineError.functionNotFound("dephase_qubit_state_vector") }
+        self.dephaseQubit = try device.makeComputePipelineState(function: dephaseQubitFunc)
 
         guard let normalizeFunc = library.makeFunction(name: "normalize_state_vector") else { throw QuantumEngineError.functionNotFound("normalize_state_vector") }
         self.normalize = try device.makeComputePipelineState(function: normalizeFunc)
@@ -232,7 +236,7 @@ public class QuantumEngine {
                         try applyAmplitudeDamping(
                             after: gate,
                             on: state,
-                            probability: noise.amplitudeDampingProbability,
+                            probability: noise.effectiveAmplitudeDampingProbability,
                             rng: &rng
                         )
                     }
@@ -340,8 +344,29 @@ public class QuantumEngine {
 
         for qubit in Set(gate.affectedQubits) {
             guard rng.nextUnitFloat() < probability else { continue }
-            try executeUnitaryGate(.z(target: qubit), on: state)
+            try executeDephaseQubit(on: state, qubit: qubit)
         }
+    }
+
+    private func executeDephaseQubit(on state: StateVector, qubit: Int) throws {
+        guard let commandBuffer = commandQueue.makeCommandBuffer(),
+              let computeEncoder = commandBuffer.makeComputeCommandEncoder() else {
+            throw QuantumEngineError.commandBufferCreationFailed
+        }
+
+        var targetQubit = UInt32(qubit)
+        dispatchPairwiseGate(encoder: computeEncoder, pipeline: pipelines.dephaseQubit, state: state) { encoder in
+            encoder.setBytes(&targetQubit, length: MemoryLayout<UInt32>.stride, index: 2)
+        }
+
+        computeEncoder.endEncoding()
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+        if let error = commandBuffer.error {
+            throw QuantumEngineError.commandBufferExecutionFailed(underlying: error)
+        }
+
+        try normalizeState(on: state)
     }
 
     private func flushUnitaryGates(_ gates: [Gate], on state: StateVector) throws {
