@@ -50,6 +50,34 @@ final class QuantumKitTests: XCTestCase {
             XCTAssertTrue(isAllZeros || isAllOnes, "Kuantum zinciri koptu! Sistem fiziğe aykırı davrandı.")
         }
 
+    func testBellStateShotCounts() throws {
+        let engine = try QuantumEngine()
+
+        guard let device = makeDevice() else {
+            XCTFail("Apple Silicon GPU not found!")
+            return
+        }
+
+        let state = try StateVector(qubitCount: 2, device: device)
+        var circuit = try QuantumCircuit(qubitCount: 2)
+        try circuit.applyBellState()
+        try engine.execute(circuit, on: state)
+
+        var rng: QuantumRNG = .seeded(42)
+        let result = try QuantumMeasurement.sampleCounts(state: state, engine: engine, shots: 1_000, rng: &rng)
+
+        XCTAssertEqual(result.shots, 1_000)
+        let bitstrings = result.bitstringCounts(qubitCount: 2)
+        XCTAssertEqual(bitstrings.keys.sorted(), ["00", "11"])
+        XCTAssertEqual(bitstrings.values.reduce(0, +), 1_000)
+        XCTAssertNil(bitstrings["01"])
+        XCTAssertNil(bitstrings["10"])
+
+        var replayRNG: QuantumRNG = .seeded(42)
+        let replay = try QuantumMeasurement.sampleCounts(state: state, engine: engine, shots: 1_000, rng: &replayRNG)
+        XCTAssertEqual(replay, result)
+    }
+
     func testBellStateEntanglement() throws {
         let engine = try QuantumEngine()
 
