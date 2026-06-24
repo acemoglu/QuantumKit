@@ -732,6 +732,54 @@ final class QuantumKitTests: XCTestCase {
         XCTAssertEqual(result.gates, [.rx(theta: QFloat(Double.pi / 2.0), target: 0)])
     }
 
+    func testCommutationSlidesHadamardThroughDisjointPauli() throws {
+        let gates: [Gate] = [.h(target: 0), .x(target: 1), .h(target: 0)]
+
+        var circuit = try QuantumCircuit(qubitCount: 2)
+        try circuit.h(0)
+        try circuit.x(1)
+        try circuit.h(0)
+
+        let slid = AlgebraicPreCompiler.slideGates(gates)
+        XCTAssertEqual(slid, [.x(target: 1), .h(target: 0), .h(target: 0)])
+
+        let result = AlgebraicPreCompiler.optimize(gates: circuit.gates)
+        XCTAssertEqual(result.optimizedGateCount, 1)
+        XCTAssertEqual(result.gates, [.x(target: 1)])
+    }
+
+    func testCommutationDoesNotCancelSameQubitHadamardSandwich() throws {
+        var circuit = try QuantumCircuit(qubitCount: 1)
+        try circuit.h(0)
+        try circuit.x(0)
+        try circuit.h(0)
+
+        let result = AlgebraicPreCompiler.optimize(gates: circuit.gates)
+        XCTAssertEqual(result.optimizedGateCount, 3)
+    }
+
+    func testCommutationDoesNotSlidePastMeasurement() throws {
+        var circuit = try QuantumCircuit(qubitCount: 2)
+        try circuit.h(0)
+        try circuit.measure(1)
+        try circuit.h(0)
+
+        let result = AlgebraicPreCompiler.optimize(gates: circuit.gates)
+        XCTAssertEqual(result.optimizedGateCount, 3)
+        XCTAssertEqual(result.gates, circuit.gates)
+    }
+
+    func testCommutationSlidesZThroughCXOnTarget() throws {
+        var circuit = try QuantumCircuit(qubitCount: 2)
+        try circuit.z(1)
+        try circuit.cx(0, 1)
+        try circuit.z(1)
+
+        let result = AlgebraicPreCompiler.optimize(gates: circuit.gates)
+        XCTAssertEqual(result.optimizedGateCount, 1)
+        XCTAssertEqual(result.gates, [.cx(control: 0, target: 1)])
+    }
+
     func testAlgebraicPreCompilerPreservesBellStateProbabilities() throws {
         let engine = try QuantumEngine()
 
