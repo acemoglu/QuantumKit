@@ -36,3 +36,21 @@ public enum Gate {
     case reset(qubit: Int)
 
 }
+
+extension Gate {
+
+    /// Qubits touched by this operation (used for noise injection).
+    public var affectedQubits: [Int] {
+        switch self {
+        case .h(let target), .x(let target), .y(let target), .z(let target),
+             .rx(_, let target), .rz(_, let target), .reset(let target):
+            return [target]
+        case .cx(let control, let target):
+            return [control, target]
+        case .ccx(let control1, let control2, let target):
+            return [control1, control2, target]
+        case .measure(let qubits):
+            return qubits
+        }
+    }
+}
