@@ -192,6 +192,72 @@ final class QuantumKitTests: XCTestCase {
         XCTAssertEqual(bitstrings.values.reduce(0, +), 500)
     }
 
+    func testBatchRunSampleCountsMatchesSequentialRNG() throws {
+        let engine = try QuantumEngine()
+
+        guard let device = makeDevice() else {
+            XCTFail("Apple Silicon GPU not found!")
+            return
+        }
+
+        var circuit = try QuantumCircuit(qubitCount: 2)
+        try circuit.applyBellState()
+
+        var sequentialRNG: QuantumRNG = .seeded(42)
+        let sequential = try QuantumMeasurement.runSampleCountsRNG(
+            circuit: circuit,
+            engine: engine,
+            device: device,
+            shots: 256,
+            rng: &sequentialRNG,
+            options: SampleCountOptions(batchSize: 1)
+        )
+
+        var batchedRNG: QuantumRNG = .seeded(42)
+        let batched = try QuantumMeasurement.runSampleCountsRNG(
+            circuit: circuit,
+            engine: engine,
+            device: device,
+            shots: 256,
+            rng: &batchedRNG,
+            options: SampleCountOptions(batchSize: 32)
+        )
+
+        XCTAssertEqual(sequential, batched)
+    }
+
+    func testExecuteUnitaryBatchMatchesSequential() throws {
+        let engine = try QuantumEngine()
+
+        guard let device = makeDevice() else {
+            XCTFail("Apple Silicon GPU not found!")
+            return
+        }
+
+        var circuit = try QuantumCircuit(qubitCount: 2)
+        try circuit.h(0)
+        try circuit.cx(0, 1)
+
+        let sequentialState = try StateVector(qubitCount: 2, device: device)
+        try engine.execute(circuit, on: sequentialState)
+
+        let batchStateA = try StateVector(qubitCount: 2, device: device)
+        let batchStateB = try StateVector(qubitCount: 2, device: device)
+        try engine.executeUnitaryBatch(circuit, on: [batchStateA, batchStateB])
+
+        let sequentialProbabilities = try QuantumMeasurement.probabilities(state: sequentialState, engine: engine)
+        let batchProbabilities = try QuantumMeasurement.probabilities(state: batchStateA, engine: engine)
+
+        XCTAssertEqual(sequentialProbabilities.count, batchProbabilities.count)
+        for index in 0..<sequentialProbabilities.count {
+            XCTAssertEqual(sequentialProbabilities[index], batchProbabilities[index], accuracy: 1e-5)
+        }
+        XCTAssertEqual(
+            try QuantumMeasurement.probabilities(state: batchStateB, engine: engine),
+            batchProbabilities
+        )
+    }
+
     func testMidCircuitMeasureAndReset() throws {
         let engine = try QuantumEngine()
 

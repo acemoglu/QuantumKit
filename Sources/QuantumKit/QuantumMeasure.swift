@@ -154,12 +154,16 @@ public struct QuantumMeasurement {
     }
 
     /// Runs the circuit `shots` times from |0…0⟩, collapsing each run before the next.
+    ///
+    /// Unitary-only circuits without gate noise are executed in batches on the GPU
+    /// (see ``SampleCountOptions/batchSize``).
     public static func runSampleCounts(
         circuit: QuantumCircuit,
         engine: QuantumEngine,
         device: MTLDevice,
         shots: Int,
-        noise: NoiseModel? = nil
+        noise: NoiseModel? = nil,
+        options: SampleCountOptions = SampleCountOptions()
     ) throws -> ShotCounts {
         var rng: QuantumRNG = .hardware
         return try runSampleCountsRNG(
@@ -168,7 +172,8 @@ public struct QuantumMeasurement {
             device: device,
             shots: shots,
             rng: &rng,
-            noise: noise
+            noise: noise,
+            options: options
         )
     }
 
@@ -178,23 +183,18 @@ public struct QuantumMeasurement {
         device: MTLDevice,
         shots: Int,
         rng: inout QuantumRNG,
-        noise: NoiseModel? = nil
+        noise: NoiseModel? = nil,
+        options: SampleCountOptions = SampleCountOptions()
     ) throws -> ShotCounts {
-        guard shots > 0 else {
-            throw QuantumMeasurementError.invalidShotCount(shots)
-        }
-
-        var histogram: [Int: Int] = [:]
-        histogram.reserveCapacity(min(shots, circuit.qubitCount > 0 ? 1 << circuit.qubitCount : 1))
-
-        for _ in 0..<shots {
-            let state = try StateVector(qubitCount: circuit.qubitCount, device: device)
-            try engine.executeRNG(circuit, on: state, rng: &rng, noise: noise?.hasGateNoise == true ? noise : nil)
-            let outcome = try engine.executeMeasurementCollapse(on: state, rng: &rng, noise: noise)
-            histogram[outcome, default: 0] += 1
-        }
-
-        return ShotCounts(shots: shots, counts: histogram)
+        try BatchSampleExecutor.runSampleCountsRNG(
+            circuit: circuit,
+            engine: engine,
+            device: device,
+            shots: shots,
+            rng: &rng,
+            noise: noise,
+            options: options
+        )
     }
 
     /// ⟨X⟩ for a single qubit in the computational basis.

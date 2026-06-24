@@ -21,6 +21,7 @@ public enum QuantumEngineError: Error {
     case commandBufferExecutionFailed(underlying: Error?)
     case prefixSumBufferLevelMissing(level: Int)
     case zeroStateNorm
+    case circuitNotUnitaryOnly
 
 }
 
@@ -195,6 +196,41 @@ public class QuantumEngine {
     public func execute(_ circuit: QuantumCircuit, on state: StateVector) throws {
         var rng: QuantumRNG = .hardware
         _ = try executeRNG(circuit, on: state, rng: &rng, noise: nil)
+    }
+
+    /// Applies a unitary-only circuit to many states in one GPU command buffer.
+    public func executeUnitaryBatch(
+        _ circuit: QuantumCircuit,
+        on states: [StateVector]
+    ) throws {
+        guard !states.isEmpty else { return }
+
+        guard circuit.isUnitaryOnly else {
+            throw QuantumEngineError.circuitNotUnitaryOnly
+        }
+
+        let qubitCount = circuit.qubitCount
+        guard states.allSatisfy({ $0.qubitCount == qubitCount }) else {
+            throw QuantumEngineError.qubitCountMismatch(circuit: qubitCount, state: states[0].qubitCount)
+        }
+
+        guard let commandBuffer = commandQueue.makeCommandBuffer(),
+              let computeEncoder = commandBuffer.makeComputeCommandEncoder() else {
+            throw QuantumEngineError.commandBufferCreationFailed
+        }
+
+        for gate in circuit.gates {
+            for state in states {
+                encodeUnitaryGate(gate, encoder: computeEncoder, state: state)
+            }
+        }
+
+        computeEncoder.endEncoding()
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+        if let error = commandBuffer.error {
+            throw QuantumEngineError.commandBufferExecutionFailed(underlying: error)
+        }
     }
 
     @discardableResult

@@ -58,4 +58,14 @@ public struct StateVector {
 
         realPointer[0] = 1.0
     }
+
+    /// Resets amplitudes to |0…0⟩ without reallocating GPU buffers.
+    public func resetToZero() {
+        let realPointer = realBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let imagPointer = imagBuffer.contents().assumingMemoryBound(to: QFloat.self)
+
+        realPointer.update(repeating: 0, count: stateCount)
+        imagPointer.update(repeating: 0, count: stateCount)
+        realPointer[0] = 1.0
+    }
 }
