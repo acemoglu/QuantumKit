@@ -285,6 +285,94 @@ final class QuantumKitTests: XCTestCase {
         XCTAssertEqual(expectation, 1, accuracy: 1e-5)
     }
 
+    func testAmplitudeDampingResetsExcitedQubit() throws {
+        let engine = try QuantumEngine()
+
+        guard let device = makeDevice() else {
+            XCTFail("Apple Silicon GPU not found!")
+            return
+        }
+
+        let state = try StateVector(qubitCount: 1, device: device)
+        var circuit = try QuantumCircuit(qubitCount: 1)
+        try circuit.x(0)
+
+        var rng: QuantumRNG = .seeded(11)
+        let noise = NoiseModel(amplitudeDampingProbability: 1)
+        _ = try engine.executeRNG(circuit, on: state, rng: &rng, noise: noise)
+
+        let expectation = try QuantumMeasurement.expectationZ(state: state, engine: engine, qubit: 0)
+        XCTAssertEqual(expectation, 1, accuracy: 1e-5)
+    }
+
+    func testPhaseDampingDephasesSuperposition() throws {
+        let engine = try QuantumEngine()
+
+        guard let device = makeDevice() else {
+            XCTFail("Apple Silicon GPU not found!")
+            return
+        }
+
+        let state = try StateVector(qubitCount: 1, device: device)
+        var circuit = try QuantumCircuit(qubitCount: 1)
+        try circuit.h(0)
+
+        var rng: QuantumRNG = .seeded(17)
+        let noise = NoiseModel(phaseDampingProbability: 1)
+        _ = try engine.executeRNG(circuit, on: state, rng: &rng, noise: noise)
+
+        let expectation = try QuantumMeasurement.expectationX(state: state, engine: engine, qubit: 0)
+        XCTAssertEqual(expectation, -1, accuracy: 1e-5)
+    }
+
+    func testReadoutErrorFlipsClassicalOutcomeNotState() throws {
+        let engine = try QuantumEngine()
+
+        guard let device = makeDevice() else {
+            XCTFail("Apple Silicon GPU not found!")
+            return
+        }
+
+        let state = try StateVector(qubitCount: 1, device: device)
+        var circuit = try QuantumCircuit(qubitCount: 1)
+        try circuit.x(0)
+        try engine.execute(circuit, on: state)
+
+        var rng: QuantumRNG = .seeded(99)
+        let noise = NoiseModel(readoutErrorProbability: 1)
+        let measured = try QuantumMeasurement.measureRNG(state: state, engine: engine, rng: &rng, noise: noise)
+
+        let zAfter = try QuantumMeasurement.expectationZ(state: state, engine: engine, qubit: 0)
+        XCTAssertEqual(zAfter, -1, accuracy: 1e-5)
+        XCTAssertEqual(measured, [0])
+    }
+
+    func testZeroNoisePreservesBellStateWithAllChannelsDisabled() throws {
+        let engine = try QuantumEngine()
+
+        guard let device = makeDevice() else {
+            XCTFail("Apple Silicon GPU not found!")
+            return
+        }
+
+        let idealState = try StateVector(qubitCount: 2, device: device)
+        var idealCircuit = try QuantumCircuit(qubitCount: 2)
+        try idealCircuit.applyBellState()
+        try engine.execute(idealCircuit, on: idealState)
+        let idealZZ = try QuantumMeasurement.expectationZZ(state: idealState, engine: engine, qubitA: 0, qubitB: 1)
+
+        let noisyState = try StateVector(qubitCount: 2, device: device)
+        var noisyCircuit = try QuantumCircuit(qubitCount: 2)
+        try noisyCircuit.applyBellState()
+
+        var rng: QuantumRNG = .seeded(42)
+        let noise = NoiseModel()
+        _ = try engine.executeRNG(noisyCircuit, on: noisyState, rng: &rng, noise: noise)
+
+        let noisyZZ = try QuantumMeasurement.expectationZZ(state: noisyState, engine: engine, qubitA: 0, qubitB: 1)
+        XCTAssertEqual(noisyZZ, idealZZ, accuracy: 1e-5)
+    }
+
     func testBellStateEntanglement() throws {
         let engine = try QuantumEngine()
 

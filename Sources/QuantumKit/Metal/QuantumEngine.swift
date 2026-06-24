@@ -41,6 +41,7 @@ public struct Pipelines {
     let collapseState: MTLComputePipelineState
     let partialCollapse: MTLComputePipelineState
     let resetQubit: MTLComputePipelineState
+    let collapseQubitToZero: MTLComputePipelineState
     let normalize: MTLComputePipelineState
 
     init(device: MTLDevice, library: MTLLibrary) throws {
@@ -85,6 +86,9 @@ public struct Pipelines {
 
         guard let resetQubitFunc = library.makeFunction(name: "reset_qubit_state_vector") else { throw QuantumEngineError.functionNotFound("reset_qubit_state_vector") }
         self.resetQubit = try device.makeComputePipelineState(function: resetQubitFunc)
+
+        guard let collapseQubitToZeroFunc = library.makeFunction(name: "collapse_qubit_to_zero") else { throw QuantumEngineError.functionNotFound("collapse_qubit_to_zero") }
+        self.collapseQubitToZero = try device.makeComputePipelineState(function: collapseQubitToZeroFunc)
 
         guard let normalizeFunc = library.makeFunction(name: "normalize_state_vector") else { throw QuantumEngineError.functionNotFound("normalize_state_vector") }
         self.normalize = try device.makeComputePipelineState(function: normalizeFunc)
@@ -188,7 +192,7 @@ public class QuantumEngine {
             throw QuantumEngineError.qubitCountMismatch(circuit: circuit.qubitCount, state: state.qubitCount)
         }
 
-        let noiseEnabled = noise?.appliesDepolarizing == true
+        let noiseEnabled = noise?.hasGateNoise == true
         var measurementOutcomes: [[Int]] = []
         var pendingUnitaryGates: [Gate] = []
 
@@ -198,7 +202,12 @@ public class QuantumEngine {
                 try flushUnitaryGates(pendingUnitaryGates, on: state)
                 pendingUnitaryGates.removeAll(keepingCapacity: true)
 
-                let outcome = try executePartialMeasurementCollapse(on: state, qubits: qubits, rng: &rng)
+                let outcome = try executePartialMeasurementCollapse(
+                    on: state,
+                    qubits: qubits,
+                    rng: &rng,
+                    noise: noise
+                )
                 measurementOutcomes.append(measuredBits(outcome: outcome, qubits: qubits))
 
             case .reset(let qubit):
@@ -211,12 +220,30 @@ public class QuantumEngine {
                     try flushUnitaryGates(pendingUnitaryGates, on: state)
                     pendingUnitaryGates.removeAll(keepingCapacity: true)
                     try executeUnitaryGate(gate, on: state)
-                    try applyDepolarizingNoise(
-                        after: gate,
-                        on: state,
-                        probability: noise.depolarizingProbability,
-                        rng: &rng
-                    )
+                    if noise.appliesDepolarizing {
+                        try applyDepolarizingNoise(
+                            after: gate,
+                            on: state,
+                            probability: noise.depolarizingProbability,
+                            rng: &rng
+                        )
+                    }
+                    if noise.appliesAmplitudeDamping {
+                        try applyAmplitudeDamping(
+                            after: gate,
+                            on: state,
+                            probability: noise.amplitudeDampingProbability,
+                            rng: &rng
+                        )
+                    }
+                    if noise.appliesPhaseDamping {
+                        try applyPhaseDamping(
+                            after: gate,
+                            on: state,
+                            probability: noise.phaseDampingProbability,
+                            rng: &rng
+                        )
+                    }
                 } else {
                     pendingUnitaryGates.append(gate)
                 }
@@ -265,6 +292,55 @@ public class QuantumEngine {
             }
 
             try executeUnitaryGate(pauliGate, on: state)
+        }
+    }
+
+    private func applyAmplitudeDamping(
+        after gate: Gate,
+        on state: StateVector,
+        probability: QFloat,
+        rng: inout QuantumRNG
+    ) throws {
+        guard probability > 0 else { return }
+
+        for qubit in Set(gate.affectedQubits) {
+            guard rng.nextUnitFloat() < probability else { continue }
+            try executeCollapseQubitToZero(on: state, qubit: qubit)
+        }
+    }
+
+    private func executeCollapseQubitToZero(on state: StateVector, qubit: Int) throws {
+        guard let commandBuffer = commandQueue.makeCommandBuffer(),
+              let computeEncoder = commandBuffer.makeComputeCommandEncoder() else {
+            throw QuantumEngineError.commandBufferCreationFailed
+        }
+
+        var targetQubit = UInt32(qubit)
+        dispatchPairwiseGate(encoder: computeEncoder, pipeline: pipelines.collapseQubitToZero, state: state) { encoder in
+            encoder.setBytes(&targetQubit, length: MemoryLayout<UInt32>.stride, index: 2)
+        }
+
+        computeEncoder.endEncoding()
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+        if let error = commandBuffer.error {
+            throw QuantumEngineError.commandBufferExecutionFailed(underlying: error)
+        }
+
+        try normalizeState(on: state)
+    }
+
+    private func applyPhaseDamping(
+        after gate: Gate,
+        on state: StateVector,
+        probability: QFloat,
+        rng: inout QuantumRNG
+    ) throws {
+        guard probability > 0 else { return }
+
+        for qubit in Set(gate.affectedQubits) {
+            guard rng.nextUnitFloat() < probability else { continue }
+            try executeUnitaryGate(.z(target: qubit), on: state)
         }
     }
 
@@ -354,7 +430,8 @@ public class QuantumEngine {
     public func executePartialMeasurementCollapse(
         on state: StateVector,
         qubits: [Int],
-        rng: inout QuantumRNG
+        rng: inout QuantumRNG,
+        noise: NoiseModel? = nil
     ) throws -> Int {
         guard !qubits.isEmpty else {
             throw QuantumMeasurementError.emptyQubitSelection
@@ -392,7 +469,28 @@ public class QuantumEngine {
         }
 
         try normalizeState(on: state)
+
+        if let noise {
+            return noise.flipReadoutOutcome(outcome, measuredQubitCount: qubits.count, rng: &rng)
+        }
         return outcome
+    }
+
+    public func executeMeasurementCollapse(
+        on state: StateVector,
+        rng: inout QuantumRNG,
+        noise: NoiseModel? = nil
+    ) throws -> Int {
+        let diceRoll = rng.nextUnitFloat()
+        var collapsedIndex = try executeMeasurementCollapse(on: state, diceRoll: diceRoll)
+        if let noise {
+            collapsedIndex = noise.flipReadoutOutcome(
+                collapsedIndex,
+                measuredQubitCount: state.qubitCount,
+                rng: &rng
+            )
+        }
+        return collapsedIndex
     }
 
     public func executeResetQubit(on state: StateVector, qubit: Int) throws {

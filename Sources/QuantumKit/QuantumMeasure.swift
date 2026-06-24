@@ -16,18 +16,18 @@ public enum QuantumMeasurementError: Error {
 
 public struct QuantumMeasurement {
 
-    public static func measure(state: StateVector, engine: QuantumEngine) throws -> [Int] {
+    public static func measure(state: StateVector, engine: QuantumEngine, noise: NoiseModel? = nil) throws -> [Int] {
         var rng: QuantumRNG = .hardware
-        return try measureRNG(state: state, engine: engine, rng: &rng)
+        return try measureRNG(state: state, engine: engine, rng: &rng, noise: noise)
     }
 
     public static func measureRNG(
         state: StateVector,
         engine: QuantumEngine,
-        rng: inout QuantumRNG
+        rng: inout QuantumRNG,
+        noise: NoiseModel? = nil
     ) throws -> [Int] {
-        let diceRoll = rng.nextUnitFloat()
-        let collapsedIndex = try engine.executeMeasurementCollapse(on: state, diceRoll: diceRoll)
+        let collapsedIndex = try engine.executeMeasurementCollapse(on: state, rng: &rng, noise: noise)
         return toBitArray(value: collapsedIndex, qubitCount: state.qubitCount)
     }
 
@@ -158,10 +158,18 @@ public struct QuantumMeasurement {
         circuit: QuantumCircuit,
         engine: QuantumEngine,
         device: MTLDevice,
-        shots: Int
+        shots: Int,
+        noise: NoiseModel? = nil
     ) throws -> ShotCounts {
         var rng: QuantumRNG = .hardware
-        return try runSampleCountsRNG(circuit: circuit, engine: engine, device: device, shots: shots, rng: &rng)
+        return try runSampleCountsRNG(
+            circuit: circuit,
+            engine: engine,
+            device: device,
+            shots: shots,
+            rng: &rng,
+            noise: noise
+        )
     }
 
     public static func runSampleCountsRNG(
@@ -169,7 +177,8 @@ public struct QuantumMeasurement {
         engine: QuantumEngine,
         device: MTLDevice,
         shots: Int,
-        rng: inout QuantumRNG
+        rng: inout QuantumRNG,
+        noise: NoiseModel? = nil
     ) throws -> ShotCounts {
         guard shots > 0 else {
             throw QuantumMeasurementError.invalidShotCount(shots)
@@ -180,13 +189,35 @@ public struct QuantumMeasurement {
 
         for _ in 0..<shots {
             let state = try StateVector(qubitCount: circuit.qubitCount, device: device)
-            try engine.execute(circuit, on: state)
-            let diceRoll = rng.nextUnitFloat()
-            let outcome = try engine.executeMeasurementCollapse(on: state, diceRoll: diceRoll)
+            try engine.executeRNG(circuit, on: state, rng: &rng, noise: noise?.hasGateNoise == true ? noise : nil)
+            let outcome = try engine.executeMeasurementCollapse(on: state, rng: &rng, noise: noise)
             histogram[outcome, default: 0] += 1
         }
 
         return ShotCounts(shots: shots, counts: histogram)
+    }
+
+    /// ⟨X⟩ for a single qubit in the computational basis.
+    public static func expectationX(
+        state: StateVector,
+        engine: QuantumEngine,
+        qubit: Int
+    ) throws -> QFloat {
+        try validateQubits([qubit], qubitCount: state.qubitCount)
+
+        let mask = 1 << qubit
+        let realPointer = state.realBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let imagPointer = state.imagBuffer.contents().assumingMemoryBound(to: QFloat.self)
+
+        var expectation: QFloat = 0
+        for index in 0..<state.stateCount {
+            let flipped = index ^ mask
+            let realProduct = realPointer[index] * realPointer[flipped]
+            let imagProduct = imagPointer[index] * imagPointer[flipped]
+            expectation += realProduct + imagProduct
+        }
+
+        return expectation
     }
 
     private static func pauliZEigenvalue(stateIndex: Int, qubit: Int) -> QFloat {
