@@ -94,7 +94,42 @@ kernel void pauli_z_gate(device float* realBuffer [[buffer(0)]],
     imagBuffer[i1] = -imagBuffer[i1];
 }
 
-// Note: Buffer 2  expects a uint2 (Control and Target qubits)
+// S: |1> *= i  (RZ(pi/2))
+kernel void s_gate(device float* realBuffer [[buffer(0)]],
+                   device float* imagBuffer [[buffer(1)]],
+                   constant uint& targetQubit [[buffer(2)]],
+                   uint id [[thread_position_in_grid]]) {
+
+    uint mask = (1 << targetQubit) - 1;
+    uint i0 = ((id >> targetQubit) << (targetQubit + 1)) | (id & mask);
+    uint i1 = i0 | (1 << targetQubit);
+
+    float r1 = realBuffer[i1];
+    float im1 = imagBuffer[i1];
+
+    realBuffer[i1] = -im1;
+    imagBuffer[i1] = r1;
+}
+
+// T: |1> *= e^{i pi/4}  (RZ(pi/4))
+kernel void t_gate(device float* realBuffer [[buffer(0)]],
+                   device float* imagBuffer [[buffer(1)]],
+                   constant uint& targetQubit [[buffer(2)]],
+                   uint id [[thread_position_in_grid]]) {
+
+    uint mask = (1 << targetQubit) - 1;
+    uint i0 = ((id >> targetQubit) << (targetQubit + 1)) | (id & mask);
+    uint i1 = i0 | (1 << targetQubit);
+
+    float r1 = realBuffer[i1];
+    float im1 = imagBuffer[i1];
+    float c = M_SQRT1_2_F;
+    float s = M_SQRT1_2_F;
+
+    realBuffer[i1] = (r1 * c) - (im1 * s);
+    imagBuffer[i1] = (r1 * s) + (im1 * c);
+}
+
 kernel void cnot_gate(device float* realBuffer [[buffer(0)]],
                       device float* imagBuffer [[buffer(1)]],
                       constant uint2& qubits [[buffer(2)]],
@@ -177,6 +212,31 @@ kernel void rx_gate(device float* realBuffer [[buffer(0)]],
     // psi1' = -i * sinH * psi0 + cosH * psi1
     realBuffer[i1] = (sinH * im0) + (cosH * r1);
     imagBuffer[i1] = (-sinH * r0) + (cosH * im1);
+}
+
+// RY: exp(-i * theta/2 * Y)
+kernel void ry_gate(device float* realBuffer [[buffer(0)]],
+                    device float* imagBuffer [[buffer(1)]],
+                    constant uint& targetQubit [[buffer(2)]],
+                    constant float& theta [[buffer(3)]],
+                    uint id [[thread_position_in_grid]]) {
+    uint mask = (1 << targetQubit) - 1;
+    uint i0 = ((id >> targetQubit) << (targetQubit + 1)) | (id & mask);
+    uint i1 = i0 | (1 << targetQubit);
+
+    float r0 = realBuffer[i0];
+    float im0 = imagBuffer[i0];
+    float r1 = realBuffer[i1];
+    float im1 = imagBuffer[i1];
+
+    float halfTheta = theta * 0.5f;
+    float cosH = cos(halfTheta);
+    float sinH = sin(halfTheta);
+
+    realBuffer[i0] = (cosH * r0) - (sinH * r1);
+    imagBuffer[i0] = (cosH * im0) - (sinH * im1);
+    realBuffer[i1] = (sinH * r0) + (cosH * r1);
+    imagBuffer[i1] = (sinH * im0) + (cosH * im1);
 }
 
 // Note: Buffer 2 expects a uint3 (control1, control2, target)

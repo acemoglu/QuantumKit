@@ -30,9 +30,12 @@ public struct Pipelines {
     let pauliX: MTLComputePipelineState
     let pauliY: MTLComputePipelineState
     let pauliZ: MTLComputePipelineState
+    let phaseS: MTLComputePipelineState
+    let phaseT: MTLComputePipelineState
     let cnot: MTLComputePipelineState
     let ccx: MTLComputePipelineState
     let rotX: MTLComputePipelineState
+    let rotY: MTLComputePipelineState
     let rotZ: MTLComputePipelineState
 
     let probabilities: MTLComputePipelineState
@@ -58,6 +61,12 @@ public struct Pipelines {
         guard let zFunc = library.makeFunction(name: "pauli_z_gate") else { throw QuantumEngineError.functionNotFound("pauli_z_gate") }
         self.pauliZ = try device.makeComputePipelineState(function: zFunc)
 
+        guard let sFunc = library.makeFunction(name: "s_gate") else { throw QuantumEngineError.functionNotFound("s_gate") }
+        self.phaseS = try device.makeComputePipelineState(function: sFunc)
+
+        guard let tFunc = library.makeFunction(name: "t_gate") else { throw QuantumEngineError.functionNotFound("t_gate") }
+        self.phaseT = try device.makeComputePipelineState(function: tFunc)
+
         guard let cxFunc = library.makeFunction(name: "cnot_gate") else { throw QuantumEngineError.functionNotFound("cnot_gate") }
         self.cnot = try device.makeComputePipelineState(function: cxFunc)
 
@@ -66,6 +75,9 @@ public struct Pipelines {
 
         guard let rxFunc = library.makeFunction(name: "rx_gate") else { throw QuantumEngineError.functionNotFound("rx_gate") }
         self.rotX = try device.makeComputePipelineState(function: rxFunc)
+
+        guard let ryFunc = library.makeFunction(name: "ry_gate") else { throw QuantumEngineError.functionNotFound("ry_gate") }
+        self.rotY = try device.makeComputePipelineState(function: ryFunc)
 
         guard let rzFunc = library.makeFunction(name: "rz_gate") else { throw QuantumEngineError.functionNotFound("rz_gate") }
         self.rotZ = try device.makeComputePipelineState(function: rzFunc)
@@ -419,6 +431,18 @@ public class QuantumEngine {
                 encoder.setBytes(&targetQubit, length: MemoryLayout<UInt32>.stride, index: 2)
             }
 
+        case .s(let target):
+            dispatchPairwiseGate(encoder: encoder, pipeline: pipelines.phaseS, state: state) { encoder in
+                var targetQubit = UInt32(target)
+                encoder.setBytes(&targetQubit, length: MemoryLayout<UInt32>.stride, index: 2)
+            }
+
+        case .t(let target):
+            dispatchPairwiseGate(encoder: encoder, pipeline: pipelines.phaseT, state: state) { encoder in
+                var targetQubit = UInt32(target)
+                encoder.setBytes(&targetQubit, length: MemoryLayout<UInt32>.stride, index: 2)
+            }
+
         case .cx(let control, let target):
             dispatchPairwiseGate(encoder: encoder, pipeline: pipelines.cnot, state: state) { encoder in
                 var qubits = SIMD2<UInt32>(x: UInt32(control), y: UInt32(target))
@@ -441,6 +465,14 @@ public class QuantumEngine {
 
         case .rx(let theta, let target):
             dispatchPairwiseGate(encoder: encoder, pipeline: pipelines.rotX, state: state) { encoder in
+                var targetQubit = UInt32(target)
+                encoder.setBytes(&targetQubit, length: MemoryLayout<UInt32>.stride, index: 2)
+                var thetaValue = Float(theta)
+                encoder.setBytes(&thetaValue, length: MemoryLayout<Float>.stride, index: 3)
+            }
+
+        case .ry(let theta, let target):
+            dispatchPairwiseGate(encoder: encoder, pipeline: pipelines.rotY, state: state) { encoder in
                 var targetQubit = UInt32(target)
                 encoder.setBytes(&targetQubit, length: MemoryLayout<UInt32>.stride, index: 2)
                 var thetaValue = Float(theta)

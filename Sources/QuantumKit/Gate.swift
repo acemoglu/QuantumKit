@@ -16,6 +16,12 @@ public enum Gate {
     case x(target:Int)
     case y(target:Int)
     case z(target:Int)
+
+    /// Phase gate S = √Z; applies e^{iπ/2} to |1⟩.
+    case s(target: Int)
+
+    /// π/8 gate T = √S; applies e^{iπ/4} to |1⟩.
+    case t(target: Int)
     
     /// Entangles two qubits. Controlled-NOT gate
     case cx(control:Int, target:Int)
@@ -25,6 +31,9 @@ public enum Gate {
     
     /// Parametrized rotation around the X-axis
     case rx(theta:QFloat, target:Int)
+
+    /// Parametrized rotation around the Y-axis
+    case ry(theta: QFloat, target: Int)
 
     /// Parametrized rotation around the Z-axis
     case rz(theta:QFloat, target:Int)
@@ -43,7 +52,8 @@ extension Gate {
     public var affectedQubits: [Int] {
         switch self {
         case .h(let target), .x(let target), .y(let target), .z(let target),
-             .rx(_, let target), .rz(_, let target), .reset(let target):
+             .s(let target), .t(let target),
+             .rx(_, let target), .ry(_, let target), .rz(_, let target), .reset(let target):
             return [target]
         case .cx(let control, let target):
             return [control, target]

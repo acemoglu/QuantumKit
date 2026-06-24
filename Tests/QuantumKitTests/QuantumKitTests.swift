@@ -582,6 +582,112 @@ final class QuantumKitTests: XCTestCase {
         XCTAssertEqual(result, [1, 0], "SWAP should exchange qubit amplitudes")
     }
 
+    func testRyPiRotatesZeroToOne() throws {
+        let engine = try QuantumEngine()
+
+        guard let device = makeDevice() else {
+            XCTFail("Apple Silicon GPU not found!")
+            return
+        }
+
+        let state = try StateVector(qubitCount: 1, device: device)
+        var circuit = try QuantumCircuit(qubitCount: 1)
+        try circuit.ry(theta: QFloat(Double.pi), 0)
+
+        try engine.execute(circuit, on: state)
+
+        let result = try QuantumMeasurement.measure(state: state, engine: engine)
+        XCTAssertEqual(result, [1], "RY(pi) should rotate |0> to |1>")
+    }
+
+    func testSGateMatchesRzPiOverTwo() throws {
+        let engine = try QuantumEngine()
+
+        guard let device = makeDevice() else {
+            XCTFail("Apple Silicon GPU not found!")
+            return
+        }
+
+        let sState = try StateVector(qubitCount: 1, device: device)
+        var sCircuit = try QuantumCircuit(qubitCount: 1)
+        try sCircuit.h(0)
+        try sCircuit.s(0)
+        try engine.execute(sCircuit, on: sState)
+
+        let rzState = try StateVector(qubitCount: 1, device: device)
+        var rzCircuit = try QuantumCircuit(qubitCount: 1)
+        try rzCircuit.h(0)
+        try rzCircuit.rz(theta: QFloat(Double.pi / 2.0), 0)
+        try engine.execute(rzCircuit, on: rzState)
+
+        let sProbabilities = try QuantumMeasurement.probabilities(state: sState, engine: engine)
+        let rzProbabilities = try QuantumMeasurement.probabilities(state: rzState, engine: engine)
+
+        XCTAssertEqual(sProbabilities.count, rzProbabilities.count)
+        for index in 0..<sProbabilities.count {
+            XCTAssertEqual(sProbabilities[index], rzProbabilities[index], accuracy: 1e-5)
+        }
+    }
+
+    func testTGateMatchesRzPiOverFour() throws {
+        let engine = try QuantumEngine()
+
+        guard let device = makeDevice() else {
+            XCTFail("Apple Silicon GPU not found!")
+            return
+        }
+
+        let tState = try StateVector(qubitCount: 1, device: device)
+        var tCircuit = try QuantumCircuit(qubitCount: 1)
+        try tCircuit.h(0)
+        try tCircuit.t(0)
+        try engine.execute(tCircuit, on: tState)
+
+        let rzState = try StateVector(qubitCount: 1, device: device)
+        var rzCircuit = try QuantumCircuit(qubitCount: 1)
+        try rzCircuit.h(0)
+        try rzCircuit.rz(theta: QFloat(Double.pi / 4.0), 0)
+        try engine.execute(rzCircuit, on: rzState)
+
+        let tProbabilities = try QuantumMeasurement.probabilities(state: tState, engine: engine)
+        let rzProbabilities = try QuantumMeasurement.probabilities(state: rzState, engine: engine)
+
+        XCTAssertEqual(tProbabilities.count, rzProbabilities.count)
+        for index in 0..<tProbabilities.count {
+            XCTAssertEqual(tProbabilities[index], rzProbabilities[index], accuracy: 1e-5)
+        }
+    }
+
+    func testTSquaredEqualsS() throws {
+        let engine = try QuantumEngine()
+
+        guard let device = makeDevice() else {
+            XCTFail("Apple Silicon GPU not found!")
+            return
+        }
+
+        let ttState = try StateVector(qubitCount: 1, device: device)
+        var ttCircuit = try QuantumCircuit(qubitCount: 1)
+        try ttCircuit.h(0)
+        try ttCircuit.t(0)
+        try ttCircuit.t(0)
+        try engine.execute(ttCircuit, on: ttState)
+
+        let sState = try StateVector(qubitCount: 1, device: device)
+        var sCircuit = try QuantumCircuit(qubitCount: 1)
+        try sCircuit.h(0)
+        try sCircuit.s(0)
+        try engine.execute(sCircuit, on: sState)
+
+        let ttProbabilities = try QuantumMeasurement.probabilities(state: ttState, engine: engine)
+        let sProbabilities = try QuantumMeasurement.probabilities(state: sState, engine: engine)
+
+        XCTAssertEqual(ttProbabilities.count, sProbabilities.count)
+        for index in 0..<ttProbabilities.count {
+            XCTAssertEqual(ttProbabilities[index], sProbabilities[index], accuracy: 1e-5)
+        }
+    }
+
     func testModularExponentiationScaffold() throws {
         var circuit = try QuantumCircuit(qubitCount: 24)
 
