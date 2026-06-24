@@ -29,6 +29,36 @@ extension QuantumCircuit {
         }
     }
 
+    /// Inverse QFT on all qubits (adjoint of ``applyQFT()``).
+    public mutating func applyInverseQFT() throws {
+        try applyInverseQFT(qubits: 0..<qubitCount)
+    }
+
+    /// Inverse QFT on a contiguous subset of qubits (e.g. Shor counting register).
+    public mutating func applyInverseQFT(qubits: Range<Int>) throws {
+        guard !qubits.isEmpty else {
+            throw QuantumCircuitError.invalidAlgorithmParameter(
+                reason: "Inverse QFT requires at least one qubit"
+            )
+        }
+
+        let indices = Array(qubits)
+        for index in indices {
+            try validateRegisterIndex(index)
+        }
+
+        let n = indices.count
+        for offset in stride(from: n - 1, through: 0, by: -1) {
+            let j = indices[offset]
+            for kOffset in stride(from: n - 1, through: offset + 1, by: -1) {
+                let k = indices[kOffset]
+                let theta = -Double.pi / Double(1 << (kOffset - offset))
+                try applyCPHASE(theta: theta, control: k, target: j)
+            }
+            try h(j)
+        }
+    }
+
     public mutating func applySwap(q1: Int, q2: Int) throws {
         try cx(q1, q2)
         try cx(q2, q1)

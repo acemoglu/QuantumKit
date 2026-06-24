@@ -815,4 +815,81 @@ final class QuantumKitTests: XCTestCase {
             }
         }
     }
+
+    // MARK: - Shor accuracy (N = 15 = 3 × 5)
+
+    func testShorFactors15Accuracy() throws {
+        let engine = try QuantumEngine()
+
+        guard let device = makeDevice() else {
+            XCTFail("Apple Silicon GPU not found!")
+            return
+        }
+
+        let modulus = 15
+        let base = 7
+        let expectedPeriod = try ShorClassical.multiplicativeOrder(base: base, modulus: modulus)
+        XCTAssertEqual(expectedPeriod, 4, "Precondition: multiplicative order of 7 mod 15 is 4")
+
+        // 4 counting qubits suffice for r = 4 (phase peaks at k/4); more controls explode gate depth.
+        let controlQubitCount = 4
+        let targetQubitCount = 4
+        let ancillaQubitCount = (targetQubitCount * 2) + 6
+        let qubitCount = controlQubitCount + targetQubitCount + ancillaQubitCount
+
+        let controlRange = 0..<controlQubitCount
+        let targetRange = controlQubitCount..<(controlQubitCount + targetQubitCount)
+        let ancillaRange = (controlQubitCount + targetQubitCount)..<qubitCount
+
+        var circuit = try QuantumCircuit(qubitCount: qubitCount)
+
+        // |y⟩ = |1⟩
+        try circuit.x(targetRange.lowerBound)
+
+        for control in controlRange {
+            try circuit.h(control)
+        }
+
+        try circuit.applyModularExponentiation(
+            a: base,
+            modulus: modulus,
+            controlRegister: controlRange.lowerBound...controlRange.upperBound - 1,
+            targetRegister: targetRange.lowerBound...targetRange.upperBound - 1,
+            ancillaRegister: ancillaRange.lowerBound...ancillaRange.upperBound - 1
+        )
+
+        try circuit.applyInverseQFT(qubits: controlRange)
+
+        let state = try StateVector(qubitCount: qubitCount, device: device)
+        try engine.execute(circuit, on: state)
+
+        let shots = 512
+        var rng: QuantumRNG = .seeded(0x5100_0015)
+        let counts = try QuantumMeasurement.sampleCountsRNG(
+            state: state,
+            engine: engine,
+            qubits: Array(controlRange),
+            shots: shots,
+            rng: &rng
+        )
+
+        let analysis = ShorClassical.analyze(
+            counts: counts,
+            controlQubitCount: controlQubitCount,
+            base: base,
+            modulus: modulus
+        )
+
+        print("🔐 SHOR N=15: recovered periods \(analysis.recoveredPeriods.sorted()), factors \(analysis.foundFactors.sorted())")
+
+        XCTAssertTrue(
+            analysis.recoveredPeriods.contains(expectedPeriod),
+            "Expected to recover classical period r=\(expectedPeriod) from QFT peaks; got \(analysis.recoveredPeriods)"
+        )
+        XCTAssertEqual(
+            analysis.foundFactors,
+            [3, 5],
+            "Shor post-processing should factor 15 into 3 and 5"
+        )
+    }
 }
