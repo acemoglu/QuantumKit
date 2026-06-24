@@ -110,6 +110,135 @@ final class QuantumKitTests: XCTestCase {
         XCTAssertEqual(bitstrings.values.reduce(0, +), 1_000)
     }
 
+    func testExpectationZOnPlusState() throws {
+        let engine = try QuantumEngine()
+
+        guard let device = makeDevice() else {
+            XCTFail("Apple Silicon GPU not found!")
+            return
+        }
+
+        let state = try StateVector(qubitCount: 1, device: device)
+        var circuit = try QuantumCircuit(qubitCount: 1)
+        try circuit.h(0)
+        try engine.execute(circuit, on: state)
+
+        let expectation = try QuantumMeasurement.expectationZ(state: state, engine: engine, qubit: 0)
+        XCTAssertEqual(expectation, 0, accuracy: 1e-5)
+    }
+
+    func testExpectationZOnOneState() throws {
+        let engine = try QuantumEngine()
+
+        guard let device = makeDevice() else {
+            XCTFail("Apple Silicon GPU not found!")
+            return
+        }
+
+        let state = try StateVector(qubitCount: 1, device: device)
+        var circuit = try QuantumCircuit(qubitCount: 1)
+        try circuit.x(0)
+        try engine.execute(circuit, on: state)
+
+        let expectation = try QuantumMeasurement.expectationZ(state: state, engine: engine, qubit: 0)
+        XCTAssertEqual(expectation, -1, accuracy: 1e-5)
+    }
+
+    func testExpectationZZOnBellState() throws {
+        let engine = try QuantumEngine()
+
+        guard let device = makeDevice() else {
+            XCTFail("Apple Silicon GPU not found!")
+            return
+        }
+
+        let state = try StateVector(qubitCount: 2, device: device)
+        var circuit = try QuantumCircuit(qubitCount: 2)
+        try circuit.applyBellState()
+        try engine.execute(circuit, on: state)
+
+        let z0 = try QuantumMeasurement.expectationZ(state: state, engine: engine, qubit: 0)
+        let z1 = try QuantumMeasurement.expectationZ(state: state, engine: engine, qubit: 1)
+        let zz = try QuantumMeasurement.expectationZZ(state: state, engine: engine, qubitA: 0, qubitB: 1)
+
+        XCTAssertEqual(z0, 0, accuracy: 1e-5)
+        XCTAssertEqual(z1, 0, accuracy: 1e-5)
+        XCTAssertEqual(zz, 1, accuracy: 1e-5)
+    }
+
+    func testRunSampleCountsOnBellState() throws {
+        let engine = try QuantumEngine()
+
+        guard let device = makeDevice() else {
+            XCTFail("Apple Silicon GPU not found!")
+            return
+        }
+
+        var circuit = try QuantumCircuit(qubitCount: 2)
+        try circuit.applyBellState()
+
+        var rng: QuantumRNG = .seeded(99)
+        let result = try QuantumMeasurement.runSampleCountsRNG(
+            circuit: circuit,
+            engine: engine,
+            device: device,
+            shots: 500,
+            rng: &rng
+        )
+
+        XCTAssertEqual(result.shots, 500)
+        let bitstrings = result.bitstringCounts(qubitCount: 2)
+        XCTAssertEqual(bitstrings.keys.sorted(), ["00", "11"])
+        XCTAssertEqual(bitstrings.values.reduce(0, +), 500)
+    }
+
+    func testMidCircuitMeasureAndReset() throws {
+        let engine = try QuantumEngine()
+
+        guard let device = makeDevice() else {
+            XCTFail("Apple Silicon GPU not found!")
+            return
+        }
+
+        let state = try StateVector(qubitCount: 1, device: device)
+        var circuit = try QuantumCircuit(qubitCount: 1)
+        try circuit.h(0)
+        try circuit.measure(0)
+        try circuit.reset(0)
+
+        var rng: QuantumRNG = .seeded(123)
+        let execution = try engine.executeRNG(circuit, on: state, rng: &rng)
+
+        XCTAssertEqual(execution.measurementOutcomes.count, 1)
+        XCTAssertTrue(execution.measurementOutcomes[0] == [0] || execution.measurementOutcomes[0] == [1])
+
+        let expectation = try QuantumMeasurement.expectationZ(state: state, engine: engine, qubit: 0)
+        XCTAssertEqual(expectation, 1, accuracy: 1e-5)
+    }
+
+    func testMidCircuitMeasureOnBellState() throws {
+        let engine = try QuantumEngine()
+
+        guard let device = makeDevice() else {
+            XCTFail("Apple Silicon GPU not found!")
+            return
+        }
+
+        let state = try StateVector(qubitCount: 2, device: device)
+        var circuit = try QuantumCircuit(qubitCount: 2)
+        try circuit.applyBellState()
+        try circuit.measure(0)
+
+        var rng: QuantumRNG = .seeded(5)
+        let execution = try engine.executeRNG(circuit, on: state, rng: &rng)
+
+        XCTAssertEqual(execution.measurementOutcomes.count, 1)
+        let measuredQubit0 = execution.measurementOutcomes[0][0]
+
+        let z1 = try QuantumMeasurement.expectationZ(state: state, engine: engine, qubit: 1)
+        XCTAssertEqual(z1, measuredQubit0 == 0 ? 1 : -1, accuracy: 1e-5)
+    }
+
     func testBellStateEntanglement() throws {
         let engine = try QuantumEngine()
 

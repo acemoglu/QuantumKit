@@ -322,4 +322,40 @@ kernel void collapse_state_vector(device float* realBuffer [[buffer(0)]],
     }
 }
 
+kernel void partial_collapse_state_vector(device float* realBuffer [[buffer(0)]],
+                                          device float* imagBuffer [[buffer(1)]],
+                                          device const uint* measuredQubits [[buffer(2)]],
+                                          constant uint& measuredQubitCount [[buffer(3)]],
+                                          constant uint& outcome [[buffer(4)]],
+                                          uint id [[thread_position_in_grid]]) {
+    for (uint position = 0; position < measuredQubitCount; position++) {
+        const uint qubit = measuredQubits[position];
+        const uint expected = (outcome >> position) & 1u;
+        const uint actual = (id >> qubit) & 1u;
+        if (actual != expected) {
+            realBuffer[id] = 0.0f;
+            imagBuffer[id] = 0.0f;
+            return;
+        }
+    }
+}
+
+kernel void reset_qubit_state_vector(device float* realBuffer [[buffer(0)]],
+                                     device float* imagBuffer [[buffer(1)]],
+                                     constant uint& targetQubit [[buffer(2)]],
+                                     uint id [[thread_position_in_grid]]) {
+    if ((id >> targetQubit) & 1u) {
+        realBuffer[id] = 0.0f;
+        imagBuffer[id] = 0.0f;
+    }
+}
+
+kernel void normalize_state_vector(device float* realBuffer [[buffer(0)]],
+                                   device float* imagBuffer [[buffer(1)]],
+                                   constant float& invNorm [[buffer(2)]],
+                                   uint id [[thread_position_in_grid]]) {
+    realBuffer[id] *= invNorm;
+    imagBuffer[id] *= invNorm;
+}
+
 

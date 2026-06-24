@@ -112,6 +112,87 @@ public struct QuantumMeasurement {
         return try buildHistogram(from: distribution, shots: shots, rng: &rng)
     }
 
+    /// ⟨Z⟩ for a single qubit in the computational basis.
+    public static func expectationZ(
+        state: StateVector,
+        engine: QuantumEngine,
+        qubit: Int
+    ) throws -> QFloat {
+        try expectationPauliZ(state: state, engine: engine, qubits: [qubit])
+    }
+
+    /// ⟨Z_a Z_b⟩ for two qubits.
+    public static func expectationZZ(
+        state: StateVector,
+        engine: QuantumEngine,
+        qubitA: Int,
+        qubitB: Int
+    ) throws -> QFloat {
+        try expectationPauliZ(state: state, engine: engine, qubits: [qubitA, qubitB])
+    }
+
+    /// ⟨Z_{i_0} Z_{i_1} …⟩ as the product of Pauli-Z on the listed qubits.
+    public static func expectationPauliZ(
+        state: StateVector,
+        engine: QuantumEngine,
+        qubits: [Int]
+    ) throws -> QFloat {
+        try validateQubits(qubits, qubitCount: state.qubitCount)
+
+        let distribution = try probabilities(state: state, engine: engine)
+        var expectation: QFloat = 0
+
+        for (stateIndex, probability) in distribution.enumerated() {
+            var eigenvalue: QFloat = 1
+            for qubit in qubits {
+                eigenvalue *= pauliZEigenvalue(stateIndex: stateIndex, qubit: qubit)
+            }
+            expectation += probability * eigenvalue
+        }
+
+        return expectation
+    }
+
+    /// Runs the circuit `shots` times from |0…0⟩, collapsing each run before the next.
+    public static func runSampleCounts(
+        circuit: QuantumCircuit,
+        engine: QuantumEngine,
+        device: MTLDevice,
+        shots: Int
+    ) throws -> ShotCounts {
+        var rng: QuantumRNG = .hardware
+        return try runSampleCountsRNG(circuit: circuit, engine: engine, device: device, shots: shots, rng: &rng)
+    }
+
+    public static func runSampleCountsRNG(
+        circuit: QuantumCircuit,
+        engine: QuantumEngine,
+        device: MTLDevice,
+        shots: Int,
+        rng: inout QuantumRNG
+    ) throws -> ShotCounts {
+        guard shots > 0 else {
+            throw QuantumMeasurementError.invalidShotCount(shots)
+        }
+
+        var histogram: [Int: Int] = [:]
+        histogram.reserveCapacity(min(shots, circuit.qubitCount > 0 ? 1 << circuit.qubitCount : 1))
+
+        for _ in 0..<shots {
+            let state = try StateVector(qubitCount: circuit.qubitCount, device: device)
+            try engine.execute(circuit, on: state)
+            let diceRoll = rng.nextUnitFloat()
+            let outcome = try engine.executeMeasurementCollapse(on: state, diceRoll: diceRoll)
+            histogram[outcome, default: 0] += 1
+        }
+
+        return ShotCounts(shots: shots, counts: histogram)
+    }
+
+    private static func pauliZEigenvalue(stateIndex: Int, qubit: Int) -> QFloat {
+        ((stateIndex >> qubit) & 1) == 0 ? 1 : -1
+    }
+
     private static func buildHistogram(
         from distribution: [QFloat],
         shots: Int,

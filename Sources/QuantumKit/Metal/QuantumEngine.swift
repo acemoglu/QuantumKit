@@ -20,6 +20,7 @@ public enum QuantumEngineError: Error {
     case bufferAllocationFailed(requiredBytes: Int)
     case commandBufferExecutionFailed(underlying: Error?)
     case prefixSumBufferLevelMissing(level: Int)
+    case zeroStateNorm
 
 }
 
@@ -38,6 +39,9 @@ public struct Pipelines {
     let prefixSum: MTLComputePipelineState
     let collapseSearch: MTLComputePipelineState
     let collapseState: MTLComputePipelineState
+    let partialCollapse: MTLComputePipelineState
+    let resetQubit: MTLComputePipelineState
+    let normalize: MTLComputePipelineState
 
     init(device: MTLDevice, library: MTLLibrary) throws {
         guard let hFunc = library.makeFunction(name: "hadamard_gate") else { throw QuantumEngineError.functionNotFound("hadamard_gate") }
@@ -75,6 +79,15 @@ public struct Pipelines {
 
         guard let collapseStateFunc = library.makeFunction(name: "collapse_state_vector") else { throw QuantumEngineError.functionNotFound("collapse_state_vector") }
         self.collapseState = try device.makeComputePipelineState(function: collapseStateFunc)
+
+        guard let partialCollapseFunc = library.makeFunction(name: "partial_collapse_state_vector") else { throw QuantumEngineError.functionNotFound("partial_collapse_state_vector") }
+        self.partialCollapse = try device.makeComputePipelineState(function: partialCollapseFunc)
+
+        guard let resetQubitFunc = library.makeFunction(name: "reset_qubit_state_vector") else { throw QuantumEngineError.functionNotFound("reset_qubit_state_vector") }
+        self.resetQubit = try device.makeComputePipelineState(function: resetQubitFunc)
+
+        guard let normalizeFunc = library.makeFunction(name: "normalize_state_vector") else { throw QuantumEngineError.functionNotFound("normalize_state_vector") }
+        self.normalize = try device.makeComputePipelineState(function: normalizeFunc)
 
     }
 }
@@ -160,16 +173,55 @@ public class QuantumEngine {
     }
 
     public func execute(_ circuit: QuantumCircuit, on state: StateVector) throws {
+        var rng: QuantumRNG = .hardware
+        _ = try executeRNG(circuit, on: state, rng: &rng)
+    }
+
+    @discardableResult
+    public func executeRNG(
+        _ circuit: QuantumCircuit,
+        on state: StateVector,
+        rng: inout QuantumRNG
+    ) throws -> CircuitExecutionResult {
         guard circuit.qubitCount == state.qubitCount else {
             throw QuantumEngineError.qubitCountMismatch(circuit: circuit.qubitCount, state: state.qubitCount)
         }
+
+        var measurementOutcomes: [[Int]] = []
+        var pendingUnitaryGates: [Gate] = []
+
+        for gate in circuit.gates {
+            switch gate {
+            case .measure(let qubits):
+                try flushUnitaryGates(pendingUnitaryGates, on: state)
+                pendingUnitaryGates.removeAll(keepingCapacity: true)
+
+                let outcome = try executePartialMeasurementCollapse(on: state, qubits: qubits, rng: &rng)
+                measurementOutcomes.append(measuredBits(outcome: outcome, qubits: qubits))
+
+            case .reset(let qubit):
+                try flushUnitaryGates(pendingUnitaryGates, on: state)
+                pendingUnitaryGates.removeAll(keepingCapacity: true)
+                try executeResetQubit(on: state, qubit: qubit)
+
+            default:
+                pendingUnitaryGates.append(gate)
+            }
+        }
+
+        try flushUnitaryGates(pendingUnitaryGates, on: state)
+        return CircuitExecutionResult(measurementOutcomes: measurementOutcomes)
+    }
+
+    private func flushUnitaryGates(_ gates: [Gate], on state: StateVector) throws {
+        guard !gates.isEmpty else { return }
 
         guard let commandBuffer = commandQueue.makeCommandBuffer(),
               let computeEncoder = commandBuffer.makeComputeCommandEncoder() else {
             throw QuantumEngineError.commandBufferCreationFailed
         }
 
-        for gate in circuit.gates {
+        for gate in gates {
             switch gate {
             case .h(let target):
                 dispatchPairwiseGate(encoder: computeEncoder, pipeline: pipelines.hadamard, state: state) { encoder in
@@ -222,6 +274,9 @@ public class QuantumEngine {
                     var thetaValue = Float(theta)
                     encoder.setBytes(&thetaValue, length: MemoryLayout<Float>.stride, index: 3)
                 }
+
+            case .measure, .reset:
+                break
             }
         }
 
@@ -230,6 +285,178 @@ public class QuantumEngine {
         commandBuffer.waitUntilCompleted()
         if let error = commandBuffer.error {
             throw QuantumEngineError.commandBufferExecutionFailed(underlying: error)
+        }
+    }
+
+    public func executePartialMeasurementCollapse(
+        on state: StateVector,
+        qubits: [Int],
+        rng: inout QuantumRNG
+    ) throws -> Int {
+        guard !qubits.isEmpty else {
+            throw QuantumMeasurementError.emptyQubitSelection
+        }
+
+        let diceRoll = rng.nextUnitFloat()
+        let outcome = try samplePartialOutcome(on: state, qubits: qubits, diceRoll: diceRoll)
+
+        let qubitIndices = qubits.map { UInt32($0) }
+        let qubitBuffer = try makeSharedBuffer(length: qubitIndices.count * MemoryLayout<UInt32>.stride)
+        qubitBuffer.contents().copyMemory(
+            from: qubitIndices,
+            byteCount: qubitIndices.count * MemoryLayout<UInt32>.stride
+        )
+
+        guard let commandBuffer = commandQueue.makeCommandBuffer(),
+              let computeEncoder = commandBuffer.makeComputeCommandEncoder() else {
+            throw QuantumEngineError.commandBufferCreationFailed
+        }
+
+        var measuredQubitCount = UInt32(qubits.count)
+        var outcomeValue = UInt32(outcome)
+
+        dispatchFullStateKernel(encoder: computeEncoder, pipeline: pipelines.partialCollapse, state: state) { encoder in
+            encoder.setBuffer(qubitBuffer, offset: 0, index: 2)
+            encoder.setBytes(&measuredQubitCount, length: MemoryLayout<UInt32>.stride, index: 3)
+            encoder.setBytes(&outcomeValue, length: MemoryLayout<UInt32>.stride, index: 4)
+        }
+
+        computeEncoder.endEncoding()
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+        if let error = commandBuffer.error {
+            throw QuantumEngineError.commandBufferExecutionFailed(underlying: error)
+        }
+
+        try normalizeState(on: state)
+        return outcome
+    }
+
+    public func executeResetQubit(on state: StateVector, qubit: Int) throws {
+        guard let commandBuffer = commandQueue.makeCommandBuffer(),
+              let computeEncoder = commandBuffer.makeComputeCommandEncoder() else {
+            throw QuantumEngineError.commandBufferCreationFailed
+        }
+
+        var targetQubit = UInt32(qubit)
+        dispatchFullStateKernel(encoder: computeEncoder, pipeline: pipelines.resetQubit, state: state) { encoder in
+            encoder.setBytes(&targetQubit, length: MemoryLayout<UInt32>.stride, index: 2)
+        }
+
+        computeEncoder.endEncoding()
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+        if let error = commandBuffer.error {
+            throw QuantumEngineError.commandBufferExecutionFailed(underlying: error)
+        }
+
+        try normalizeState(on: state)
+    }
+
+    private func normalizeState(on state: StateVector) throws {
+        let stateCount = state.stateCount
+        let probabilityBytes = stateCount * MemoryLayout<QFloat>.stride
+        let probBuffer = try makeSharedBuffer(length: probabilityBytes)
+        var auxiliaryBuffers: [MTLBuffer] = []
+
+        var currentCount = stateCount
+        while currentCount > 1 {
+            let blockCount = max((currentCount + Self.scanBlockSize - 1) / Self.scanBlockSize, 1)
+            let byteCount = blockCount * MemoryLayout<QFloat>.stride
+            auxiliaryBuffers.append(try makeSharedBuffer(length: byteCount))
+            currentCount = blockCount
+        }
+
+        guard let commandBuffer = commandQueue.makeCommandBuffer(),
+              let computeEncoder = commandBuffer.makeComputeCommandEncoder() else {
+            throw QuantumEngineError.commandBufferCreationFailed
+        }
+
+        dispatchFullStateKernel(encoder: computeEncoder, pipeline: pipelines.probabilities, state: state) { encoder in
+            encoder.setBuffer(probBuffer, offset: 0, index: 2)
+        }
+
+        if stateCount > 1 {
+            try encodeInclusivePrefixSum(
+                encoder: computeEncoder,
+                buffer: probBuffer,
+                elementCount: stateCount,
+                auxiliaryBuffers: auxiliaryBuffers
+            )
+        }
+
+        computeEncoder.endEncoding()
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+        if let error = commandBuffer.error {
+            throw QuantumEngineError.commandBufferExecutionFailed(underlying: error)
+        }
+
+        let probabilityPointer = probBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let totalProbability = stateCount == 1 ? probabilityPointer[0] : probabilityPointer[stateCount - 1]
+        guard totalProbability > 0 else {
+            throw QuantumEngineError.zeroStateNorm
+        }
+
+        let invNorm = 1 / sqrt(totalProbability)
+
+        guard let normalizeCommandBuffer = commandQueue.makeCommandBuffer(),
+              let normalizeEncoder = normalizeCommandBuffer.makeComputeCommandEncoder() else {
+            throw QuantumEngineError.commandBufferCreationFailed
+        }
+
+        var invNormValue = QFloat(invNorm)
+        dispatchFullStateKernel(encoder: normalizeEncoder, pipeline: pipelines.normalize, state: state) { encoder in
+            encoder.setBytes(&invNormValue, length: MemoryLayout<QFloat>.stride, index: 2)
+        }
+
+        normalizeEncoder.endEncoding()
+        normalizeCommandBuffer.commit()
+        normalizeCommandBuffer.waitUntilCompleted()
+        if let error = normalizeCommandBuffer.error {
+            throw QuantumEngineError.commandBufferExecutionFailed(underlying: error)
+        }
+    }
+
+    private func samplePartialOutcome(on state: StateVector, qubits: [Int], diceRoll: Float) throws -> Int {
+        let byteCount = state.stateCount * MemoryLayout<QFloat>.stride
+        guard let buffer = device.makeBuffer(length: byteCount, options: .storageModeShared) else {
+            throw QuantumEngineError.bufferAllocationFailed(requiredBytes: byteCount)
+        }
+
+        try executeProbabilityKernel(on: state, outputBuffer: buffer)
+        let pointer = buffer.contents().assumingMemoryBound(to: QFloat.self)
+        let fullDistribution = Array(UnsafeBufferPointer(start: pointer, count: state.stateCount))
+
+        var marginal = [QFloat](repeating: 0, count: 1 << qubits.count)
+        for (stateIndex, probability) in fullDistribution.enumerated() {
+            let outcome = partialOutcomeIndex(stateIndex: stateIndex, qubits: qubits)
+            marginal[outcome] += probability
+        }
+
+        var cumulative: QFloat = 0
+        for (index, probability) in marginal.enumerated() {
+            cumulative += probability
+            if diceRoll < cumulative {
+                return index
+            }
+        }
+
+        return marginal.count - 1
+    }
+
+    private func partialOutcomeIndex(stateIndex: Int, qubits: [Int]) -> Int {
+        var outcome = 0
+        for (position, qubit) in qubits.enumerated() {
+            let bit = (stateIndex >> qubit) & 1
+            outcome |= bit << position
+        }
+        return outcome
+    }
+
+    private func measuredBits(outcome: Int, qubits: [Int]) -> [Int] {
+        qubits.indices.map { position in
+            (outcome >> position) & 1
         }
     }
 

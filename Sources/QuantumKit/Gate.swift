@@ -29,4 +29,10 @@ public enum Gate {
     /// Parametrized rotation around the Z-axis
     case rz(theta:QFloat, target:Int)
 
+    /// Mid-circuit computational-basis measurement on the listed qubits.
+    case measure(qubits: [Int])
+
+    /// Project a qubit onto |0⟩ and renormalize (non-unitary).
+    case reset(qubit: Int)
+
 }

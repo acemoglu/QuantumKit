@@ -53,6 +53,17 @@ public struct QuantumCircuit {
                     reason: "CCX requires three distinct qubits (control1, control2, target)"
                 )
             }
+        case .measure(let qubits):
+            guard !qubits.isEmpty else {
+                throw QuantumCircuitError.invalidAlgorithmParameter(
+                    reason: "Measure requires at least one qubit"
+                )
+            }
+            for index in qubits {
+                try validateQubitIndex(index)
+            }
+        case .reset(let qubit):
+            try validateQubitIndex(qubit)
         }
 
         gates.append(gate)
@@ -107,6 +118,23 @@ public struct QuantumCircuit {
     @discardableResult
     public mutating func z(_ target: Int) throws -> QuantumCircuit {
         try applyValidated(.z(target: target))
+        return self
+    }
+
+    @discardableResult
+    public mutating func measure(qubits: [Int]) throws -> QuantumCircuit {
+        try applyValidated(.measure(qubits: qubits))
+        return self
+    }
+
+    @discardableResult
+    public mutating func measure(_ qubit: Int) throws -> QuantumCircuit {
+        try measure(qubits: [qubit])
+    }
+
+    @discardableResult
+    public mutating func reset(_ qubit: Int) throws -> QuantumCircuit {
+        try applyValidated(.reset(qubit: qubit))
         return self
     }
 }
