@@ -7,7 +7,7 @@
 
 import Foundation
 
-public enum Gate {
+public enum Gate: Equatable, Sendable {
     
     /// Hadamard gate
     case h(target:Int)

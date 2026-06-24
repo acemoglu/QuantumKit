@@ -688,6 +688,86 @@ final class QuantumKitTests: XCTestCase {
         }
     }
 
+    // MARK: - Algebraic pre-compiler
+
+    func testAlgebraicPreCompilerCancelsDoubleHadamard() throws {
+        var circuit = try QuantumCircuit(qubitCount: 1)
+        try circuit.h(0)
+        try circuit.h(0)
+
+        let result = AlgebraicPreCompiler.optimize(gates: circuit.gates)
+        XCTAssertEqual(result.originalGateCount, 2)
+        XCTAssertEqual(result.optimizedGateCount, 0)
+        XCTAssertTrue(result.gates.isEmpty)
+    }
+
+    func testAlgebraicPreCompilerSSBecomesZ() throws {
+        var circuit = try QuantumCircuit(qubitCount: 1)
+        try circuit.s(0)
+        try circuit.s(0)
+
+        let result = AlgebraicPreCompiler.optimize(gates: circuit.gates)
+        XCTAssertEqual(result.optimizedGateCount, 1)
+        XCTAssertEqual(result.gates, [.z(target: 0)])
+    }
+
+    func testAlgebraicPreCompilerTTBecomesS() throws {
+        var circuit = try QuantumCircuit(qubitCount: 1)
+        try circuit.t(0)
+        try circuit.t(0)
+
+        let result = AlgebraicPreCompiler.optimize(gates: circuit.gates)
+        XCTAssertEqual(result.optimizedGateCount, 1)
+        XCTAssertEqual(result.gates, [.s(target: 0)])
+    }
+
+    func testAlgebraicPreCompilerMergesAdjacentRotations() throws {
+        var circuit = try QuantumCircuit(qubitCount: 1)
+        let quarter = QFloat(Double.pi / 4.0)
+        try circuit.rx(theta: quarter, 0)
+        try circuit.rx(theta: quarter, 0)
+
+        let result = AlgebraicPreCompiler.optimize(gates: circuit.gates)
+        XCTAssertEqual(result.optimizedGateCount, 1)
+        XCTAssertEqual(result.gates, [.rx(theta: QFloat(Double.pi / 2.0), target: 0)])
+    }
+
+    func testAlgebraicPreCompilerPreservesBellStateProbabilities() throws {
+        let engine = try QuantumEngine()
+
+        guard let device = makeDevice() else {
+            XCTFail("Apple Silicon GPU not found!")
+            return
+        }
+
+        var original = try QuantumCircuit(qubitCount: 2)
+        try original.applyBellState()
+
+        var redundant = try QuantumCircuit(qubitCount: 2)
+        try redundant.applyBellState()
+        try redundant.h(0)
+        try redundant.h(0)
+        try redundant.cx(0, 1)
+        try redundant.cx(0, 1)
+
+        let optimized = try redundant.algebraicallyOptimized()
+
+        let originalState = try StateVector(qubitCount: 2, device: device)
+        try engine.execute(original, on: originalState)
+
+        let optimizedState = try StateVector(qubitCount: 2, device: device)
+        try engine.execute(optimized, on: optimizedState)
+
+        let originalProbabilities = try QuantumMeasurement.probabilities(state: originalState, engine: engine)
+        let optimizedProbabilities = try QuantumMeasurement.probabilities(state: optimizedState, engine: engine)
+
+        XCTAssertLessThan(optimized.gates.count, redundant.gates.count)
+        XCTAssertEqual(originalProbabilities.count, optimizedProbabilities.count)
+        for index in 0..<originalProbabilities.count {
+            XCTAssertEqual(originalProbabilities[index], optimizedProbabilities[index], accuracy: 1e-5)
+        }
+    }
+
     func testModularExponentiationScaffold() throws {
         var circuit = try QuantumCircuit(qubitCount: 24)
 
