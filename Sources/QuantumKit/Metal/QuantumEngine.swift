@@ -33,11 +33,24 @@ public struct Pipelines {
     let pauliZ: MTLComputePipelineState
     let phaseS: MTLComputePipelineState
     let phaseT: MTLComputePipelineState
+    let phaseSDagger: MTLComputePipelineState
+    let phaseTDagger: MTLComputePipelineState
+    let sqrtX: MTLComputePipelineState
+    let phase: MTLComputePipelineState
+    let universal: MTLComputePipelineState
     let cnot: MTLComputePipelineState
+    let cz: MTLComputePipelineState
+    let swapGate: MTLComputePipelineState
     let ccx: MTLComputePipelineState
     let rotX: MTLComputePipelineState
     let rotY: MTLComputePipelineState
     let rotZ: MTLComputePipelineState
+    let cRotX: MTLComputePipelineState
+    let cRotY: MTLComputePipelineState
+    let cRotZ: MTLComputePipelineState
+    let cPhase: MTLComputePipelineState
+    let mcx: MTLComputePipelineState
+    let mcz: MTLComputePipelineState
 
     let probabilities: MTLComputePipelineState
     let maskedPopulationReduce: MTLComputePipelineState
@@ -69,8 +82,29 @@ public struct Pipelines {
         guard let tFunc = library.makeFunction(name: "t_gate") else { throw QuantumEngineError.functionNotFound("t_gate") }
         self.phaseT = try device.makeComputePipelineState(function: tFunc)
 
+        guard let sdgFunc = library.makeFunction(name: "s_dagger_gate") else { throw QuantumEngineError.functionNotFound("s_dagger_gate") }
+        self.phaseSDagger = try device.makeComputePipelineState(function: sdgFunc)
+
+        guard let tdgFunc = library.makeFunction(name: "t_dagger_gate") else { throw QuantumEngineError.functionNotFound("t_dagger_gate") }
+        self.phaseTDagger = try device.makeComputePipelineState(function: tdgFunc)
+
+        guard let sxFunc = library.makeFunction(name: "sx_gate") else { throw QuantumEngineError.functionNotFound("sx_gate") }
+        self.sqrtX = try device.makeComputePipelineState(function: sxFunc)
+
+        guard let phaseFunc = library.makeFunction(name: "phase_gate") else { throw QuantumEngineError.functionNotFound("phase_gate") }
+        self.phase = try device.makeComputePipelineState(function: phaseFunc)
+
+        guard let uFunc = library.makeFunction(name: "u_gate") else { throw QuantumEngineError.functionNotFound("u_gate") }
+        self.universal = try device.makeComputePipelineState(function: uFunc)
+
         guard let cxFunc = library.makeFunction(name: "cnot_gate") else { throw QuantumEngineError.functionNotFound("cnot_gate") }
         self.cnot = try device.makeComputePipelineState(function: cxFunc)
+
+        guard let czFunc = library.makeFunction(name: "cz_gate") else { throw QuantumEngineError.functionNotFound("cz_gate") }
+        self.cz = try device.makeComputePipelineState(function: czFunc)
+
+        guard let swapFunc = library.makeFunction(name: "swap_gate") else { throw QuantumEngineError.functionNotFound("swap_gate") }
+        self.swapGate = try device.makeComputePipelineState(function: swapFunc)
 
         guard let ccxFunc = library.makeFunction(name: "ccx_gate") else { throw QuantumEngineError.functionNotFound("ccx_gate") }
         self.ccx = try device.makeComputePipelineState(function: ccxFunc)
@@ -83,6 +117,24 @@ public struct Pipelines {
 
         guard let rzFunc = library.makeFunction(name: "rz_gate") else { throw QuantumEngineError.functionNotFound("rz_gate") }
         self.rotZ = try device.makeComputePipelineState(function: rzFunc)
+
+        guard let crxFunc = library.makeFunction(name: "crx_gate") else { throw QuantumEngineError.functionNotFound("crx_gate") }
+        self.cRotX = try device.makeComputePipelineState(function: crxFunc)
+
+        guard let cryFunc = library.makeFunction(name: "cry_gate") else { throw QuantumEngineError.functionNotFound("cry_gate") }
+        self.cRotY = try device.makeComputePipelineState(function: cryFunc)
+
+        guard let crzFunc = library.makeFunction(name: "crz_gate") else { throw QuantumEngineError.functionNotFound("crz_gate") }
+        self.cRotZ = try device.makeComputePipelineState(function: crzFunc)
+
+        guard let cphaseFunc = library.makeFunction(name: "cphase_gate") else { throw QuantumEngineError.functionNotFound("cphase_gate") }
+        self.cPhase = try device.makeComputePipelineState(function: cphaseFunc)
+
+        guard let mcxFunc = library.makeFunction(name: "mcx_gate") else { throw QuantumEngineError.functionNotFound("mcx_gate") }
+        self.mcx = try device.makeComputePipelineState(function: mcxFunc)
+
+        guard let mczFunc = library.makeFunction(name: "mcz_gate") else { throw QuantumEngineError.functionNotFound("mcz_gate") }
+        self.mcz = try device.makeComputePipelineState(function: mczFunc)
 
         guard let probFunc = library.makeFunction(name: "compute_probabilities") else { throw QuantumEngineError.functionNotFound("compute_probabilities") }
         self.probabilities = try device.makeComputePipelineState(function: probFunc)
@@ -496,6 +548,15 @@ public class QuantumEngine {
         }
     }
 
+    /// Packs a list of control qubit indices into a bitmask (bit `q` set ⟺ qubit `q` is a control).
+    private static func controlMask(_ controls: [Int]) -> UInt32 {
+        var mask: UInt32 = 0
+        for control in controls {
+            mask |= UInt32(1) << UInt32(control)
+        }
+        return mask
+    }
+
     private func encodeUnitaryGate(
         _ gate: Gate,
         encoder: MTLComputeCommandEncoder,
@@ -538,9 +599,55 @@ public class QuantumEngine {
                 encoder.setBytes(&targetQubit, length: MemoryLayout<UInt32>.stride, index: 2)
             }
 
+        case .sdg(let target):
+            dispatchPairwiseGate(encoder: encoder, pipeline: pipelines.phaseSDagger, state: state) { encoder in
+                var targetQubit = UInt32(target)
+                encoder.setBytes(&targetQubit, length: MemoryLayout<UInt32>.stride, index: 2)
+            }
+
+        case .tdg(let target):
+            dispatchPairwiseGate(encoder: encoder, pipeline: pipelines.phaseTDagger, state: state) { encoder in
+                var targetQubit = UInt32(target)
+                encoder.setBytes(&targetQubit, length: MemoryLayout<UInt32>.stride, index: 2)
+            }
+
+        case .sx(let target):
+            dispatchPairwiseGate(encoder: encoder, pipeline: pipelines.sqrtX, state: state) { encoder in
+                var targetQubit = UInt32(target)
+                encoder.setBytes(&targetQubit, length: MemoryLayout<UInt32>.stride, index: 2)
+            }
+
+        case .p(let theta, let target):
+            dispatchPairwiseGate(encoder: encoder, pipeline: pipelines.phase, state: state) { encoder in
+                var targetQubit = UInt32(target)
+                encoder.setBytes(&targetQubit, length: MemoryLayout<UInt32>.stride, index: 2)
+                var thetaValue = Float(theta)
+                encoder.setBytes(&thetaValue, length: MemoryLayout<Float>.stride, index: 3)
+            }
+
+        case .u(let theta, let phi, let lambda, let target):
+            dispatchPairwiseGate(encoder: encoder, pipeline: pipelines.universal, state: state) { encoder in
+                var targetQubit = UInt32(target)
+                encoder.setBytes(&targetQubit, length: MemoryLayout<UInt32>.stride, index: 2)
+                var angles = SIMD3<Float>(x: Float(theta), y: Float(phi), z: Float(lambda))
+                encoder.setBytes(&angles, length: MemoryLayout<SIMD3<Float>>.stride, index: 3)
+            }
+
         case .cx(let control, let target):
             dispatchPairwiseGate(encoder: encoder, pipeline: pipelines.cnot, state: state) { encoder in
                 var qubits = SIMD2<UInt32>(x: UInt32(control), y: UInt32(target))
+                encoder.setBytes(&qubits, length: MemoryLayout<SIMD2<UInt32>>.stride, index: 2)
+            }
+
+        case .cz(let control, let target):
+            dispatchPairwiseGate(encoder: encoder, pipeline: pipelines.cz, state: state) { encoder in
+                var qubits = SIMD2<UInt32>(x: UInt32(control), y: UInt32(target))
+                encoder.setBytes(&qubits, length: MemoryLayout<SIMD2<UInt32>>.stride, index: 2)
+            }
+
+        case .swap(let q1, let q2):
+            dispatchFullStateKernel(encoder: encoder, pipeline: pipelines.swapGate, state: state) { encoder in
+                var qubits = SIMD2<UInt32>(x: UInt32(q1), y: UInt32(q2))
                 encoder.setBytes(&qubits, length: MemoryLayout<SIMD2<UInt32>>.stride, index: 2)
             }
 
@@ -548,6 +655,50 @@ public class QuantumEngine {
             dispatchPairwiseGate(encoder: encoder, pipeline: pipelines.ccx, state: state) { encoder in
                 var qubits = SIMD3<UInt32>(x: UInt32(control1), y: UInt32(control2), z: UInt32(target))
                 encoder.setBytes(&qubits, length: MemoryLayout<SIMD3<UInt32>>.stride, index: 2)
+            }
+
+        case .crx(let theta, let control, let target):
+            dispatchPairwiseGate(encoder: encoder, pipeline: pipelines.cRotX, state: state) { encoder in
+                var qubits = SIMD2<UInt32>(x: UInt32(control), y: UInt32(target))
+                encoder.setBytes(&qubits, length: MemoryLayout<SIMD2<UInt32>>.stride, index: 2)
+                var thetaValue = Float(theta)
+                encoder.setBytes(&thetaValue, length: MemoryLayout<Float>.stride, index: 3)
+            }
+
+        case .cry(let theta, let control, let target):
+            dispatchPairwiseGate(encoder: encoder, pipeline: pipelines.cRotY, state: state) { encoder in
+                var qubits = SIMD2<UInt32>(x: UInt32(control), y: UInt32(target))
+                encoder.setBytes(&qubits, length: MemoryLayout<SIMD2<UInt32>>.stride, index: 2)
+                var thetaValue = Float(theta)
+                encoder.setBytes(&thetaValue, length: MemoryLayout<Float>.stride, index: 3)
+            }
+
+        case .crz(let theta, let control, let target):
+            dispatchPairwiseGate(encoder: encoder, pipeline: pipelines.cRotZ, state: state) { encoder in
+                var qubits = SIMD2<UInt32>(x: UInt32(control), y: UInt32(target))
+                encoder.setBytes(&qubits, length: MemoryLayout<SIMD2<UInt32>>.stride, index: 2)
+                var thetaValue = Float(theta)
+                encoder.setBytes(&thetaValue, length: MemoryLayout<Float>.stride, index: 3)
+            }
+
+        case .cp(let theta, let control, let target):
+            dispatchPairwiseGate(encoder: encoder, pipeline: pipelines.cPhase, state: state) { encoder in
+                var qubits = SIMD2<UInt32>(x: UInt32(control), y: UInt32(target))
+                encoder.setBytes(&qubits, length: MemoryLayout<SIMD2<UInt32>>.stride, index: 2)
+                var thetaValue = Float(theta)
+                encoder.setBytes(&thetaValue, length: MemoryLayout<Float>.stride, index: 3)
+            }
+
+        case .mcx(let controls, let target):
+            dispatchPairwiseGate(encoder: encoder, pipeline: pipelines.mcx, state: state) { encoder in
+                var packed = SIMD2<UInt32>(x: Self.controlMask(controls), y: UInt32(target))
+                encoder.setBytes(&packed, length: MemoryLayout<SIMD2<UInt32>>.stride, index: 2)
+            }
+
+        case .mcz(let controls, let target):
+            dispatchFullStateKernel(encoder: encoder, pipeline: pipelines.mcz, state: state) { encoder in
+                var fullMask = Self.controlMask(controls) | (UInt32(1) << UInt32(target))
+                encoder.setBytes(&fullMask, length: MemoryLayout<UInt32>.stride, index: 2)
             }
 
         case .rz(let theta, let target):

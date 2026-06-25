@@ -265,6 +265,328 @@ kernel void ccx_gate(device float* realBuffer [[buffer(0)]],
     }
 }
 
+// Controlled-RX: applies RX(theta) to the target only when the control bit is 1.
+kernel void crx_gate(device float* realBuffer [[buffer(0)]],
+                     device float* imagBuffer [[buffer(1)]],
+                     constant uint2& qubits [[buffer(2)]],
+                     constant float& theta [[buffer(3)]],
+                     uint id [[thread_position_in_grid]]) {
+
+    uint controlQubit = qubits.x;
+    uint targetQubit = qubits.y;
+
+    uint mask = (1 << targetQubit) - 1;
+    uint i0 = ((id >> targetQubit) << (targetQubit + 1)) | (id & mask);
+    uint i1 = i0 | (1 << targetQubit);
+
+    if ((i0 & (1 << controlQubit)) == 0) {
+        return;
+    }
+
+    float r0 = realBuffer[i0];
+    float im0 = imagBuffer[i0];
+    float r1 = realBuffer[i1];
+    float im1 = imagBuffer[i1];
+
+    float halfTheta = theta * 0.5f;
+    float cosH = cos(halfTheta);
+    float sinH = sin(halfTheta);
+
+    realBuffer[i0] = (cosH * r0) + (sinH * im1);
+    imagBuffer[i0] = (cosH * im0) - (sinH * r1);
+    realBuffer[i1] = (sinH * im0) + (cosH * r1);
+    imagBuffer[i1] = (-sinH * r0) + (cosH * im1);
+}
+
+// Controlled-RY: applies RY(theta) to the target only when the control bit is 1.
+kernel void cry_gate(device float* realBuffer [[buffer(0)]],
+                     device float* imagBuffer [[buffer(1)]],
+                     constant uint2& qubits [[buffer(2)]],
+                     constant float& theta [[buffer(3)]],
+                     uint id [[thread_position_in_grid]]) {
+
+    uint controlQubit = qubits.x;
+    uint targetQubit = qubits.y;
+
+    uint mask = (1 << targetQubit) - 1;
+    uint i0 = ((id >> targetQubit) << (targetQubit + 1)) | (id & mask);
+    uint i1 = i0 | (1 << targetQubit);
+
+    if ((i0 & (1 << controlQubit)) == 0) {
+        return;
+    }
+
+    float r0 = realBuffer[i0];
+    float im0 = imagBuffer[i0];
+    float r1 = realBuffer[i1];
+    float im1 = imagBuffer[i1];
+
+    float halfTheta = theta * 0.5f;
+    float cosH = cos(halfTheta);
+    float sinH = sin(halfTheta);
+
+    realBuffer[i0] = (cosH * r0) - (sinH * r1);
+    imagBuffer[i0] = (cosH * im0) - (sinH * im1);
+    realBuffer[i1] = (sinH * r0) + (cosH * r1);
+    imagBuffer[i1] = (sinH * im0) + (cosH * im1);
+}
+
+// Controlled-RZ: applies RZ(theta) to the target only when the control bit is 1.
+kernel void crz_gate(device float* realBuffer [[buffer(0)]],
+                     device float* imagBuffer [[buffer(1)]],
+                     constant uint2& qubits [[buffer(2)]],
+                     constant float& theta [[buffer(3)]],
+                     uint id [[thread_position_in_grid]]) {
+
+    uint controlQubit = qubits.x;
+    uint targetQubit = qubits.y;
+
+    uint mask = (1 << targetQubit) - 1;
+    uint i0 = ((id >> targetQubit) << (targetQubit + 1)) | (id & mask);
+    uint i1 = i0 | (1 << targetQubit);
+
+    if ((i0 & (1 << controlQubit)) == 0) {
+        return;
+    }
+
+    float r0 = realBuffer[i0];
+    float im0 = imagBuffer[i0];
+    float r1 = realBuffer[i1];
+    float im1 = imagBuffer[i1];
+
+    float halfTheta = theta * 0.5f;
+    float cosH = cos(halfTheta);
+    float sinH = sin(halfTheta);
+
+    realBuffer[i0] = r0 * cosH + im0 * sinH;
+    imagBuffer[i0] = im0 * cosH - r0 * sinH;
+    realBuffer[i1] = r1 * cosH - im1 * sinH;
+    imagBuffer[i1] = im1 * cosH + r1 * sinH;
+}
+
+// Controlled-Phase CP(theta): phase e^{i theta} on |11> (control AND target = 1).
+kernel void cphase_gate(device float* realBuffer [[buffer(0)]],
+                        device float* imagBuffer [[buffer(1)]],
+                        constant uint2& qubits [[buffer(2)]],
+                        constant float& theta [[buffer(3)]],
+                        uint id [[thread_position_in_grid]]) {
+
+    uint controlQubit = qubits.x;
+    uint targetQubit = qubits.y;
+
+    uint mask = (1 << targetQubit) - 1;
+    uint i0 = ((id >> targetQubit) << (targetQubit + 1)) | (id & mask);
+    uint i1 = i0 | (1 << targetQubit);
+
+    if ((i1 & (1 << controlQubit)) == 0) {
+        return;
+    }
+
+    float r1 = realBuffer[i1];
+    float im1 = imagBuffer[i1];
+    float c = cos(theta);
+    float s = sin(theta);
+
+    realBuffer[i1] = (r1 * c) - (im1 * s);
+    imagBuffer[i1] = (r1 * s) + (im1 * c);
+}
+
+// Multi-controlled X: X on target when every control bit (encoded in controlMask) is 1.
+kernel void mcx_gate(device float* realBuffer [[buffer(0)]],
+                     device float* imagBuffer [[buffer(1)]],
+                     constant uint2& packed [[buffer(2)]],
+                     uint id [[thread_position_in_grid]]) {
+
+    uint controlMask = packed.x;
+    uint targetQubit = packed.y;
+
+    uint mask = (1 << targetQubit) - 1;
+    uint i0 = ((id >> targetQubit) << (targetQubit + 1)) | (id & mask);
+    uint i1 = i0 | (1 << targetQubit);
+
+    if ((i0 & controlMask) == controlMask) {
+        float tempR = realBuffer[i0];
+        float tempI = imagBuffer[i0];
+        realBuffer[i0] = realBuffer[i1];
+        imagBuffer[i0] = imagBuffer[i1];
+        realBuffer[i1] = tempR;
+        imagBuffer[i1] = tempI;
+    }
+}
+
+// Multi-controlled Z: phase -1 when every involved qubit (controls + target in fullMask) is 1.
+kernel void mcz_gate(device float* realBuffer [[buffer(0)]],
+                     device float* imagBuffer [[buffer(1)]],
+                     constant uint& fullMask [[buffer(2)]],
+                     uint id [[thread_position_in_grid]]) {
+
+    if ((id & fullMask) == fullMask) {
+        realBuffer[id] = -realBuffer[id];
+        imagBuffer[id] = -imagBuffer[id];
+    }
+}
+
+// S-dagger: |1> *= -i  (inverse of S)
+kernel void s_dagger_gate(device float* realBuffer [[buffer(0)]],
+                          device float* imagBuffer [[buffer(1)]],
+                          constant uint& targetQubit [[buffer(2)]],
+                          uint id [[thread_position_in_grid]]) {
+
+    uint mask = (1 << targetQubit) - 1;
+    uint i0 = ((id >> targetQubit) << (targetQubit + 1)) | (id & mask);
+    uint i1 = i0 | (1 << targetQubit);
+
+    float r1 = realBuffer[i1];
+    float im1 = imagBuffer[i1];
+
+    realBuffer[i1] = im1;
+    imagBuffer[i1] = -r1;
+}
+
+// T-dagger: |1> *= e^{-i pi/4}  (inverse of T)
+kernel void t_dagger_gate(device float* realBuffer [[buffer(0)]],
+                          device float* imagBuffer [[buffer(1)]],
+                          constant uint& targetQubit [[buffer(2)]],
+                          uint id [[thread_position_in_grid]]) {
+
+    uint mask = (1 << targetQubit) - 1;
+    uint i0 = ((id >> targetQubit) << (targetQubit + 1)) | (id & mask);
+    uint i1 = i0 | (1 << targetQubit);
+
+    float r1 = realBuffer[i1];
+    float im1 = imagBuffer[i1];
+    float c = M_SQRT1_2_F;
+    float s = M_SQRT1_2_F;
+
+    realBuffer[i1] = (r1 * c) + (im1 * s);
+    imagBuffer[i1] = (im1 * c) - (r1 * s);
+}
+
+// SX (sqrt(X)): (1/2) * [[1+i, 1-i], [1-i, 1+i]]; SX*SX = X
+kernel void sx_gate(device float* realBuffer [[buffer(0)]],
+                    device float* imagBuffer [[buffer(1)]],
+                    constant uint& targetQubit [[buffer(2)]],
+                    uint id [[thread_position_in_grid]]) {
+
+    uint mask = (1 << targetQubit) - 1;
+    uint i0 = ((id >> targetQubit) << (targetQubit + 1)) | (id & mask);
+    uint i1 = i0 | (1 << targetQubit);
+
+    float r0 = realBuffer[i0];
+    float im0 = imagBuffer[i0];
+    float r1 = realBuffer[i1];
+    float im1 = imagBuffer[i1];
+
+    realBuffer[i0] = 0.5f * (r0 - im0 + r1 + im1);
+    imagBuffer[i0] = 0.5f * (r0 + im0 - r1 + im1);
+    realBuffer[i1] = 0.5f * (r0 + im0 + r1 - im1);
+    imagBuffer[i1] = 0.5f * (-r0 + im0 + r1 + im1);
+}
+
+// P(theta): |1> *= e^{i theta}  (general phase; S = P(pi/2), T = P(pi/4), Z = P(pi))
+kernel void phase_gate(device float* realBuffer [[buffer(0)]],
+                       device float* imagBuffer [[buffer(1)]],
+                       constant uint& targetQubit [[buffer(2)]],
+                       constant float& theta [[buffer(3)]],
+                       uint id [[thread_position_in_grid]]) {
+
+    uint mask = (1 << targetQubit) - 1;
+    uint i0 = ((id >> targetQubit) << (targetQubit + 1)) | (id & mask);
+    uint i1 = i0 | (1 << targetQubit);
+
+    float r1 = realBuffer[i1];
+    float im1 = imagBuffer[i1];
+    float c = cos(theta);
+    float s = sin(theta);
+
+    realBuffer[i1] = (r1 * c) - (im1 * s);
+    imagBuffer[i1] = (r1 * s) + (im1 * c);
+}
+
+// Universal single-qubit gate U(theta, phi, lambda) (Qiskit convention):
+//   [[ cos(t/2),            -e^{i*lambda} sin(t/2)        ],
+//    [ e^{i*phi} sin(t/2),   e^{i(phi+lambda)} cos(t/2)   ]]
+// Recovers X = U(pi,0,pi), H = U(pi/2,0,pi), P(λ) = U(0,0,λ), etc.
+kernel void u_gate(device float* realBuffer [[buffer(0)]],
+                   device float* imagBuffer [[buffer(1)]],
+                   constant uint& targetQubit [[buffer(2)]],
+                   constant float3& angles [[buffer(3)]],
+                   uint id [[thread_position_in_grid]]) {
+
+    uint mask = (1 << targetQubit) - 1;
+    uint i0 = ((id >> targetQubit) << (targetQubit + 1)) | (id & mask);
+    uint i1 = i0 | (1 << targetQubit);
+
+    float theta = angles.x;
+    float phi = angles.y;
+    float lambda = angles.z;
+
+    float c = cos(theta * 0.5f);
+    float s = sin(theta * 0.5f);
+
+    float cosL = cos(lambda);
+    float sinL = sin(lambda);
+    float cosP = cos(phi);
+    float sinP = sin(phi);
+    float cosPL = cos(phi + lambda);
+    float sinPL = sin(phi + lambda);
+
+    float r0 = realBuffer[i0];
+    float im0 = imagBuffer[i0];
+    float r1 = realBuffer[i1];
+    float im1 = imagBuffer[i1];
+
+    realBuffer[i0] = (c * r0) - s * ((cosL * r1) - (sinL * im1));
+    imagBuffer[i0] = (c * im0) - s * ((cosL * im1) + (sinL * r1));
+
+    realBuffer[i1] = s * ((cosP * r0) - (sinP * im0)) + c * ((cosPL * r1) - (sinPL * im1));
+    imagBuffer[i1] = s * ((cosP * im0) + (sinP * r0)) + c * ((cosPL * im1) + (sinPL * r1));
+}
+
+// CZ: phase -1 on |11>. Symmetric in control/target.
+kernel void cz_gate(device float* realBuffer [[buffer(0)]],
+                    device float* imagBuffer [[buffer(1)]],
+                    constant uint2& qubits [[buffer(2)]],
+                    uint id [[thread_position_in_grid]]) {
+
+    uint controlQubit = qubits.x;
+    uint targetQubit = qubits.y;
+
+    uint mask = (1 << targetQubit) - 1;
+    uint i0 = ((id >> targetQubit) << (targetQubit + 1)) | (id & mask);
+    uint i1 = i0 | (1 << targetQubit);
+
+    if ((i1 & (1 << controlQubit)) != 0) {
+        realBuffer[i1] = -realBuffer[i1];
+        imagBuffer[i1] = -imagBuffer[i1];
+    }
+}
+
+// SWAP: exchange amplitudes of |...q1=0,q2=1...> and |...q1=1,q2=0...>.
+// Full-state kernel; each unordered pair is handled exactly once.
+kernel void swap_gate(device float* realBuffer [[buffer(0)]],
+                      device float* imagBuffer [[buffer(1)]],
+                      constant uint2& qubits [[buffer(2)]],
+                      uint id [[thread_position_in_grid]]) {
+
+    uint q1 = qubits.x;
+    uint q2 = qubits.y;
+
+    uint b1 = (id >> q1) & 1u;
+    uint b2 = (id >> q2) & 1u;
+
+    if (b1 == 0u && b2 == 1u) {
+        uint partner = (id | (1u << q1)) & ~(1u << q2);
+
+        float tr = realBuffer[id];
+        float ti = imagBuffer[id];
+        realBuffer[id] = realBuffer[partner];
+        imagBuffer[id] = imagBuffer[partner];
+        realBuffer[partner] = tr;
+        imagBuffer[partner] = ti;
+    }
+}
+
 // Measurement (Probability Calculation)
 kernel void compute_probabilities(device float* realBuffer [[buffer(0)]],
                                   device float* imagBuffer [[buffer(1)]],
