@@ -40,13 +40,14 @@ public struct Pipelines {
     let rotZ: MTLComputePipelineState
 
     let probabilities: MTLComputePipelineState
+    let maskedPopulationReduce: MTLComputePipelineState
     let prefixSum: MTLComputePipelineState
     let collapseSearch: MTLComputePipelineState
     let collapseState: MTLComputePipelineState
     let partialCollapse: MTLComputePipelineState
     let resetQubit: MTLComputePipelineState
-    let collapseQubitToZero: MTLComputePipelineState
-    let dephaseQubit: MTLComputePipelineState
+    let amplitudeDampingJump: MTLComputePipelineState
+    let amplitudeDampingNoJump: MTLComputePipelineState
     let normalize: MTLComputePipelineState
 
     init(device: MTLDevice, library: MTLLibrary) throws {
@@ -86,6 +87,9 @@ public struct Pipelines {
         guard let probFunc = library.makeFunction(name: "compute_probabilities") else { throw QuantumEngineError.functionNotFound("compute_probabilities") }
         self.probabilities = try device.makeComputePipelineState(function: probFunc)
 
+        guard let maskedPopFunc = library.makeFunction(name: "masked_population_reduce") else { throw QuantumEngineError.functionNotFound("masked_population_reduce") }
+        self.maskedPopulationReduce = try device.makeComputePipelineState(function: maskedPopFunc)
+
         guard let prefixSumFunc = library.makeFunction(name: "prefix_sum_probabilities") else { throw QuantumEngineError.functionNotFound("prefix_sum_probabilities") }
         self.prefixSum = try device.makeComputePipelineState(function: prefixSumFunc)
 
@@ -101,11 +105,11 @@ public struct Pipelines {
         guard let resetQubitFunc = library.makeFunction(name: "reset_qubit_state_vector") else { throw QuantumEngineError.functionNotFound("reset_qubit_state_vector") }
         self.resetQubit = try device.makeComputePipelineState(function: resetQubitFunc)
 
-        guard let collapseQubitToZeroFunc = library.makeFunction(name: "collapse_qubit_to_zero") else { throw QuantumEngineError.functionNotFound("collapse_qubit_to_zero") }
-        self.collapseQubitToZero = try device.makeComputePipelineState(function: collapseQubitToZeroFunc)
+        guard let ampDampingJumpFunc = library.makeFunction(name: "amplitude_damping_jump") else { throw QuantumEngineError.functionNotFound("amplitude_damping_jump") }
+        self.amplitudeDampingJump = try device.makeComputePipelineState(function: ampDampingJumpFunc)
 
-        guard let dephaseQubitFunc = library.makeFunction(name: "dephase_qubit_state_vector") else { throw QuantumEngineError.functionNotFound("dephase_qubit_state_vector") }
-        self.dephaseQubit = try device.makeComputePipelineState(function: dephaseQubitFunc)
+        guard let ampDampingNoJumpFunc = library.makeFunction(name: "amplitude_damping_no_jump") else { throw QuantumEngineError.functionNotFound("amplitude_damping_no_jump") }
+        self.amplitudeDampingNoJump = try device.makeComputePipelineState(function: ampDampingNoJumpFunc)
 
         guard let normalizeFunc = library.makeFunction(name: "normalize_state_vector") else { throw QuantumEngineError.functionNotFound("normalize_state_vector") }
         self.normalize = try device.makeComputePipelineState(function: normalizeFunc)
@@ -292,7 +296,7 @@ public class QuantumEngine {
                         try applyPhaseDamping(
                             after: gate,
                             on: state,
-                            probability: noise.phaseDampingProbability,
+                            flipProbability: noise.effectivePhaseFlipProbability,
                             rng: &rng
                         )
                     }
@@ -347,29 +351,59 @@ public class QuantumEngine {
         }
     }
 
+    /// Amplitude damping via quantum-jump (Monte-Carlo wavefunction) unraveling.
+    ///
+    /// For each affected qubit with channel strength `gamma`, the jump probability is
+    /// state-dependent: `p_jump = gamma * P(qubit = |1⟩)`. With probability `p_jump` the
+    /// relaxation Kraus operator `K1 = √gamma · |0⟩⟨1|` is applied; otherwise the no-jump
+    /// operator `K0 = diag(1, √(1-gamma))` damps the excited amplitude. Both branches are
+    /// renormalized so the ensemble average reproduces the amplitude damping channel.
     private func applyAmplitudeDamping(
         after gate: Gate,
         on state: StateVector,
-        probability: QFloat,
+        probability gamma: QFloat,
         rng: inout QuantumRNG
     ) throws {
-        guard probability > 0 else { return }
+        guard gamma > 0 else { return }
 
         for qubit in Set(gate.affectedQubits) {
-            guard rng.nextUnitFloat() < probability else { continue }
-            try executeCollapseQubitToZero(on: state, qubit: qubit)
+            let excitedPopulation = try qubitOnePopulation(on: state, qubit: qubit)
+            guard excitedPopulation > 0 else { continue }
+
+            let jumpProbability = gamma * excitedPopulation
+            if rng.nextUnitFloat() < jumpProbability {
+                try dispatchAmplitudeDamping(on: state, qubit: qubit, pipeline: pipelines.amplitudeDampingJump)
+            } else {
+                let factor = (1 - gamma).squareRoot()
+                try dispatchAmplitudeDamping(
+                    on: state,
+                    qubit: qubit,
+                    pipeline: pipelines.amplitudeDampingNoJump,
+                    factor: factor
+                )
+            }
+            try normalizeState(on: state)
         }
     }
 
-    private func executeCollapseQubitToZero(on state: StateVector, qubit: Int) throws {
+    private func dispatchAmplitudeDamping(
+        on state: StateVector,
+        qubit: Int,
+        pipeline: MTLComputePipelineState,
+        factor: QFloat? = nil
+    ) throws {
         guard let commandBuffer = commandQueue.makeCommandBuffer(),
               let computeEncoder = commandBuffer.makeComputeCommandEncoder() else {
             throw QuantumEngineError.commandBufferCreationFailed
         }
 
         var targetQubit = UInt32(qubit)
-        dispatchPairwiseGate(encoder: computeEncoder, pipeline: pipelines.collapseQubitToZero, state: state) { encoder in
+        var factorValue = factor ?? 0
+        dispatchPairwiseGate(encoder: computeEncoder, pipeline: pipeline, state: state) { encoder in
             encoder.setBytes(&targetQubit, length: MemoryLayout<UInt32>.stride, index: 2)
+            if factor != nil {
+                encoder.setBytes(&factorValue, length: MemoryLayout<QFloat>.stride, index: 3)
+            }
         }
 
         computeEncoder.endEncoding()
@@ -378,43 +412,68 @@ public class QuantumEngine {
         if let error = commandBuffer.error {
             throw QuantumEngineError.commandBufferExecutionFailed(underlying: error)
         }
-
-        try normalizeState(on: state)
     }
 
+    /// Born-rule probability that `qubit` is measured in state |1⟩ given the current amplitudes.
+    ///
+    /// Computed with a GPU tree reduction (`masked_population_reduce`): each threadgroup reduces
+    /// 256 squared amplitudes restricted to the `qubit == |1⟩` subspace and atomically accumulates
+    /// its partial into a single result, avoiding an `O(2ⁿ)` host-side scan.
+    private func qubitOnePopulation(on state: StateVector, qubit: Int) throws -> QFloat {
+        let resultBuffer = try makeSharedBuffer(length: MemoryLayout<QFloat>.stride)
+        resultBuffer.contents().assumingMemoryBound(to: QFloat.self)[0] = 0
+
+        guard let commandBuffer = commandQueue.makeCommandBuffer(),
+              let computeEncoder = commandBuffer.makeComputeCommandEncoder() else {
+            throw QuantumEngineError.commandBufferCreationFailed
+        }
+
+        let blockSize = Self.scanBlockSize
+        let elementCount = state.stateCount
+        let blockCount = max((elementCount + blockSize - 1) / blockSize, 1)
+
+        var targetQubit = UInt32(qubit)
+        var countValue = UInt32(elementCount)
+
+        computeEncoder.setComputePipelineState(pipelines.maskedPopulationReduce)
+        computeEncoder.setBuffer(state.realBuffer, offset: 0, index: 0)
+        computeEncoder.setBuffer(state.imagBuffer, offset: 0, index: 1)
+        computeEncoder.setBytes(&targetQubit, length: MemoryLayout<UInt32>.stride, index: 2)
+        computeEncoder.setBytes(&countValue, length: MemoryLayout<UInt32>.stride, index: 3)
+        computeEncoder.setBuffer(resultBuffer, offset: 0, index: 4)
+
+        computeEncoder.dispatchThreadgroups(
+            MTLSize(width: blockCount, height: 1, depth: 1),
+            threadsPerThreadgroup: MTLSize(width: blockSize, height: 1, depth: 1)
+        )
+
+        computeEncoder.endEncoding()
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+        if let error = commandBuffer.error {
+            throw QuantumEngineError.commandBufferExecutionFailed(underlying: error)
+        }
+
+        return resultBuffer.contents().assumingMemoryBound(to: QFloat.self)[0]
+    }
+
+    /// Phase damping realized as its equivalent phase-flip (random Z) channel.
+    ///
+    /// The phase damping channel of strength λ is exactly the phase-flip channel
+    /// `ρ → (1-p)ρ + p·ZρZ` with `p = (1-√(1-λ))/2`. In the trajectory picture this means
+    /// applying a Pauli-Z with probability `flipProbability` to each affected qubit.
     private func applyPhaseDamping(
         after gate: Gate,
         on state: StateVector,
-        probability: QFloat,
+        flipProbability: QFloat,
         rng: inout QuantumRNG
     ) throws {
-        guard probability > 0 else { return }
+        guard flipProbability > 0 else { return }
 
         for qubit in Set(gate.affectedQubits) {
-            guard rng.nextUnitFloat() < probability else { continue }
-            try executeDephaseQubit(on: state, qubit: qubit)
+            guard rng.nextUnitFloat() < flipProbability else { continue }
+            try executeUnitaryGate(.z(target: qubit), on: state)
         }
-    }
-
-    private func executeDephaseQubit(on state: StateVector, qubit: Int) throws {
-        guard let commandBuffer = commandQueue.makeCommandBuffer(),
-              let computeEncoder = commandBuffer.makeComputeCommandEncoder() else {
-            throw QuantumEngineError.commandBufferCreationFailed
-        }
-
-        var targetQubit = UInt32(qubit)
-        dispatchPairwiseGate(encoder: computeEncoder, pipeline: pipelines.dephaseQubit, state: state) { encoder in
-            encoder.setBytes(&targetQubit, length: MemoryLayout<UInt32>.stride, index: 2)
-        }
-
-        computeEncoder.endEncoding()
-        commandBuffer.commit()
-        commandBuffer.waitUntilCompleted()
-        if let error = commandBuffer.error {
-            throw QuantumEngineError.commandBufferExecutionFailed(underlying: error)
-        }
-
-        try normalizeState(on: state)
     }
 
     private func flushUnitaryGates(_ gates: [Gate], on state: StateVector) throws {

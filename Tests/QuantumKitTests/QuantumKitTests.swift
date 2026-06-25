@@ -371,7 +371,7 @@ final class QuantumKitTests: XCTestCase {
         XCTAssertEqual(expectation, 1, accuracy: 1e-5)
     }
 
-    func testPhaseDampingDephasesSuperposition() throws {
+    func testPhaseDampingMatchesPhaseFlipChannel() throws {
         let engine = try QuantumEngine()
 
         guard let device = makeDevice() else {
@@ -379,16 +379,81 @@ final class QuantumKitTests: XCTestCase {
             return
         }
 
-        let state = try StateVector(qubitCount: 1, device: device)
-        var circuit = try QuantumCircuit(qubitCount: 1)
-        try circuit.h(0)
+        // Phase damping of strength λ is exactly the phase-flip channel, which decays the
+        // coherence (⟨X⟩) of |+⟩ by a factor √(1 - λ) in the ensemble average.
+        let lambda: QFloat = 0.5
+        let expectedMeanX = (1 - lambda).squareRoot()
 
-        var rng: QuantumRNG = .seeded(17)
+        let trajectories = 4000
+        var rng: QuantumRNG = .seeded(123_456)
+        let noise = NoiseModel(phaseDampingProbability: lambda)
+
+        var accumulatedX: QFloat = 0
+        for _ in 0..<trajectories {
+            let state = try StateVector(qubitCount: 1, device: device)
+            var circuit = try QuantumCircuit(qubitCount: 1)
+            try circuit.h(0)
+            _ = try engine.executeRNG(circuit, on: state, rng: &rng, noise: noise)
+            accumulatedX += try QuantumMeasurement.expectationX(state: state, engine: engine, qubit: 0)
+        }
+
+        let meanX = accumulatedX / QFloat(trajectories)
+        XCTAssertEqual(meanX, expectedMeanX, accuracy: 0.05)
+    }
+
+    func testPhaseDampingFullStrengthRemovesCoherence() throws {
+        let engine = try QuantumEngine()
+
+        guard let device = makeDevice() else {
+            XCTFail("Apple Silicon GPU not found!")
+            return
+        }
+
+        let trajectories = 4000
+        var rng: QuantumRNG = .seeded(98_765)
         let noise = NoiseModel(phaseDampingProbability: 1)
-        _ = try engine.executeRNG(circuit, on: state, rng: &rng, noise: noise)
 
-        let expectation = try QuantumMeasurement.expectationX(state: state, engine: engine, qubit: 0)
-        XCTAssertEqual(expectation, 0, accuracy: 1e-5)
+        var accumulatedX: QFloat = 0
+        for _ in 0..<trajectories {
+            let state = try StateVector(qubitCount: 1, device: device)
+            var circuit = try QuantumCircuit(qubitCount: 1)
+            try circuit.h(0)
+            _ = try engine.executeRNG(circuit, on: state, rng: &rng, noise: noise)
+            accumulatedX += try QuantumMeasurement.expectationX(state: state, engine: engine, qubit: 0)
+        }
+
+        let meanX = accumulatedX / QFloat(trajectories)
+        XCTAssertEqual(meanX, 0, accuracy: 0.05)
+    }
+
+    func testAmplitudeDampingPreservesClassicalCorrelationOfBellState() throws {
+        let engine = try QuantumEngine()
+
+        guard let device = makeDevice() else {
+            XCTFail("Apple Silicon GPU not found!")
+            return
+        }
+
+        // On the Bell state (|00⟩ + |11⟩)/√2, full amplitude damping on qubit 0 must always
+        // drive qubit 0 to |0⟩ while leaving qubit 1 in a definite basis state (|0⟩ if no jump,
+        // |1⟩ if a jump occurred). The old additive kernel incorrectly left qubit 1 in a
+        // coherent superposition (⟨Z₁⟩ ≈ 0); the correct σ⁻ jump keeps |⟨Z₁⟩| = 1.
+        let noise = NoiseModel(amplitudeDampingProbability: 1)
+
+        for seed in UInt64(1)...UInt64(8) {
+            let state = try StateVector(qubitCount: 2, device: device)
+            var circuit = try QuantumCircuit(qubitCount: 2)
+            try circuit.applyBellState(control: 0, target: 1)
+
+            var rng: QuantumRNG = .seeded(seed)
+            _ = try engine.executeRNG(circuit, on: state, rng: &rng, noise: noise)
+
+            let z0 = try QuantumMeasurement.expectationZ(state: state, engine: engine, qubit: 0)
+            let z1 = try QuantumMeasurement.expectationZ(state: state, engine: engine, qubit: 1)
+
+            XCTAssertEqual(z0, 1, accuracy: 1e-5, "qubit 0 must relax to |0⟩ under full amplitude damping")
+            XCTAssertEqual(abs(z1), 1, accuracy: 1e-5, "qubit 1 must remain in a definite basis state")
+        }
     }
 
     func testT1GateTimeAmplitudeDampingProbability() {

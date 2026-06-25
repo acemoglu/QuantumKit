@@ -7,8 +7,8 @@ public struct NoiseModel: Sendable, Equatable {
     /// After a gate, each affected qubit independently gets a random Pauli (X/Y/Z) with probability `p`.
     public var depolarizingProbability: QFloat
 
-    /// Fixed per-gate amplitude damping probability. Mutually exclusive with ``t1``/``gateTime``;
-    /// use one model or the other.
+    /// Fixed per-gate amplitude damping strength `γ` in `[0, 1]` (probability that an excited
+    /// qubit relaxes |1⟩ → |0⟩). Mutually exclusive with ``t1``/``gateTime``; use one model or the other.
     public var amplitudeDampingProbability: QFloat
 
     /// T1 relaxation time (same units as ``gateTime``). With ``gateTime``, per-gate
@@ -18,7 +18,9 @@ public struct NoiseModel: Sendable, Equatable {
     /// Duration attributed to each gate for T1 damping (same units as ``t1``).
     public var gateTime: QFloat
 
-    /// Per-gate phase damping / dephasing probability `p` in `[0, 1]`.
+    /// Per-gate phase damping strength `λ` in `[0, 1]`. Realized as the equivalent phase-flip
+    /// channel: a Pauli-Z is applied with probability `(1 - √(1 - λ)) / 2`
+    /// (see ``effectivePhaseFlipProbability``).
     public var phaseDampingProbability: QFloat
 
     /// Readout bit-flip probability 0 → 1.
@@ -76,6 +78,14 @@ public struct NoiseModel: Sendable, Equatable {
 
     public var appliesPhaseDamping: Bool {
         phaseDampingProbability > 0
+    }
+
+    /// Per-gate Pauli-Z flip probability that reproduces the phase damping channel of strength
+    /// `phaseDampingProbability` (λ): `p = (1 - √(1 - λ)) / 2`.
+    public var effectivePhaseFlipProbability: QFloat {
+        let lambda = phaseDampingProbability
+        guard lambda > 0 else { return 0 }
+        return (1 - (1 - lambda).squareRoot()) / 2
     }
 
     public var appliesReadoutError: Bool {

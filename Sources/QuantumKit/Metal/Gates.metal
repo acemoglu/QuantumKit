@@ -278,6 +278,40 @@ kernel void compute_probabilities(device float* realBuffer [[buffer(0)]],
     probBuffer[id] = (r * r) + (i * i);
 }
 
+// Reduces the Born-rule probability of the subspace where `targetQubit == |1>`.
+// Each threadgroup performs a tree reduction over 256 elements and atomically accumulates
+// its partial sum into `result[0]` (which must be zeroed by the host before dispatch).
+kernel void masked_population_reduce(device const float* realBuffer [[buffer(0)]],
+                                     device const float* imagBuffer [[buffer(1)]],
+                                     constant uint& targetQubit [[buffer(2)]],
+                                     constant uint& elementCount [[buffer(3)]],
+                                     device atomic_float* result [[buffer(4)]],
+                                     uint globalID [[thread_position_in_grid]],
+                                     uint localID [[thread_index_in_threadgroup]],
+                                     uint groupSize [[threads_per_threadgroup]]) {
+    threadgroup float shared[256];
+
+    float value = 0.0f;
+    if (globalID < elementCount && (((globalID >> targetQubit) & 1u) != 0u)) {
+        const float r = realBuffer[globalID];
+        const float i = imagBuffer[globalID];
+        value = (r * r) + (i * i);
+    }
+    shared[localID] = value;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    for (uint stride = groupSize >> 1; stride > 0; stride >>= 1) {
+        if (localID < stride) {
+            shared[localID] += shared[localID + stride];
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    if (localID == 0) {
+        atomic_fetch_add_explicit(result, shared[0], memory_order_relaxed);
+    }
+}
+
 constant uint scanBlockSize [[function_constant(0)]];
 
 inline uint prefix_scan_block_size() {
@@ -410,7 +444,8 @@ kernel void reset_qubit_state_vector(device float* realBuffer [[buffer(0)]],
     }
 }
 
-kernel void collapse_qubit_to_zero(device float* realBuffer [[buffer(0)]],
+// Amplitude-damping quantum jump: applies the Kraus operator K1 = sqrt(gamma)*|0><1| (sigma^-)
+kernel void amplitude_damping_jump(device float* realBuffer [[buffer(0)]],
                                    device float* imagBuffer [[buffer(1)]],
                                    constant uint& targetQubit [[buffer(2)]],
                                    uint id [[thread_position_in_grid]]) {
@@ -418,27 +453,26 @@ kernel void collapse_qubit_to_zero(device float* realBuffer [[buffer(0)]],
     uint i0 = ((id >> targetQubit) << (targetQubit + 1)) | (id & mask);
     uint i1 = i0 | (1 << targetQubit);
 
-    realBuffer[i0] += realBuffer[i1];
-    imagBuffer[i0] += imagBuffer[i1];
+    realBuffer[i0] = realBuffer[i1];
+    imagBuffer[i0] = imagBuffer[i1];
     realBuffer[i1] = 0.0f;
     imagBuffer[i1] = 0.0f;
 }
 
-kernel void dephase_qubit_state_vector(device float* realBuffer [[buffer(0)]],
-                                       device float* imagBuffer [[buffer(1)]],
-                                       constant uint& targetQubit [[buffer(2)]],
-                                       uint id [[thread_position_in_grid]]) {
+// Amplitude-damping no-jump branch: applies the Kraus operator K0 = diag(1, sqrt(1-gamma)).
+// |0> amplitudes are preserved; |1> amplitudes are scaled by `factor` = sqrt(1-gamma).
+// A global renormalization (by sqrt(1 - gamma*p1)) follows.
+kernel void amplitude_damping_no_jump(device float* realBuffer [[buffer(0)]],
+                                      device float* imagBuffer [[buffer(1)]],
+                                      constant uint& targetQubit [[buffer(2)]],
+                                      constant float& factor [[buffer(3)]],
+                                      uint id [[thread_position_in_grid]]) {
     uint mask = (1 << targetQubit) - 1;
     uint i0 = ((id >> targetQubit) << (targetQubit + 1)) | (id & mask);
     uint i1 = i0 | (1 << targetQubit);
 
-    float r0 = sqrt(realBuffer[i0] * realBuffer[i0] + imagBuffer[i0] * imagBuffer[i0]);
-    float r1 = sqrt(realBuffer[i1] * realBuffer[i1] + imagBuffer[i1] * imagBuffer[i1]);
-
-    realBuffer[i0] = r0;
-    imagBuffer[i0] = 0.0f;
-    realBuffer[i1] = 0.0f;
-    imagBuffer[i1] = r1;
+    realBuffer[i1] *= factor;
+    imagBuffer[i1] *= factor;
 }
 
 kernel void normalize_state_vector(device float* realBuffer [[buffer(0)]],
