@@ -36,13 +36,19 @@ extension QuantumCircuit {
 
     /// Inverse QFT on a contiguous subset of qubits (e.g. Shor counting register).
     public mutating func applyInverseQFT(qubits: Range<Int>) throws {
+        try applyInverseQFT(qubits: Array(qubits))
+    }
+
+    /// Inverse QFT over an explicit, ordered list of qubits (qubit `indices[0]` is the least
+    /// significant). Useful when the target register is non-contiguous, e.g. a QPE counting register.
+    public mutating func applyInverseQFT(qubits: [Int]) throws {
         guard !qubits.isEmpty else {
             throw QuantumCircuitError.invalidAlgorithmParameter(
                 reason: "Inverse QFT requires at least one qubit"
             )
         }
 
-        let indices = Array(qubits)
+        let indices = qubits
         for index in indices {
             try validateRegisterIndex(index)
         }
