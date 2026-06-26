@@ -36,6 +36,7 @@ public struct Pipelines {
     let phaseSDagger: MTLComputePipelineState
     let phaseTDagger: MTLComputePipelineState
     let sqrtX: MTLComputePipelineState
+    let sqrtXDagger: MTLComputePipelineState
     let phase: MTLComputePipelineState
     let universal: MTLComputePipelineState
     let cnot: MTLComputePipelineState
@@ -90,6 +91,9 @@ public struct Pipelines {
 
         guard let sxFunc = library.makeFunction(name: "sx_gate") else { throw QuantumEngineError.functionNotFound("sx_gate") }
         self.sqrtX = try device.makeComputePipelineState(function: sxFunc)
+
+        guard let sxdgFunc = library.makeFunction(name: "sx_dagger_gate") else { throw QuantumEngineError.functionNotFound("sx_dagger_gate") }
+        self.sqrtXDagger = try device.makeComputePipelineState(function: sxdgFunc)
 
         guard let phaseFunc = library.makeFunction(name: "phase_gate") else { throw QuantumEngineError.functionNotFound("phase_gate") }
         self.phase = try device.makeComputePipelineState(function: phaseFunc)
@@ -613,6 +617,12 @@ public class QuantumEngine {
 
         case .sx(let target):
             dispatchPairwiseGate(encoder: encoder, pipeline: pipelines.sqrtX, state: state) { encoder in
+                var targetQubit = UInt32(target)
+                encoder.setBytes(&targetQubit, length: MemoryLayout<UInt32>.stride, index: 2)
+            }
+
+        case .sxdg(let target):
+            dispatchPairwiseGate(encoder: encoder, pipeline: pipelines.sqrtXDagger, state: state) { encoder in
                 var targetQubit = UInt32(target)
                 encoder.setBytes(&targetQubit, length: MemoryLayout<UInt32>.stride, index: 2)
             }

@@ -483,6 +483,27 @@ kernel void sx_gate(device float* realBuffer [[buffer(0)]],
     imagBuffer[i1] = 0.5f * (-r0 + im0 + r1 + im1);
 }
 
+// SX-dagger (sqrt(X)^dagger): (1/2) * [[1-i, 1+i], [1+i, 1-i]]; conjugate-transpose of SX, SX^dagger*SX = I
+kernel void sx_dagger_gate(device float* realBuffer [[buffer(0)]],
+                           device float* imagBuffer [[buffer(1)]],
+                           constant uint& targetQubit [[buffer(2)]],
+                           uint id [[thread_position_in_grid]]) {
+
+    uint mask = (1 << targetQubit) - 1;
+    uint i0 = ((id >> targetQubit) << (targetQubit + 1)) | (id & mask);
+    uint i1 = i0 | (1 << targetQubit);
+
+    float r0 = realBuffer[i0];
+    float im0 = imagBuffer[i0];
+    float r1 = realBuffer[i1];
+    float im1 = imagBuffer[i1];
+
+    realBuffer[i0] = 0.5f * (r0 + im0 + r1 - im1);
+    imagBuffer[i0] = 0.5f * (-r0 + im0 + r1 + im1);
+    realBuffer[i1] = 0.5f * (r0 - im0 + r1 + im1);
+    imagBuffer[i1] = 0.5f * (r0 + im0 - r1 + im1);
+}
+
 // P(theta): |1> *= e^{i theta}  (general phase; S = P(pi/2), T = P(pi/4), Z = P(pi))
 kernel void phase_gate(device float* realBuffer [[buffer(0)]],
                        device float* imagBuffer [[buffer(1)]],

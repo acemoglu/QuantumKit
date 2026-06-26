@@ -9,6 +9,7 @@ public enum QuantumCircuitError: Error {
     case invalidQubitCount(Int)
     case qubitIndexOutOfBounds(index: Int, qubitCount: Int)
     case invalidAlgorithmParameter(reason: String)
+    case circuitNotUnitary
 }
 
 public struct QuantumCircuit {
@@ -34,7 +35,7 @@ public struct QuantumCircuit {
         switch gate {
         case .h(let target), .x(let target), .y(let target), .z(let target),
              .s(let target), .t(let target), .sdg(let target), .tdg(let target),
-             .sx(let target):
+             .sx(let target), .sxdg(let target):
             try validateQubitIndex(target)
         case .p(_, let target), .u(_, _, _, let target):
             try validateQubitIndex(target)
@@ -189,6 +190,12 @@ public struct QuantumCircuit {
     }
 
     @discardableResult
+    public mutating func sxdg(_ target: Int) throws -> QuantumCircuit {
+        try applyValidated(.sxdg(target: target))
+        return self
+    }
+
+    @discardableResult
     public mutating func p(theta: QFloat, _ target: Int) throws -> QuantumCircuit {
         try applyValidated(.p(theta: theta, target: target))
         return self
@@ -281,5 +288,22 @@ public struct QuantumCircuit {
     public mutating func reset(_ qubit: Int) throws -> QuantumCircuit {
         try applyValidated(.reset(qubit: qubit))
         return self
+    }
+
+    /// The inverse (adjoint) circuit: applies each gate's adjoint in reverse order, so
+    /// `C` followed by `C.inverse()` returns the state vector to its starting point.
+    ///
+    /// Throws ``QuantumCircuitError/circuitNotUnitary`` when the circuit contains
+    /// non-unitary operations (`measure`/`reset`), which have no inverse.
+    public func inverse() throws -> QuantumCircuit {
+        guard isUnitaryOnly else {
+            throw QuantumCircuitError.circuitNotUnitary
+        }
+
+        var inverted = try QuantumCircuit(qubitCount: qubitCount)
+        for gate in gates.reversed() {
+            try inverted.apply(gate.adjoint)
+        }
+        return inverted
     }
 }

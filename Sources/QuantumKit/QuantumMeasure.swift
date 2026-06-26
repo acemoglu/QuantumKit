@@ -14,7 +14,31 @@ public enum QuantumMeasurementError: Error {
     case qubitIndexOutOfBounds(index: Int, qubitCount: Int)
 }
 
+/// A single complex amplitude of a state vector.
+public struct ComplexAmplitude: Equatable, Sendable {
+    public let real: QFloat
+    public let imaginary: QFloat
+
+    public init(real: QFloat, imaginary: QFloat) {
+        self.real = real
+        self.imaginary = imaginary
+    }
+}
+
 public struct QuantumMeasurement {
+
+    /// The full complex state vector (amplitude `i` ↔ bitstring of `i`, qubit 0 = LSB).
+    ///
+    /// Reads `realBuffer`/`imagBuffer` directly from unified memory; the buffers are
+    /// current as long as any preceding ``QuantumEngine`` execution has completed.
+    public static func amplitudes(state: StateVector) -> [ComplexAmplitude] {
+        let realPointer = state.realBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let imagPointer = state.imagBuffer.contents().assumingMemoryBound(to: QFloat.self)
+
+        return (0..<state.stateCount).map { index in
+            ComplexAmplitude(real: realPointer[index], imaginary: imagPointer[index])
+        }
+    }
 
     public static func measure(state: StateVector, engine: QuantumEngine, noise: NoiseModel? = nil) throws -> [Int] {
         var rng: QuantumRNG = .hardware

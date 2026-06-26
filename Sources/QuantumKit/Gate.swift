@@ -32,6 +32,9 @@ public enum Gate: Equatable, Sendable {
     /// √X gate; SX·SX = X.
     case sx(target: Int)
 
+    /// Inverse √X gate (SX†); the conjugate-transpose of `sx`, so SX†·SX = I.
+    case sxdg(target: Int)
+
     /// General phase gate P(θ) = diag(1, e^{iθ}).
     case p(theta: QFloat, target: Int)
 
@@ -92,7 +95,7 @@ extension Gate {
         switch self {
         case .h(let target), .x(let target), .y(let target), .z(let target),
              .s(let target), .t(let target), .sdg(let target), .tdg(let target),
-             .sx(let target), .p(_, let target), .u(_, _, _, let target),
+             .sx(let target), .sxdg(let target), .p(_, let target), .u(_, _, _, let target),
              .rx(_, let target), .ry(_, let target), .rz(_, let target), .reset(let target):
             return [target]
         case .cx(let control, let target), .cz(let control, let target),
@@ -107,6 +110,51 @@ extension Gate {
             return controls + [target]
         case .measure(let qubits):
             return qubits
+        }
+    }
+
+    /// The adjoint (inverse) of this gate.
+    ///
+    /// Self-inverse gates (Pauli, H, CX, CZ, SWAP, CCX, MCX, MCZ) return themselves;
+    /// S↔Sdg, T↔Tdg, SX↔SXdg are swapped; parametrized gates negate their angle(s).
+    /// For `u`, the Qiskit convention gives U(θ,φ,λ)† = U(-θ,-λ,-φ) (φ and λ swap and negate).
+    /// `measure`/`reset` are non-unitary and return themselves; guard with ``QuantumCircuit/isUnitaryOnly``.
+    public var adjoint: Gate {
+        switch self {
+        case .h, .x, .y, .z, .cx, .cz, .swap, .ccx, .mcx, .mcz:
+            return self
+        case .s(let target):
+            return .sdg(target: target)
+        case .sdg(let target):
+            return .s(target: target)
+        case .t(let target):
+            return .tdg(target: target)
+        case .tdg(let target):
+            return .t(target: target)
+        case .sx(let target):
+            return .sxdg(target: target)
+        case .sxdg(let target):
+            return .sx(target: target)
+        case .p(let theta, let target):
+            return .p(theta: -theta, target: target)
+        case .rx(let theta, let target):
+            return .rx(theta: -theta, target: target)
+        case .ry(let theta, let target):
+            return .ry(theta: -theta, target: target)
+        case .rz(let theta, let target):
+            return .rz(theta: -theta, target: target)
+        case .crx(let theta, let control, let target):
+            return .crx(theta: -theta, control: control, target: target)
+        case .cry(let theta, let control, let target):
+            return .cry(theta: -theta, control: control, target: target)
+        case .crz(let theta, let control, let target):
+            return .crz(theta: -theta, control: control, target: target)
+        case .cp(let theta, let control, let target):
+            return .cp(theta: -theta, control: control, target: target)
+        case .u(let theta, let phi, let lambda, let target):
+            return .u(theta: -theta, phi: -lambda, lambda: -phi, target: target)
+        case .measure, .reset:
+            return self
         }
     }
 }
