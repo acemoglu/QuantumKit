@@ -2,6 +2,20 @@ import Foundation
 import Metal
 
 extension QuantumEngine {
+    static let pairCountBufferIndex = 15
+
+    /// Uses a SIMD-aligned width so each threadgroup maps cleanly onto SIMDs while still pushing
+    /// occupancy near the hardware maximum.
+    private func optimalThreadgroupWidth(
+        pipeline: MTLComputePipelineState,
+        workItems: Int
+    ) -> Int {
+        let simdWidth = max(1, pipeline.threadExecutionWidth)
+        let maxWidth = pipeline.maxTotalThreadsPerThreadgroup
+        let clamped = min(maxWidth, max(workItems, simdWidth))
+        let aligned = (clamped / simdWidth) * simdWidth
+        return max(simdWidth, min(workItems, aligned == 0 ? simdWidth : aligned))
+    }
 
     func dispatchPairwiseGate(
         encoder: MTLComputeCommandEncoder,
@@ -10,17 +24,22 @@ extension QuantumEngine {
         configure: (MTLComputeCommandEncoder) -> Void
     ) {
         let pairCount = state.stateCount / 2
+        guard pairCount > 0 else { return }
 
         encoder.setComputePipelineState(pipeline)
         encoder.setBuffer(state.realBuffer, offset: 0, index: 0)
         encoder.setBuffer(state.imagBuffer, offset: 0, index: 1)
         configure(encoder)
+        var pairCountValue = UInt32(pairCount)
+        encoder.setBytes(&pairCountValue, length: MemoryLayout<UInt32>.stride, index: Self.pairCountBufferIndex)
 
         let threadsPerGrid = MTLSize(width: pairCount, height: 1, depth: 1)
-        // Fill the threadgroup up to the pipeline's hardware maximum (≈1024) rather than a single
-        // SIMD width (≈32); these gate kernels use no threadgroup memory and index purely off
-        // thread_position_in_grid, so a wider group only raises occupancy.
-        let threadgroupWidth = min(pipeline.maxTotalThreadsPerThreadgroup, max(pairCount, 1))
+        let threadgroupWidth = optimalThreadgroupWidth(pipeline: pipeline, workItems: pairCount)
+        // One complex pair (r0, i0, r1, i1) per lane in threadgroup memory.
+        encoder.setThreadgroupMemoryLength(
+            MemoryLayout<SIMD4<Float>>.stride * threadgroupWidth,
+            index: 0
+        )
         let threadsPerThreadgroup = MTLSize(width: threadgroupWidth, height: 1, depth: 1)
         encoder.dispatchThreads(threadsPerGrid, threadsPerThreadgroup: threadsPerThreadgroup)
     }
@@ -175,14 +194,14 @@ extension QuantumEngine {
 
         case .cx(let control, let target):
             dispatchPairwiseGate(encoder: encoder, pipeline: pipelines.cnot, state: state) { encoder in
-                var qubits = SIMD2<UInt32>(x: UInt32(control), y: UInt32(target))
-                encoder.setBytes(&qubits, length: MemoryLayout<SIMD2<UInt32>>.stride, index: 2)
+                var packed = SIMD2<UInt32>(x: UInt32(1) << UInt32(control), y: UInt32(target))
+                encoder.setBytes(&packed, length: MemoryLayout<SIMD2<UInt32>>.stride, index: 2)
             }
 
         case .cz(let control, let target):
             dispatchPairwiseGate(encoder: encoder, pipeline: pipelines.cz, state: state) { encoder in
-                var qubits = SIMD2<UInt32>(x: UInt32(control), y: UInt32(target))
-                encoder.setBytes(&qubits, length: MemoryLayout<SIMD2<UInt32>>.stride, index: 2)
+                var packed = SIMD2<UInt32>(x: UInt32(1) << UInt32(control), y: UInt32(target))
+                encoder.setBytes(&packed, length: MemoryLayout<SIMD2<UInt32>>.stride, index: 2)
             }
 
         case .swap(let q1, let q2):
@@ -193,38 +212,39 @@ extension QuantumEngine {
 
         case .ccx(let control1, let control2, let target):
             dispatchPairwiseGate(encoder: encoder, pipeline: pipelines.ccx, state: state) { encoder in
-                var qubits = SIMD3<UInt32>(x: UInt32(control1), y: UInt32(control2), z: UInt32(target))
-                encoder.setBytes(&qubits, length: MemoryLayout<SIMD3<UInt32>>.stride, index: 2)
+                let mask = (UInt32(1) << UInt32(control1)) | (UInt32(1) << UInt32(control2))
+                var packed = SIMD2<UInt32>(x: mask, y: UInt32(target))
+                encoder.setBytes(&packed, length: MemoryLayout<SIMD2<UInt32>>.stride, index: 2)
             }
 
         case .crx(let theta, let control, let target):
             dispatchPairwiseGate(encoder: encoder, pipeline: pipelines.cRotX, state: state) { encoder in
-                var qubits = SIMD2<UInt32>(x: UInt32(control), y: UInt32(target))
-                encoder.setBytes(&qubits, length: MemoryLayout<SIMD2<UInt32>>.stride, index: 2)
+                var packed = SIMD2<UInt32>(x: UInt32(1) << UInt32(control), y: UInt32(target))
+                encoder.setBytes(&packed, length: MemoryLayout<SIMD2<UInt32>>.stride, index: 2)
                 var thetaValue = Float(theta)
                 encoder.setBytes(&thetaValue, length: MemoryLayout<Float>.stride, index: 3)
             }
 
         case .cry(let theta, let control, let target):
             dispatchPairwiseGate(encoder: encoder, pipeline: pipelines.cRotY, state: state) { encoder in
-                var qubits = SIMD2<UInt32>(x: UInt32(control), y: UInt32(target))
-                encoder.setBytes(&qubits, length: MemoryLayout<SIMD2<UInt32>>.stride, index: 2)
+                var packed = SIMD2<UInt32>(x: UInt32(1) << UInt32(control), y: UInt32(target))
+                encoder.setBytes(&packed, length: MemoryLayout<SIMD2<UInt32>>.stride, index: 2)
                 var thetaValue = Float(theta)
                 encoder.setBytes(&thetaValue, length: MemoryLayout<Float>.stride, index: 3)
             }
 
         case .crz(let theta, let control, let target):
             dispatchPairwiseGate(encoder: encoder, pipeline: pipelines.cRotZ, state: state) { encoder in
-                var qubits = SIMD2<UInt32>(x: UInt32(control), y: UInt32(target))
-                encoder.setBytes(&qubits, length: MemoryLayout<SIMD2<UInt32>>.stride, index: 2)
+                var packed = SIMD2<UInt32>(x: UInt32(1) << UInt32(control), y: UInt32(target))
+                encoder.setBytes(&packed, length: MemoryLayout<SIMD2<UInt32>>.stride, index: 2)
                 var thetaValue = Float(theta)
                 encoder.setBytes(&thetaValue, length: MemoryLayout<Float>.stride, index: 3)
             }
 
         case .cp(let theta, let control, let target):
             dispatchPairwiseGate(encoder: encoder, pipeline: pipelines.cPhase, state: state) { encoder in
-                var qubits = SIMD2<UInt32>(x: UInt32(control), y: UInt32(target))
-                encoder.setBytes(&qubits, length: MemoryLayout<SIMD2<UInt32>>.stride, index: 2)
+                var packed = SIMD2<UInt32>(x: UInt32(1) << UInt32(control), y: UInt32(target))
+                encoder.setBytes(&packed, length: MemoryLayout<SIMD2<UInt32>>.stride, index: 2)
                 var thetaValue = Float(theta)
                 encoder.setBytes(&thetaValue, length: MemoryLayout<Float>.stride, index: 3)
             }

@@ -4,582 +4,886 @@
 //
 //  Unitary gate compute kernels (single- and multi-qubit).
 //
+//  Pairwise kernels in this file follow one strict architecture:
+//  1) each thread owns exactly one disjoint (|...0...>, |...1...>) amplitude pair,
+//  2) pair data is staged in threadgroup memory before arithmetic,
+//  3) explicit threadgroup barriers are used before and after mutation,
+//  4) controlled gates use precomputed bitmasks (O(1) activation checks).
+//
 
 #include <metal_stdlib>
 using namespace metal;
 
+static constant uint kPairCountBufferIndex = 15u;
+
+inline uint2 pair_indices(const uint pairID, const uint targetQubit) {
+    const uint lowerMask = (1u << targetQubit) - 1u;
+    const uint lowerBits = pairID & lowerMask;
+    const uint upperBits = pairID >> targetQubit;
+    const uint i0 = (upperBits << (targetQubit + 1u)) | lowerBits;
+    const uint i1 = i0 | (1u << targetQubit);
+    return uint2(i0, i1);
+}
+
+inline bool control_mask_is_active(const uint basisIndex, const uint controlMask) {
+    return (basisIndex & controlMask) == controlMask;
+}
+
+inline float4 load_pair(device const float* realBuffer,
+                        device const float* imagBuffer,
+                        const uint2 indices) {
+    return float4(realBuffer[indices.x], imagBuffer[indices.x], realBuffer[indices.y], imagBuffer[indices.y]);
+}
+
+inline void store_pair(device float* realBuffer,
+                       device float* imagBuffer,
+                       const uint2 indices,
+                       const float4 pair) {
+    realBuffer[indices.x] = pair.x;
+    imagBuffer[indices.x] = pair.y;
+    realBuffer[indices.y] = pair.z;
+    imagBuffer[indices.y] = pair.w;
+}
+
 kernel void hadamard_gate(device float* realBuffer [[buffer(0)]],
                           device float* imagBuffer [[buffer(1)]],
                           constant uint& targetQubit [[buffer(2)]],
-                          uint id [[thread_position_in_grid]]) {
+                          constant uint& pairCount [[buffer(kPairCountBufferIndex)]],
+                          uint gid [[thread_position_in_grid]],
+                          uint lid [[thread_position_in_threadgroup]],
+                          threadgroup float4* pairCache [[threadgroup(0)]]) {
+    const bool active = gid < pairCount;
+    uint2 indices = uint2(0u);
+    float4 pair = float4(0.0f);
+    if (active) {
+        indices = pair_indices(gid, targetQubit);
+        pair = load_pair(realBuffer, imagBuffer, indices);
+    }
+    pairCache[lid] = pair;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    uint mask = (1 << targetQubit) - 1;
-    uint i0 = ((id >> targetQubit) << (targetQubit + 1)) | (id & mask);
-    uint i1 = i0 | (1 << targetQubit);
-    
-    // 2. Taking data from RAM (Unified Memory)
-    float r0 = realBuffer[i0];
-    float im0 = imagBuffer[i0];
-    
-    float r1 = realBuffer[i1];
-    float im1 = imagBuffer[i1];
+    pair = pairCache[lid];
+    if (active) {
+        const float invSqrt2 = M_SQRT1_2_F;
+        const float r0 = pair.x;
+        const float i0 = pair.y;
+        const float r1 = pair.z;
+        const float i1 = pair.w;
+        pair = float4((r0 + r1) * invSqrt2,
+                      (i0 + i1) * invSqrt2,
+                      (r0 - r1) * invSqrt2,
+                      (i0 - i1) * invSqrt2);
+    }
+    pairCache[lid] = pair;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    // Multiplication without matrices (for performance optimization)
-    // Using Metal's built in M_SQRT1_2_F (1/sqrt(2)) for maximum Float32 precision
-    
-    realBuffer[i0] = (r0 + r1) * M_SQRT1_2_F;
-    imagBuffer[i0] = (im0 + im1) * M_SQRT1_2_F;
-    
-    realBuffer[i1] = (r0 - r1) * M_SQRT1_2_F;
-    imagBuffer[i1] = (im0 - im1) * M_SQRT1_2_F;
+    if (active) {
+        store_pair(realBuffer, imagBuffer, indices, pairCache[lid]);
+    }
 }
 
 kernel void pauli_x_gate(device float* realBuffer [[buffer(0)]],
                          device float* imagBuffer [[buffer(1)]],
                          constant uint& targetQubit [[buffer(2)]],
-                         uint id [[thread_position_in_grid]]) {
+                         constant uint& pairCount [[buffer(kPairCountBufferIndex)]],
+                         uint gid [[thread_position_in_grid]],
+                         uint lid [[thread_position_in_threadgroup]],
+                         threadgroup float4* pairCache [[threadgroup(0)]]) {
+    const bool active = gid < pairCount;
+    uint2 indices = uint2(0u);
+    float4 pair = float4(0.0f);
+    if (active) {
+        indices = pair_indices(gid, targetQubit);
+        pair = load_pair(realBuffer, imagBuffer, indices);
+    }
+    pairCache[lid] = pair;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    uint mask = (1 << targetQubit) - 1;
-    uint i0 = ((id >> targetQubit) << (targetQubit + 1)) | (id & mask);
-    uint i1 = i0 | (1 << targetQubit);
+    pair = pairCache[lid];
+    if (active) {
+        pair = float4(pair.z, pair.w, pair.x, pair.y);
+    }
+    pairCache[lid] = pair;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    // Swap amplitudes completely
-    float tempR = realBuffer[i0];
-    float tempI = imagBuffer[i0];
-
-    realBuffer[i0] = realBuffer[i1];
-    imagBuffer[i0] = imagBuffer[i1];
-
-    realBuffer[i1] = tempR;
-    imagBuffer[i1] = tempI;
+    if (active) {
+        store_pair(realBuffer, imagBuffer, indices, pairCache[lid]);
+    }
 }
 
 kernel void pauli_y_gate(device float* realBuffer [[buffer(0)]],
                          device float* imagBuffer [[buffer(1)]],
                          constant uint& targetQubit [[buffer(2)]],
-                         uint id [[thread_position_in_grid]]) {
+                         constant uint& pairCount [[buffer(kPairCountBufferIndex)]],
+                         uint gid [[thread_position_in_grid]],
+                         uint lid [[thread_position_in_threadgroup]],
+                         threadgroup float4* pairCache [[threadgroup(0)]]) {
+    const bool active = gid < pairCount;
+    uint2 indices = uint2(0u);
+    float4 pair = float4(0.0f);
+    if (active) {
+        indices = pair_indices(gid, targetQubit);
+        pair = load_pair(realBuffer, imagBuffer, indices);
+    }
+    pairCache[lid] = pair;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    uint mask = (1 << targetQubit) - 1;
-    uint i0 = ((id >> targetQubit) << (targetQubit + 1)) | (id & mask);
-    uint i1 = i0 | (1 << targetQubit);
+    pair = pairCache[lid];
+    if (active) {
+        const float r0 = pair.x;
+        const float i0 = pair.y;
+        const float r1 = pair.z;
+        const float i1 = pair.w;
+        pair = float4(i1, -r1, -i0, r0);
+    }
+    pairCache[lid] = pair;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    float r0 = realBuffer[i0];
-    float im0 = imagBuffer[i0];
-    
-    float r1 = realBuffer[i1];
-    float im1 = imagBuffer[i1];
-
-    // Y gate applies: |0> -> i|1>, |1> -> -i|0>
-    // Complex multiplication rules dictate this specific cross-assignment
-    realBuffer[i0] = im1;
-    imagBuffer[i0] = -r1;
-
-    realBuffer[i1] = -im0;
-    imagBuffer[i1] = r0;
+    if (active) {
+        store_pair(realBuffer, imagBuffer, indices, pairCache[lid]);
+    }
 }
-
 
 kernel void pauli_z_gate(device float* realBuffer [[buffer(0)]],
                          device float* imagBuffer [[buffer(1)]],
                          constant uint& targetQubit [[buffer(2)]],
-                         uint id [[thread_position_in_grid]]) {
+                         constant uint& pairCount [[buffer(kPairCountBufferIndex)]],
+                         uint gid [[thread_position_in_grid]],
+                         uint lid [[thread_position_in_threadgroup]],
+                         threadgroup float4* pairCache [[threadgroup(0)]]) {
+    const bool active = gid < pairCount;
+    uint2 indices = uint2(0u);
+    float4 pair = float4(0.0f);
+    if (active) {
+        indices = pair_indices(gid, targetQubit);
+        pair = load_pair(realBuffer, imagBuffer, indices);
+    }
+    pairCache[lid] = pair;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    uint mask = (1 << targetQubit) - 1;
-    uint i0 = ((id >> targetQubit) << (targetQubit + 1)) | (id & mask);
-    uint i1 = i0 | (1 << targetQubit);
+    pair = pairCache[lid];
+    if (active) {
+        pair.z = -pair.z;
+        pair.w = -pair.w;
+    }
+    pairCache[lid] = pair;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    // State |0> (index i0) remains unchanged.
-    // State |1> (index i1) flips its phase (-1).
-    realBuffer[i1] = -realBuffer[i1];
-    imagBuffer[i1] = -imagBuffer[i1];
+    if (active) {
+        store_pair(realBuffer, imagBuffer, indices, pairCache[lid]);
+    }
 }
 
-// S: |1> *= i  (RZ(pi/2))
 kernel void s_gate(device float* realBuffer [[buffer(0)]],
                    device float* imagBuffer [[buffer(1)]],
                    constant uint& targetQubit [[buffer(2)]],
-                   uint id [[thread_position_in_grid]]) {
+                   constant uint& pairCount [[buffer(kPairCountBufferIndex)]],
+                   uint gid [[thread_position_in_grid]],
+                   uint lid [[thread_position_in_threadgroup]],
+                   threadgroup float4* pairCache [[threadgroup(0)]]) {
+    const bool active = gid < pairCount;
+    uint2 indices = uint2(0u);
+    float4 pair = float4(0.0f);
+    if (active) {
+        indices = pair_indices(gid, targetQubit);
+        pair = load_pair(realBuffer, imagBuffer, indices);
+    }
+    pairCache[lid] = pair;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    uint mask = (1 << targetQubit) - 1;
-    uint i0 = ((id >> targetQubit) << (targetQubit + 1)) | (id & mask);
-    uint i1 = i0 | (1 << targetQubit);
+    pair = pairCache[lid];
+    if (active) {
+        const float r1 = pair.z;
+        const float i1 = pair.w;
+        pair.z = -i1;
+        pair.w = r1;
+    }
+    pairCache[lid] = pair;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    float r1 = realBuffer[i1];
-    float im1 = imagBuffer[i1];
-
-    realBuffer[i1] = -im1;
-    imagBuffer[i1] = r1;
+    if (active) {
+        store_pair(realBuffer, imagBuffer, indices, pairCache[lid]);
+    }
 }
 
-// T: |1> *= e^{i pi/4}  (RZ(pi/4))
 kernel void t_gate(device float* realBuffer [[buffer(0)]],
                    device float* imagBuffer [[buffer(1)]],
                    constant uint& targetQubit [[buffer(2)]],
-                   uint id [[thread_position_in_grid]]) {
+                   constant uint& pairCount [[buffer(kPairCountBufferIndex)]],
+                   uint gid [[thread_position_in_grid]],
+                   uint lid [[thread_position_in_threadgroup]],
+                   threadgroup float4* pairCache [[threadgroup(0)]]) {
+    const bool active = gid < pairCount;
+    uint2 indices = uint2(0u);
+    float4 pair = float4(0.0f);
+    if (active) {
+        indices = pair_indices(gid, targetQubit);
+        pair = load_pair(realBuffer, imagBuffer, indices);
+    }
+    pairCache[lid] = pair;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    uint mask = (1 << targetQubit) - 1;
-    uint i0 = ((id >> targetQubit) << (targetQubit + 1)) | (id & mask);
-    uint i1 = i0 | (1 << targetQubit);
+    pair = pairCache[lid];
+    if (active) {
+        const float r1 = pair.z;
+        const float i1 = pair.w;
+        const float c = M_SQRT1_2_F;
+        const float s = M_SQRT1_2_F;
+        pair.z = (r1 * c) - (i1 * s);
+        pair.w = (r1 * s) + (i1 * c);
+    }
+    pairCache[lid] = pair;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    float r1 = realBuffer[i1];
-    float im1 = imagBuffer[i1];
-    float c = M_SQRT1_2_F;
-    float s = M_SQRT1_2_F;
-
-    realBuffer[i1] = (r1 * c) - (im1 * s);
-    imagBuffer[i1] = (r1 * s) + (im1 * c);
+    if (active) {
+        store_pair(realBuffer, imagBuffer, indices, pairCache[lid]);
+    }
 }
 
 kernel void cnot_gate(device float* realBuffer [[buffer(0)]],
                       device float* imagBuffer [[buffer(1)]],
-                      constant uint2& qubits [[buffer(2)]],
-                      uint id [[thread_position_in_grid]]) {
+                      constant uint2& packed [[buffer(2)]],
+                      constant uint& pairCount [[buffer(kPairCountBufferIndex)]],
+                      uint gid [[thread_position_in_grid]],
+                      uint lid [[thread_position_in_threadgroup]],
+                      threadgroup float4* pairCache [[threadgroup(0)]]) {
+    const uint controlMask = packed.x;
+    const uint targetQubit = packed.y;
+    const bool active = gid < pairCount;
 
-    uint controlQubit = qubits.x;
-    uint targetQubit = qubits.y;
+    uint2 indices = uint2(0u);
+    float4 pair = float4(0.0f);
+    if (active) {
+        indices = pair_indices(gid, targetQubit);
+        pair = load_pair(realBuffer, imagBuffer, indices);
+    }
+    pairCache[lid] = pair;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    // Base parallel split on the target qubit
-    uint mask = (1 << targetQubit) - 1;
-    uint i0 = ((id >> targetQubit) << (targetQubit + 1)) | (id & mask);
-    uint i1 = i0 | (1 << targetQubit);
+    pair = pairCache[lid];
+    if (active && control_mask_is_active(indices.x, controlMask)) {
+        pair = float4(pair.z, pair.w, pair.x, pair.y);
+    }
+    pairCache[lid] = pair;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    // Apply the Pauli-X swap only if the control bit is 1. Bitwise check on the state index ensures exact entanglement
-    if ((i0 & (1 << controlQubit)) != 0) {
-        float tempR = realBuffer[i0];
-        float tempI = imagBuffer[i0];
-
-        realBuffer[i0] = realBuffer[i1];
-        imagBuffer[i0] = imagBuffer[i1];
-
-        realBuffer[i1] = tempR;
-        imagBuffer[i1] = tempI;
+    if (active) {
+        store_pair(realBuffer, imagBuffer, indices, pairCache[lid]);
     }
 }
 
-// RZ: |0> *= e^{-i theta/2}, |1> *= e^{i theta/2}
 kernel void rz_gate(device float* realBuffer [[buffer(0)]],
                     device float* imagBuffer [[buffer(1)]],
                     constant uint& targetQubit [[buffer(2)]],
                     constant float& theta [[buffer(3)]],
-                    uint id [[thread_position_in_grid]]) {
+                    constant uint& pairCount [[buffer(kPairCountBufferIndex)]],
+                    uint gid [[thread_position_in_grid]],
+                    uint lid [[thread_position_in_threadgroup]],
+                    threadgroup float4* pairCache [[threadgroup(0)]]) {
+    const bool active = gid < pairCount;
+    uint2 indices = uint2(0u);
+    float4 pair = float4(0.0f);
+    if (active) {
+        indices = pair_indices(gid, targetQubit);
+        pair = load_pair(realBuffer, imagBuffer, indices);
+    }
+    pairCache[lid] = pair;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    uint mask = (1 << targetQubit) - 1;
-    uint i0 = ((id >> targetQubit) << (targetQubit + 1)) | (id & mask);
-    uint i1 = i0 | (1 << targetQubit);
+    pair = pairCache[lid];
+    if (active) {
+        const float halfTheta = theta * 0.5f;
+        const float cosH = cos(halfTheta);
+        const float sinH = sin(halfTheta);
+        const float r0 = pair.x;
+        const float i0 = pair.y;
+        const float r1 = pair.z;
+        const float i1 = pair.w;
+        pair = float4((r0 * cosH) + (i0 * sinH),
+                      (i0 * cosH) - (r0 * sinH),
+                      (r1 * cosH) - (i1 * sinH),
+                      (i1 * cosH) + (r1 * sinH));
+    }
+    pairCache[lid] = pair;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    float r0 = realBuffer[i0];
-    float im0 = imagBuffer[i0];
-
-    float r1 = realBuffer[i1];
-    float im1 = imagBuffer[i1];
-
-    float halfTheta = theta * 0.5f;
-    float cosH = cos(halfTheta);
-    float sinH = sin(halfTheta);
-
-    // i0 multiplied by (cosH - i sinH)
-    realBuffer[i0] = r0 * cosH + im0 * sinH;
-    imagBuffer[i0] = im0 * cosH - r0 * sinH;
-
-    // i1 multiplied by (cosH + i sinH)
-    realBuffer[i1] = r1 * cosH - im1 * sinH;
-    imagBuffer[i1] = im1 * cosH + r1 * sinH;
+    if (active) {
+        store_pair(realBuffer, imagBuffer, indices, pairCache[lid]);
+    }
 }
 
-// RX: |psi'> = exp(-i * theta/2 * X) |psi|
 kernel void rx_gate(device float* realBuffer [[buffer(0)]],
                     device float* imagBuffer [[buffer(1)]],
                     constant uint& targetQubit [[buffer(2)]],
                     constant float& theta [[buffer(3)]],
-                    uint id [[thread_position_in_grid]]) {
-    uint mask = (1 << targetQubit) - 1;
-    uint i0 = ((id >> targetQubit) << (targetQubit + 1)) | (id & mask);
-    uint i1 = i0 | (1 << targetQubit);
+                    constant uint& pairCount [[buffer(kPairCountBufferIndex)]],
+                    uint gid [[thread_position_in_grid]],
+                    uint lid [[thread_position_in_threadgroup]],
+                    threadgroup float4* pairCache [[threadgroup(0)]]) {
+    const bool active = gid < pairCount;
+    uint2 indices = uint2(0u);
+    float4 pair = float4(0.0f);
+    if (active) {
+        indices = pair_indices(gid, targetQubit);
+        pair = load_pair(realBuffer, imagBuffer, indices);
+    }
+    pairCache[lid] = pair;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    float r0 = realBuffer[i0];
-    float im0 = imagBuffer[i0];
-    float r1 = realBuffer[i1];
-    float im1 = imagBuffer[i1];
+    pair = pairCache[lid];
+    if (active) {
+        const float halfTheta = theta * 0.5f;
+        const float cosH = cos(halfTheta);
+        const float sinH = sin(halfTheta);
+        const float r0 = pair.x;
+        const float i0 = pair.y;
+        const float r1 = pair.z;
+        const float i1 = pair.w;
+        pair = float4((cosH * r0) + (sinH * i1),
+                      (cosH * i0) - (sinH * r1),
+                      (sinH * i0) + (cosH * r1),
+                      (-sinH * r0) + (cosH * i1));
+    }
+    pairCache[lid] = pair;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    float halfTheta = theta * 0.5f;
-    float cosH = cos(halfTheta);
-    float sinH = sin(halfTheta);
-
-    // psi0' = cosH * psi0 - i * sinH * psi1
-    realBuffer[i0] = (cosH * r0) + (sinH * im1);
-    imagBuffer[i0] = (cosH * im0) - (sinH * r1);
-
-    // psi1' = -i * sinH * psi0 + cosH * psi1
-    realBuffer[i1] = (sinH * im0) + (cosH * r1);
-    imagBuffer[i1] = (-sinH * r0) + (cosH * im1);
+    if (active) {
+        store_pair(realBuffer, imagBuffer, indices, pairCache[lid]);
+    }
 }
 
-// RY: exp(-i * theta/2 * Y)
 kernel void ry_gate(device float* realBuffer [[buffer(0)]],
                     device float* imagBuffer [[buffer(1)]],
                     constant uint& targetQubit [[buffer(2)]],
                     constant float& theta [[buffer(3)]],
-                    uint id [[thread_position_in_grid]]) {
-    uint mask = (1 << targetQubit) - 1;
-    uint i0 = ((id >> targetQubit) << (targetQubit + 1)) | (id & mask);
-    uint i1 = i0 | (1 << targetQubit);
+                    constant uint& pairCount [[buffer(kPairCountBufferIndex)]],
+                    uint gid [[thread_position_in_grid]],
+                    uint lid [[thread_position_in_threadgroup]],
+                    threadgroup float4* pairCache [[threadgroup(0)]]) {
+    const bool active = gid < pairCount;
+    uint2 indices = uint2(0u);
+    float4 pair = float4(0.0f);
+    if (active) {
+        indices = pair_indices(gid, targetQubit);
+        pair = load_pair(realBuffer, imagBuffer, indices);
+    }
+    pairCache[lid] = pair;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    float r0 = realBuffer[i0];
-    float im0 = imagBuffer[i0];
-    float r1 = realBuffer[i1];
-    float im1 = imagBuffer[i1];
+    pair = pairCache[lid];
+    if (active) {
+        const float halfTheta = theta * 0.5f;
+        const float cosH = cos(halfTheta);
+        const float sinH = sin(halfTheta);
+        const float r0 = pair.x;
+        const float i0 = pair.y;
+        const float r1 = pair.z;
+        const float i1 = pair.w;
+        pair = float4((cosH * r0) - (sinH * r1),
+                      (cosH * i0) - (sinH * i1),
+                      (sinH * r0) + (cosH * r1),
+                      (sinH * i0) + (cosH * i1));
+    }
+    pairCache[lid] = pair;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    float halfTheta = theta * 0.5f;
-    float cosH = cos(halfTheta);
-    float sinH = sin(halfTheta);
-
-    realBuffer[i0] = (cosH * r0) - (sinH * r1);
-    imagBuffer[i0] = (cosH * im0) - (sinH * im1);
-    realBuffer[i1] = (sinH * r0) + (cosH * r1);
-    imagBuffer[i1] = (sinH * im0) + (cosH * im1);
+    if (active) {
+        store_pair(realBuffer, imagBuffer, indices, pairCache[lid]);
+    }
 }
 
-// Note: Buffer 2 expects a uint3 (control1, control2, target)
 kernel void ccx_gate(device float* realBuffer [[buffer(0)]],
                      device float* imagBuffer [[buffer(1)]],
-                     constant uint3& qubits [[buffer(2)]],
-                     uint id [[thread_position_in_grid]]) {
+                     constant uint2& packed [[buffer(2)]],
+                     constant uint& pairCount [[buffer(kPairCountBufferIndex)]],
+                     uint gid [[thread_position_in_grid]],
+                     uint lid [[thread_position_in_threadgroup]],
+                     threadgroup float4* pairCache [[threadgroup(0)]]) {
+    const uint controlMask = packed.x;
+    const uint targetQubit = packed.y;
+    const bool active = gid < pairCount;
 
-    uint control1 = qubits.x;
-    uint control2 = qubits.y;
-    uint targetQubit = qubits.z;
+    uint2 indices = uint2(0u);
+    float4 pair = float4(0.0f);
+    if (active) {
+        indices = pair_indices(gid, targetQubit);
+        pair = load_pair(realBuffer, imagBuffer, indices);
+    }
+    pairCache[lid] = pair;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    uint mask = (1 << targetQubit) - 1;
-    uint i0 = ((id >> targetQubit) << (targetQubit + 1)) | (id & mask);
-    uint i1 = i0 | (1 << targetQubit);
+    pair = pairCache[lid];
+    if (active && control_mask_is_active(indices.x, controlMask)) {
+        pair = float4(pair.z, pair.w, pair.x, pair.y);
+    }
+    pairCache[lid] = pair;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    if ((i0 & (1 << control1)) != 0 && (i0 & (1 << control2)) != 0) {
-        float tempR = realBuffer[i0];
-        float tempI = imagBuffer[i0];
-
-        realBuffer[i0] = realBuffer[i1];
-        imagBuffer[i0] = imagBuffer[i1];
-
-        realBuffer[i1] = tempR;
-        imagBuffer[i1] = tempI;
+    if (active) {
+        store_pair(realBuffer, imagBuffer, indices, pairCache[lid]);
     }
 }
 
-// Controlled-RX: applies RX(theta) to the target only when the control bit is 1.
 kernel void crx_gate(device float* realBuffer [[buffer(0)]],
                      device float* imagBuffer [[buffer(1)]],
-                     constant uint2& qubits [[buffer(2)]],
+                     constant uint2& packed [[buffer(2)]],
                      constant float& theta [[buffer(3)]],
-                     uint id [[thread_position_in_grid]]) {
+                     constant uint& pairCount [[buffer(kPairCountBufferIndex)]],
+                     uint gid [[thread_position_in_grid]],
+                     uint lid [[thread_position_in_threadgroup]],
+                     threadgroup float4* pairCache [[threadgroup(0)]]) {
+    const uint controlMask = packed.x;
+    const uint targetQubit = packed.y;
+    const bool active = gid < pairCount;
 
-    uint controlQubit = qubits.x;
-    uint targetQubit = qubits.y;
-
-    uint mask = (1 << targetQubit) - 1;
-    uint i0 = ((id >> targetQubit) << (targetQubit + 1)) | (id & mask);
-    uint i1 = i0 | (1 << targetQubit);
-
-    if ((i0 & (1 << controlQubit)) == 0) {
-        return;
+    uint2 indices = uint2(0u);
+    float4 pair = float4(0.0f);
+    if (active) {
+        indices = pair_indices(gid, targetQubit);
+        pair = load_pair(realBuffer, imagBuffer, indices);
     }
+    pairCache[lid] = pair;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    float r0 = realBuffer[i0];
-    float im0 = imagBuffer[i0];
-    float r1 = realBuffer[i1];
-    float im1 = imagBuffer[i1];
+    pair = pairCache[lid];
+    if (active && control_mask_is_active(indices.x, controlMask)) {
+        const float halfTheta = theta * 0.5f;
+        const float cosH = cos(halfTheta);
+        const float sinH = sin(halfTheta);
+        const float r0 = pair.x;
+        const float i0 = pair.y;
+        const float r1 = pair.z;
+        const float i1 = pair.w;
+        pair = float4((cosH * r0) + (sinH * i1),
+                      (cosH * i0) - (sinH * r1),
+                      (sinH * i0) + (cosH * r1),
+                      (-sinH * r0) + (cosH * i1));
+    }
+    pairCache[lid] = pair;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    float halfTheta = theta * 0.5f;
-    float cosH = cos(halfTheta);
-    float sinH = sin(halfTheta);
-
-    realBuffer[i0] = (cosH * r0) + (sinH * im1);
-    imagBuffer[i0] = (cosH * im0) - (sinH * r1);
-    realBuffer[i1] = (sinH * im0) + (cosH * r1);
-    imagBuffer[i1] = (-sinH * r0) + (cosH * im1);
+    if (active) {
+        store_pair(realBuffer, imagBuffer, indices, pairCache[lid]);
+    }
 }
 
-// Controlled-RY: applies RY(theta) to the target only when the control bit is 1.
 kernel void cry_gate(device float* realBuffer [[buffer(0)]],
                      device float* imagBuffer [[buffer(1)]],
-                     constant uint2& qubits [[buffer(2)]],
+                     constant uint2& packed [[buffer(2)]],
                      constant float& theta [[buffer(3)]],
-                     uint id [[thread_position_in_grid]]) {
+                     constant uint& pairCount [[buffer(kPairCountBufferIndex)]],
+                     uint gid [[thread_position_in_grid]],
+                     uint lid [[thread_position_in_threadgroup]],
+                     threadgroup float4* pairCache [[threadgroup(0)]]) {
+    const uint controlMask = packed.x;
+    const uint targetQubit = packed.y;
+    const bool active = gid < pairCount;
 
-    uint controlQubit = qubits.x;
-    uint targetQubit = qubits.y;
-
-    uint mask = (1 << targetQubit) - 1;
-    uint i0 = ((id >> targetQubit) << (targetQubit + 1)) | (id & mask);
-    uint i1 = i0 | (1 << targetQubit);
-
-    if ((i0 & (1 << controlQubit)) == 0) {
-        return;
+    uint2 indices = uint2(0u);
+    float4 pair = float4(0.0f);
+    if (active) {
+        indices = pair_indices(gid, targetQubit);
+        pair = load_pair(realBuffer, imagBuffer, indices);
     }
+    pairCache[lid] = pair;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    float r0 = realBuffer[i0];
-    float im0 = imagBuffer[i0];
-    float r1 = realBuffer[i1];
-    float im1 = imagBuffer[i1];
+    pair = pairCache[lid];
+    if (active && control_mask_is_active(indices.x, controlMask)) {
+        const float halfTheta = theta * 0.5f;
+        const float cosH = cos(halfTheta);
+        const float sinH = sin(halfTheta);
+        const float r0 = pair.x;
+        const float i0 = pair.y;
+        const float r1 = pair.z;
+        const float i1 = pair.w;
+        pair = float4((cosH * r0) - (sinH * r1),
+                      (cosH * i0) - (sinH * i1),
+                      (sinH * r0) + (cosH * r1),
+                      (sinH * i0) + (cosH * i1));
+    }
+    pairCache[lid] = pair;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    float halfTheta = theta * 0.5f;
-    float cosH = cos(halfTheta);
-    float sinH = sin(halfTheta);
-
-    realBuffer[i0] = (cosH * r0) - (sinH * r1);
-    imagBuffer[i0] = (cosH * im0) - (sinH * im1);
-    realBuffer[i1] = (sinH * r0) + (cosH * r1);
-    imagBuffer[i1] = (sinH * im0) + (cosH * im1);
+    if (active) {
+        store_pair(realBuffer, imagBuffer, indices, pairCache[lid]);
+    }
 }
 
-// Controlled-RZ: applies RZ(theta) to the target only when the control bit is 1.
 kernel void crz_gate(device float* realBuffer [[buffer(0)]],
                      device float* imagBuffer [[buffer(1)]],
-                     constant uint2& qubits [[buffer(2)]],
+                     constant uint2& packed [[buffer(2)]],
                      constant float& theta [[buffer(3)]],
-                     uint id [[thread_position_in_grid]]) {
+                     constant uint& pairCount [[buffer(kPairCountBufferIndex)]],
+                     uint gid [[thread_position_in_grid]],
+                     uint lid [[thread_position_in_threadgroup]],
+                     threadgroup float4* pairCache [[threadgroup(0)]]) {
+    const uint controlMask = packed.x;
+    const uint targetQubit = packed.y;
+    const bool active = gid < pairCount;
 
-    uint controlQubit = qubits.x;
-    uint targetQubit = qubits.y;
-
-    uint mask = (1 << targetQubit) - 1;
-    uint i0 = ((id >> targetQubit) << (targetQubit + 1)) | (id & mask);
-    uint i1 = i0 | (1 << targetQubit);
-
-    if ((i0 & (1 << controlQubit)) == 0) {
-        return;
+    uint2 indices = uint2(0u);
+    float4 pair = float4(0.0f);
+    if (active) {
+        indices = pair_indices(gid, targetQubit);
+        pair = load_pair(realBuffer, imagBuffer, indices);
     }
+    pairCache[lid] = pair;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    float r0 = realBuffer[i0];
-    float im0 = imagBuffer[i0];
-    float r1 = realBuffer[i1];
-    float im1 = imagBuffer[i1];
+    pair = pairCache[lid];
+    if (active && control_mask_is_active(indices.x, controlMask)) {
+        const float halfTheta = theta * 0.5f;
+        const float cosH = cos(halfTheta);
+        const float sinH = sin(halfTheta);
+        const float r0 = pair.x;
+        const float i0 = pair.y;
+        const float r1 = pair.z;
+        const float i1 = pair.w;
+        pair = float4((r0 * cosH) + (i0 * sinH),
+                      (i0 * cosH) - (r0 * sinH),
+                      (r1 * cosH) - (i1 * sinH),
+                      (i1 * cosH) + (r1 * sinH));
+    }
+    pairCache[lid] = pair;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    float halfTheta = theta * 0.5f;
-    float cosH = cos(halfTheta);
-    float sinH = sin(halfTheta);
-
-    realBuffer[i0] = r0 * cosH + im0 * sinH;
-    imagBuffer[i0] = im0 * cosH - r0 * sinH;
-    realBuffer[i1] = r1 * cosH - im1 * sinH;
-    imagBuffer[i1] = im1 * cosH + r1 * sinH;
+    if (active) {
+        store_pair(realBuffer, imagBuffer, indices, pairCache[lid]);
+    }
 }
 
-// Controlled-Phase CP(theta): phase e^{i theta} on |11> (control AND target = 1).
 kernel void cphase_gate(device float* realBuffer [[buffer(0)]],
                         device float* imagBuffer [[buffer(1)]],
-                        constant uint2& qubits [[buffer(2)]],
+                        constant uint2& packed [[buffer(2)]],
                         constant float& theta [[buffer(3)]],
-                        uint id [[thread_position_in_grid]]) {
+                        constant uint& pairCount [[buffer(kPairCountBufferIndex)]],
+                        uint gid [[thread_position_in_grid]],
+                        uint lid [[thread_position_in_threadgroup]],
+                        threadgroup float4* pairCache [[threadgroup(0)]]) {
+    const uint controlMask = packed.x;
+    const uint targetQubit = packed.y;
+    const bool active = gid < pairCount;
 
-    uint controlQubit = qubits.x;
-    uint targetQubit = qubits.y;
-
-    uint mask = (1 << targetQubit) - 1;
-    uint i0 = ((id >> targetQubit) << (targetQubit + 1)) | (id & mask);
-    uint i1 = i0 | (1 << targetQubit);
-
-    if ((i1 & (1 << controlQubit)) == 0) {
-        return;
+    uint2 indices = uint2(0u);
+    float4 pair = float4(0.0f);
+    if (active) {
+        indices = pair_indices(gid, targetQubit);
+        pair = load_pair(realBuffer, imagBuffer, indices);
     }
+    pairCache[lid] = pair;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    float r1 = realBuffer[i1];
-    float im1 = imagBuffer[i1];
-    float c = cos(theta);
-    float s = sin(theta);
+    pair = pairCache[lid];
+    if (active && control_mask_is_active(indices.x, controlMask)) {
+        const float c = cos(theta);
+        const float s = sin(theta);
+        const float r1 = pair.z;
+        const float i1 = pair.w;
+        pair.z = (r1 * c) - (i1 * s);
+        pair.w = (r1 * s) + (i1 * c);
+    }
+    pairCache[lid] = pair;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    realBuffer[i1] = (r1 * c) - (im1 * s);
-    imagBuffer[i1] = (r1 * s) + (im1 * c);
+    if (active) {
+        store_pair(realBuffer, imagBuffer, indices, pairCache[lid]);
+    }
 }
 
-// Multi-controlled X: X on target when every control bit (encoded in controlMask) is 1.
 kernel void mcx_gate(device float* realBuffer [[buffer(0)]],
                      device float* imagBuffer [[buffer(1)]],
                      constant uint2& packed [[buffer(2)]],
-                     uint id [[thread_position_in_grid]]) {
+                     constant uint& pairCount [[buffer(kPairCountBufferIndex)]],
+                     uint gid [[thread_position_in_grid]],
+                     uint lid [[thread_position_in_threadgroup]],
+                     threadgroup float4* pairCache [[threadgroup(0)]]) {
+    const uint controlMask = packed.x;
+    const uint targetQubit = packed.y;
+    const bool active = gid < pairCount;
 
-    uint controlMask = packed.x;
-    uint targetQubit = packed.y;
+    uint2 indices = uint2(0u);
+    float4 pair = float4(0.0f);
+    if (active) {
+        indices = pair_indices(gid, targetQubit);
+        pair = load_pair(realBuffer, imagBuffer, indices);
+    }
+    pairCache[lid] = pair;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    uint mask = (1 << targetQubit) - 1;
-    uint i0 = ((id >> targetQubit) << (targetQubit + 1)) | (id & mask);
-    uint i1 = i0 | (1 << targetQubit);
+    pair = pairCache[lid];
+    if (active && control_mask_is_active(indices.x, controlMask)) {
+        pair = float4(pair.z, pair.w, pair.x, pair.y);
+    }
+    pairCache[lid] = pair;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    if ((i0 & controlMask) == controlMask) {
-        float tempR = realBuffer[i0];
-        float tempI = imagBuffer[i0];
-        realBuffer[i0] = realBuffer[i1];
-        imagBuffer[i0] = imagBuffer[i1];
-        realBuffer[i1] = tempR;
-        imagBuffer[i1] = tempI;
+    if (active) {
+        store_pair(realBuffer, imagBuffer, indices, pairCache[lid]);
     }
 }
 
-// Multi-controlled Z: phase -1 when every involved qubit (controls + target in fullMask) is 1.
 kernel void mcz_gate(device float* realBuffer [[buffer(0)]],
                      device float* imagBuffer [[buffer(1)]],
                      constant uint& fullMask [[buffer(2)]],
                      uint id [[thread_position_in_grid]]) {
-
     if ((id & fullMask) == fullMask) {
         realBuffer[id] = -realBuffer[id];
         imagBuffer[id] = -imagBuffer[id];
     }
 }
 
-// S-dagger: |1> *= -i  (inverse of S)
 kernel void s_dagger_gate(device float* realBuffer [[buffer(0)]],
                           device float* imagBuffer [[buffer(1)]],
                           constant uint& targetQubit [[buffer(2)]],
-                          uint id [[thread_position_in_grid]]) {
+                          constant uint& pairCount [[buffer(kPairCountBufferIndex)]],
+                          uint gid [[thread_position_in_grid]],
+                          uint lid [[thread_position_in_threadgroup]],
+                          threadgroup float4* pairCache [[threadgroup(0)]]) {
+    const bool active = gid < pairCount;
+    uint2 indices = uint2(0u);
+    float4 pair = float4(0.0f);
+    if (active) {
+        indices = pair_indices(gid, targetQubit);
+        pair = load_pair(realBuffer, imagBuffer, indices);
+    }
+    pairCache[lid] = pair;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    uint mask = (1 << targetQubit) - 1;
-    uint i0 = ((id >> targetQubit) << (targetQubit + 1)) | (id & mask);
-    uint i1 = i0 | (1 << targetQubit);
+    pair = pairCache[lid];
+    if (active) {
+        const float r1 = pair.z;
+        const float i1 = pair.w;
+        pair.z = i1;
+        pair.w = -r1;
+    }
+    pairCache[lid] = pair;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    float r1 = realBuffer[i1];
-    float im1 = imagBuffer[i1];
-
-    realBuffer[i1] = im1;
-    imagBuffer[i1] = -r1;
+    if (active) {
+        store_pair(realBuffer, imagBuffer, indices, pairCache[lid]);
+    }
 }
 
-// T-dagger: |1> *= e^{-i pi/4}  (inverse of T)
 kernel void t_dagger_gate(device float* realBuffer [[buffer(0)]],
                           device float* imagBuffer [[buffer(1)]],
                           constant uint& targetQubit [[buffer(2)]],
-                          uint id [[thread_position_in_grid]]) {
+                          constant uint& pairCount [[buffer(kPairCountBufferIndex)]],
+                          uint gid [[thread_position_in_grid]],
+                          uint lid [[thread_position_in_threadgroup]],
+                          threadgroup float4* pairCache [[threadgroup(0)]]) {
+    const bool active = gid < pairCount;
+    uint2 indices = uint2(0u);
+    float4 pair = float4(0.0f);
+    if (active) {
+        indices = pair_indices(gid, targetQubit);
+        pair = load_pair(realBuffer, imagBuffer, indices);
+    }
+    pairCache[lid] = pair;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    uint mask = (1 << targetQubit) - 1;
-    uint i0 = ((id >> targetQubit) << (targetQubit + 1)) | (id & mask);
-    uint i1 = i0 | (1 << targetQubit);
+    pair = pairCache[lid];
+    if (active) {
+        const float c = M_SQRT1_2_F;
+        const float s = M_SQRT1_2_F;
+        const float r1 = pair.z;
+        const float i1 = pair.w;
+        pair.z = (r1 * c) + (i1 * s);
+        pair.w = (i1 * c) - (r1 * s);
+    }
+    pairCache[lid] = pair;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    float r1 = realBuffer[i1];
-    float im1 = imagBuffer[i1];
-    float c = M_SQRT1_2_F;
-    float s = M_SQRT1_2_F;
-
-    realBuffer[i1] = (r1 * c) + (im1 * s);
-    imagBuffer[i1] = (im1 * c) - (r1 * s);
+    if (active) {
+        store_pair(realBuffer, imagBuffer, indices, pairCache[lid]);
+    }
 }
 
-// SX (sqrt(X)): (1/2) * [[1+i, 1-i], [1-i, 1+i]]; SX*SX = X
 kernel void sx_gate(device float* realBuffer [[buffer(0)]],
                     device float* imagBuffer [[buffer(1)]],
                     constant uint& targetQubit [[buffer(2)]],
-                    uint id [[thread_position_in_grid]]) {
+                    constant uint& pairCount [[buffer(kPairCountBufferIndex)]],
+                    uint gid [[thread_position_in_grid]],
+                    uint lid [[thread_position_in_threadgroup]],
+                    threadgroup float4* pairCache [[threadgroup(0)]]) {
+    const bool active = gid < pairCount;
+    uint2 indices = uint2(0u);
+    float4 pair = float4(0.0f);
+    if (active) {
+        indices = pair_indices(gid, targetQubit);
+        pair = load_pair(realBuffer, imagBuffer, indices);
+    }
+    pairCache[lid] = pair;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    uint mask = (1 << targetQubit) - 1;
-    uint i0 = ((id >> targetQubit) << (targetQubit + 1)) | (id & mask);
-    uint i1 = i0 | (1 << targetQubit);
+    pair = pairCache[lid];
+    if (active) {
+        const float r0 = pair.x;
+        const float i0 = pair.y;
+        const float r1 = pair.z;
+        const float i1 = pair.w;
+        pair = float4(0.5f * (r0 - i0 + r1 + i1),
+                      0.5f * (r0 + i0 - r1 + i1),
+                      0.5f * (r0 + i0 + r1 - i1),
+                      0.5f * (-r0 + i0 + r1 + i1));
+    }
+    pairCache[lid] = pair;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    float r0 = realBuffer[i0];
-    float im0 = imagBuffer[i0];
-    float r1 = realBuffer[i1];
-    float im1 = imagBuffer[i1];
-
-    realBuffer[i0] = 0.5f * (r0 - im0 + r1 + im1);
-    imagBuffer[i0] = 0.5f * (r0 + im0 - r1 + im1);
-    realBuffer[i1] = 0.5f * (r0 + im0 + r1 - im1);
-    imagBuffer[i1] = 0.5f * (-r0 + im0 + r1 + im1);
+    if (active) {
+        store_pair(realBuffer, imagBuffer, indices, pairCache[lid]);
+    }
 }
 
-// SX-dagger (sqrt(X)^dagger): (1/2) * [[1-i, 1+i], [1+i, 1-i]]; conjugate-transpose of SX, SX^dagger*SX = I
 kernel void sx_dagger_gate(device float* realBuffer [[buffer(0)]],
                            device float* imagBuffer [[buffer(1)]],
                            constant uint& targetQubit [[buffer(2)]],
-                           uint id [[thread_position_in_grid]]) {
+                           constant uint& pairCount [[buffer(kPairCountBufferIndex)]],
+                           uint gid [[thread_position_in_grid]],
+                           uint lid [[thread_position_in_threadgroup]],
+                           threadgroup float4* pairCache [[threadgroup(0)]]) {
+    const bool active = gid < pairCount;
+    uint2 indices = uint2(0u);
+    float4 pair = float4(0.0f);
+    if (active) {
+        indices = pair_indices(gid, targetQubit);
+        pair = load_pair(realBuffer, imagBuffer, indices);
+    }
+    pairCache[lid] = pair;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    uint mask = (1 << targetQubit) - 1;
-    uint i0 = ((id >> targetQubit) << (targetQubit + 1)) | (id & mask);
-    uint i1 = i0 | (1 << targetQubit);
+    pair = pairCache[lid];
+    if (active) {
+        const float r0 = pair.x;
+        const float i0 = pair.y;
+        const float r1 = pair.z;
+        const float i1 = pair.w;
+        pair = float4(0.5f * (r0 + i0 + r1 - i1),
+                      0.5f * (-r0 + i0 + r1 + i1),
+                      0.5f * (r0 - i0 + r1 + i1),
+                      0.5f * (r0 + i0 - r1 + i1));
+    }
+    pairCache[lid] = pair;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    float r0 = realBuffer[i0];
-    float im0 = imagBuffer[i0];
-    float r1 = realBuffer[i1];
-    float im1 = imagBuffer[i1];
-
-    realBuffer[i0] = 0.5f * (r0 + im0 + r1 - im1);
-    imagBuffer[i0] = 0.5f * (-r0 + im0 + r1 + im1);
-    realBuffer[i1] = 0.5f * (r0 - im0 + r1 + im1);
-    imagBuffer[i1] = 0.5f * (r0 + im0 - r1 + im1);
+    if (active) {
+        store_pair(realBuffer, imagBuffer, indices, pairCache[lid]);
+    }
 }
 
-// P(theta): |1> *= e^{i theta}  (general phase; S = P(pi/2), T = P(pi/4), Z = P(pi))
 kernel void phase_gate(device float* realBuffer [[buffer(0)]],
                        device float* imagBuffer [[buffer(1)]],
                        constant uint& targetQubit [[buffer(2)]],
                        constant float& theta [[buffer(3)]],
-                       uint id [[thread_position_in_grid]]) {
+                       constant uint& pairCount [[buffer(kPairCountBufferIndex)]],
+                       uint gid [[thread_position_in_grid]],
+                       uint lid [[thread_position_in_threadgroup]],
+                       threadgroup float4* pairCache [[threadgroup(0)]]) {
+    const bool active = gid < pairCount;
+    uint2 indices = uint2(0u);
+    float4 pair = float4(0.0f);
+    if (active) {
+        indices = pair_indices(gid, targetQubit);
+        pair = load_pair(realBuffer, imagBuffer, indices);
+    }
+    pairCache[lid] = pair;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    uint mask = (1 << targetQubit) - 1;
-    uint i0 = ((id >> targetQubit) << (targetQubit + 1)) | (id & mask);
-    uint i1 = i0 | (1 << targetQubit);
+    pair = pairCache[lid];
+    if (active) {
+        const float c = cos(theta);
+        const float s = sin(theta);
+        const float r1 = pair.z;
+        const float i1 = pair.w;
+        pair.z = (r1 * c) - (i1 * s);
+        pair.w = (r1 * s) + (i1 * c);
+    }
+    pairCache[lid] = pair;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    float r1 = realBuffer[i1];
-    float im1 = imagBuffer[i1];
-    float c = cos(theta);
-    float s = sin(theta);
-
-    realBuffer[i1] = (r1 * c) - (im1 * s);
-    imagBuffer[i1] = (r1 * s) + (im1 * c);
+    if (active) {
+        store_pair(realBuffer, imagBuffer, indices, pairCache[lid]);
+    }
 }
 
-// Universal single-qubit gate U(theta, phi, lambda) (Qiskit convention):
-//   [[ cos(t/2),            -e^{i*lambda} sin(t/2)        ],
-//    [ e^{i*phi} sin(t/2),   e^{i(phi+lambda)} cos(t/2)   ]]
-// Recovers X = U(pi,0,pi), H = U(pi/2,0,pi), P(λ) = U(0,0,λ), etc.
 kernel void u_gate(device float* realBuffer [[buffer(0)]],
                    device float* imagBuffer [[buffer(1)]],
                    constant uint& targetQubit [[buffer(2)]],
                    constant float3& angles [[buffer(3)]],
-                   uint id [[thread_position_in_grid]]) {
+                   constant uint& pairCount [[buffer(kPairCountBufferIndex)]],
+                   uint gid [[thread_position_in_grid]],
+                   uint lid [[thread_position_in_threadgroup]],
+                   threadgroup float4* pairCache [[threadgroup(0)]]) {
+    const bool active = gid < pairCount;
+    uint2 indices = uint2(0u);
+    float4 pair = float4(0.0f);
+    if (active) {
+        indices = pair_indices(gid, targetQubit);
+        pair = load_pair(realBuffer, imagBuffer, indices);
+    }
+    pairCache[lid] = pair;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    uint mask = (1 << targetQubit) - 1;
-    uint i0 = ((id >> targetQubit) << (targetQubit + 1)) | (id & mask);
-    uint i1 = i0 | (1 << targetQubit);
+    pair = pairCache[lid];
+    if (active) {
+        const float theta = angles.x;
+        const float phi = angles.y;
+        const float lambda = angles.z;
+        const float c = cos(theta * 0.5f);
+        const float s = sin(theta * 0.5f);
+        const float cosL = cos(lambda);
+        const float sinL = sin(lambda);
+        const float cosP = cos(phi);
+        const float sinP = sin(phi);
+        const float cosPL = cos(phi + lambda);
+        const float sinPL = sin(phi + lambda);
+        const float r0 = pair.x;
+        const float i0 = pair.y;
+        const float r1 = pair.z;
+        const float i1 = pair.w;
+        pair = float4((c * r0) - s * ((cosL * r1) - (sinL * i1)),
+                      (c * i0) - s * ((cosL * i1) + (sinL * r1)),
+                      s * ((cosP * r0) - (sinP * i0)) + c * ((cosPL * r1) - (sinPL * i1)),
+                      s * ((cosP * i0) + (sinP * r0)) + c * ((cosPL * i1) + (sinPL * r1)));
+    }
+    pairCache[lid] = pair;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    float theta = angles.x;
-    float phi = angles.y;
-    float lambda = angles.z;
-
-    float c = cos(theta * 0.5f);
-    float s = sin(theta * 0.5f);
-
-    float cosL = cos(lambda);
-    float sinL = sin(lambda);
-    float cosP = cos(phi);
-    float sinP = sin(phi);
-    float cosPL = cos(phi + lambda);
-    float sinPL = sin(phi + lambda);
-
-    float r0 = realBuffer[i0];
-    float im0 = imagBuffer[i0];
-    float r1 = realBuffer[i1];
-    float im1 = imagBuffer[i1];
-
-    realBuffer[i0] = (c * r0) - s * ((cosL * r1) - (sinL * im1));
-    imagBuffer[i0] = (c * im0) - s * ((cosL * im1) + (sinL * r1));
-
-    realBuffer[i1] = s * ((cosP * r0) - (sinP * im0)) + c * ((cosPL * r1) - (sinPL * im1));
-    imagBuffer[i1] = s * ((cosP * im0) + (sinP * r0)) + c * ((cosPL * im1) + (sinPL * r1));
+    if (active) {
+        store_pair(realBuffer, imagBuffer, indices, pairCache[lid]);
+    }
 }
 
-// CZ: phase -1 on |11>. Symmetric in control/target.
 kernel void cz_gate(device float* realBuffer [[buffer(0)]],
                     device float* imagBuffer [[buffer(1)]],
-                    constant uint2& qubits [[buffer(2)]],
-                    uint id [[thread_position_in_grid]]) {
+                    constant uint2& packed [[buffer(2)]],
+                    constant uint& pairCount [[buffer(kPairCountBufferIndex)]],
+                    uint gid [[thread_position_in_grid]],
+                    uint lid [[thread_position_in_threadgroup]],
+                    threadgroup float4* pairCache [[threadgroup(0)]]) {
+    const uint controlMask = packed.x;
+    const uint targetQubit = packed.y;
+    const bool active = gid < pairCount;
 
-    uint controlQubit = qubits.x;
-    uint targetQubit = qubits.y;
+    uint2 indices = uint2(0u);
+    float4 pair = float4(0.0f);
+    if (active) {
+        indices = pair_indices(gid, targetQubit);
+        pair = load_pair(realBuffer, imagBuffer, indices);
+    }
+    pairCache[lid] = pair;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    uint mask = (1 << targetQubit) - 1;
-    uint i0 = ((id >> targetQubit) << (targetQubit + 1)) | (id & mask);
-    uint i1 = i0 | (1 << targetQubit);
+    pair = pairCache[lid];
+    if (active && control_mask_is_active(indices.x, controlMask)) {
+        pair.z = -pair.z;
+        pair.w = -pair.w;
+    }
+    pairCache[lid] = pair;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    if ((i1 & (1 << controlQubit)) != 0) {
-        realBuffer[i1] = -realBuffer[i1];
-        imagBuffer[i1] = -imagBuffer[i1];
+    if (active) {
+        store_pair(realBuffer, imagBuffer, indices, pairCache[lid]);
     }
 }
 
@@ -589,18 +893,15 @@ kernel void swap_gate(device float* realBuffer [[buffer(0)]],
                       device float* imagBuffer [[buffer(1)]],
                       constant uint2& qubits [[buffer(2)]],
                       uint id [[thread_position_in_grid]]) {
-
-    uint q1 = qubits.x;
-    uint q2 = qubits.y;
-
-    uint b1 = (id >> q1) & 1u;
-    uint b2 = (id >> q2) & 1u;
+    const uint q1 = qubits.x;
+    const uint q2 = qubits.y;
+    const uint b1 = (id >> q1) & 1u;
+    const uint b2 = (id >> q2) & 1u;
 
     if (b1 == 0u && b2 == 1u) {
-        uint partner = (id | (1u << q1)) & ~(1u << q2);
-
-        float tr = realBuffer[id];
-        float ti = imagBuffer[id];
+        const uint partner = (id | (1u << q1)) & ~(1u << q2);
+        const float tr = realBuffer[id];
+        const float ti = imagBuffer[id];
         realBuffer[id] = realBuffer[partner];
         imagBuffer[id] = imagBuffer[partner];
         realBuffer[partner] = tr;
