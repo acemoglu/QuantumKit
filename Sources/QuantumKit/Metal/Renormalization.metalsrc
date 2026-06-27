@@ -1,0 +1,123 @@
+//
+//  Renormalization.metalsrc
+//  QuantumKit
+//
+//  Periodic state-vector renormalization to enforce ||psi||^2 = 1.
+//
+
+#include <metal_stdlib>
+using namespace metal;
+
+inline float2 rn_two_sum(float a, float b) {
+    const float s = a + b;
+    const float bb = s - a;
+    const float err = (a - (s - bb)) + (b - bb);
+    return float2(s, err);
+}
+
+inline float2 rn_add(float2 a, float2 b) {
+    const float2 s = rn_two_sum(a.x, b.x);
+    const float lo = s.y + (a.y + b.y);
+    return rn_two_sum(s.x, lo);
+}
+
+// Pass 1A: reduce |psi_i|^2 from state amplitudes into per-threadgroup compensated partials.
+kernel void renorm_state_norm_partial(device const float* realBuffer [[buffer(0)]],
+                                      device const float* imagBuffer [[buffer(1)]],
+                                      constant uint& elementCount [[buffer(2)]],
+                                      device float* partialHi [[buffer(3)]],
+                                      device float* partialLo [[buffer(4)]],
+                                      uint globalID [[thread_position_in_grid]],
+                                      uint localID [[thread_index_in_threadgroup]],
+                                      uint groupID [[threadgroup_position_in_grid]],
+                                      uint groupSize [[threads_per_threadgroup]]) {
+    threadgroup float sharedHi[256];
+    threadgroup float sharedLo[256];
+
+    float2 local = float2(0.0f, 0.0f);
+    if (globalID < elementCount) {
+        const float r = realBuffer[globalID];
+        const float i = imagBuffer[globalID];
+        local = rn_two_sum((r * r) + (i * i), 0.0f);
+    }
+    sharedHi[localID] = local.x;
+    sharedLo[localID] = local.y;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    for (uint stride = groupSize >> 1; stride > 0; stride >>= 1) {
+        if (localID < stride) {
+            const float2 sum = rn_add(
+                float2(sharedHi[localID], sharedLo[localID]),
+                float2(sharedHi[localID + stride], sharedLo[localID + stride])
+            );
+            sharedHi[localID] = sum.x;
+            sharedLo[localID] = sum.y;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    if (localID == 0) {
+        partialHi[groupID] = sharedHi[0];
+        partialLo[groupID] = sharedLo[0];
+    }
+}
+
+// Pass 1B: recursively reduce compensated partials until one (hi, lo) remains.
+kernel void renorm_compensated_partial(device const float* inputHi [[buffer(0)]],
+                                       device const float* inputLo [[buffer(1)]],
+                                       constant uint& elementCount [[buffer(2)]],
+                                       device float* outputHi [[buffer(3)]],
+                                       device float* outputLo [[buffer(4)]],
+                                       uint globalID [[thread_position_in_grid]],
+                                       uint localID [[thread_index_in_threadgroup]],
+                                       uint groupID [[threadgroup_position_in_grid]],
+                                       uint groupSize [[threads_per_threadgroup]]) {
+    threadgroup float sharedHi[256];
+    threadgroup float sharedLo[256];
+
+    float2 local = float2(0.0f, 0.0f);
+    if (globalID < elementCount) {
+        local = float2(inputHi[globalID], inputLo[globalID]);
+    }
+    sharedHi[localID] = local.x;
+    sharedLo[localID] = local.y;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    for (uint stride = groupSize >> 1; stride > 0; stride >>= 1) {
+        if (localID < stride) {
+            const float2 sum = rn_add(
+                float2(sharedHi[localID], sharedLo[localID]),
+                float2(sharedHi[localID + stride], sharedLo[localID + stride])
+            );
+            sharedHi[localID] = sum.x;
+            sharedLo[localID] = sum.y;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    if (localID == 0) {
+        outputHi[groupID] = sharedHi[0];
+        outputLo[groupID] = sharedLo[0];
+    }
+}
+
+// Pass 2: scale every amplitude by invNorm = 1/sqrt(sum |psi_i|^2).
+kernel void renorm_scale_state(device float* realBuffer [[buffer(0)]],
+                               device float* imagBuffer [[buffer(1)]],
+                               device const float* normHi [[buffer(2)]],
+                               device const float* normLo [[buffer(3)]],
+                               constant uint& elementCount [[buffer(4)]],
+                               uint id [[thread_position_in_grid]]) {
+    if (id >= elementCount) {
+        return;
+    }
+
+    const float norm = normHi[0] + normLo[0];
+    if (!(norm > 0.0f)) {
+        return;
+    }
+
+    const float invNorm = 1.0f / sqrt(norm);
+    realBuffer[id] *= invNorm;
+    imagBuffer[id] *= invNorm;
+}

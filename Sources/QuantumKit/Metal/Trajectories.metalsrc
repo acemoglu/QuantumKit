@@ -1,0 +1,93 @@
+//
+//  Trajectories.metalsrc
+//  QuantumKit
+//
+//  Stochastic trajectory (quantum jump) kernels for large pure-state simulations.
+//
+
+#include <metal_stdlib>
+using namespace metal;
+
+inline float2 tj_two_sum(float a, float b) {
+    const float s = a + b;
+    const float bb = s - a;
+    const float err = (a - (s - bb)) + (b - bb);
+    return float2(s, err);
+}
+
+inline float2 tj_add(float2 a, float2 b) {
+    const float2 s = tj_two_sum(a.x, b.x);
+    const float lo = s.y + (a.y + b.y);
+    return tj_two_sum(s.x, lo);
+}
+
+// Computes block-local compensated partial sums of:
+//   weight * P(targetQubit == |1>)
+// Used for trajectory jump probabilities p = <psi|E1†E1|psi>.
+kernel void trajectory_weighted_population_partial(device const float* realBuffer [[buffer(0)]],
+                                                   device const float* imagBuffer [[buffer(1)]],
+                                                   constant uint& targetQubit [[buffer(2)]],
+                                                   constant float& weight [[buffer(3)]],
+                                                   constant uint& elementCount [[buffer(4)]],
+                                                   device float* partialHi [[buffer(5)]],
+                                                   device float* partialLo [[buffer(6)]],
+                                                   uint globalID [[thread_position_in_grid]],
+                                                   uint localID [[thread_index_in_threadgroup]],
+                                                   uint groupID [[threadgroup_position_in_grid]],
+                                                   uint groupSize [[threads_per_threadgroup]]) {
+    threadgroup float sharedHi[256];
+    threadgroup float sharedLo[256];
+
+    float2 local = float2(0.0f, 0.0f);
+    if (globalID < elementCount && (((globalID >> targetQubit) & 1u) != 0u)) {
+        const float r = realBuffer[globalID];
+        const float i = imagBuffer[globalID];
+        local = tj_two_sum(weight * ((r * r) + (i * i)), 0.0f);
+    }
+    sharedHi[localID] = local.x;
+    sharedLo[localID] = local.y;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    for (uint stride = groupSize >> 1; stride > 0; stride >>= 1) {
+        if (localID < stride) {
+            const float2 sum = tj_add(
+                float2(sharedHi[localID], sharedLo[localID]),
+                float2(sharedHi[localID + stride], sharedLo[localID + stride])
+            );
+            sharedHi[localID] = sum.x;
+            sharedLo[localID] = sum.y;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    if (localID == 0) {
+        partialHi[groupID] = sharedHi[0];
+        partialLo[groupID] = sharedLo[0];
+    }
+}
+
+// Phase-damping jump branch (E1 = sqrt(lambda) |1><1| up to normalization):
+// zero |0> amplitude of each pair, keep |1> amplitude.
+kernel void phase_damping_jump(device float* realBuffer [[buffer(0)]],
+                               device float* imagBuffer [[buffer(1)]],
+                               constant uint& targetQubit [[buffer(2)]],
+                               uint id [[thread_position_in_grid]]) {
+    const uint mask = (1u << targetQubit) - 1u;
+    const uint i0 = ((id >> targetQubit) << (targetQubit + 1u)) | (id & mask);
+    realBuffer[i0] = 0.0f;
+    imagBuffer[i0] = 0.0f;
+}
+
+// Phase-damping no-jump branch (E0 = |0><0| + sqrt(1-lambda)|1><1|):
+// scale |1> amplitude by sqrt(1-lambda), keep |0> unchanged.
+kernel void phase_damping_no_jump(device float* realBuffer [[buffer(0)]],
+                                  device float* imagBuffer [[buffer(1)]],
+                                  constant uint& targetQubit [[buffer(2)]],
+                                  constant float& factor [[buffer(3)]],
+                                  uint id [[thread_position_in_grid]]) {
+    const uint mask = (1u << targetQubit) - 1u;
+    const uint i0 = ((id >> targetQubit) << (targetQubit + 1u)) | (id & mask);
+    const uint i1 = i0 | (1u << targetQubit);
+    realBuffer[i1] *= factor;
+    imagBuffer[i1] *= factor;
+}

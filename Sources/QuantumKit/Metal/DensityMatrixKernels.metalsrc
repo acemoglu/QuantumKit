@@ -1,0 +1,183 @@
+//
+//  DensityMatrixKernels.metalsrc
+//  QuantumKit
+//
+//  Exact open-system density-matrix evolution kernels.
+//
+
+#include <metal_stdlib>
+using namespace metal;
+
+inline float2 dm_complex_add(float2 a, float2 b) {
+    return float2(a.x + b.x, a.y + b.y);
+}
+
+inline float2 dm_complex_mul(float2 a, float2 b) {
+    return float2((a.x * b.x) - (a.y * b.y), (a.x * b.y) + (a.y * b.x));
+}
+
+inline float2 dm_complex_conj(float2 z) {
+    return float2(z.x, -z.y);
+}
+
+inline uint dm_index(uint row, uint col, uint stateCount) {
+    return row * stateCount + col;
+}
+
+kernel void dm_left_multiply_single_qubit(device const float* inReal [[buffer(0)]],
+                                          device const float* inImag [[buffer(1)]],
+                                          device float* outReal [[buffer(2)]],
+                                          device float* outImag [[buffer(3)]],
+                                          constant uint& stateCount [[buffer(4)]],
+                                          constant uint& targetQubit [[buffer(5)]],
+                                          constant uint& controlMask [[buffer(6)]],
+                                          constant float2* gateMatrix [[buffer(7)]],
+                                          uint id [[thread_position_in_grid]]) {
+    const uint elementCount = stateCount * stateCount;
+    if (id >= elementCount) {
+        return;
+    }
+
+    const uint row = id / stateCount;
+    const uint col = id - row * stateCount;
+    const uint targetMask = (1u << targetQubit);
+
+    if (controlMask != 0u && ((row & controlMask) != controlMask)) {
+        outReal[id] = inReal[id];
+        outImag[id] = inImag[id];
+        return;
+    }
+
+    const uint row0 = row & ~targetMask;
+    const uint row1 = row0 | targetMask;
+    const uint rowBit = (row & targetMask) != 0u ? 1u : 0u;
+
+    const uint idx0 = dm_index(row0, col, stateCount);
+    const uint idx1 = dm_index(row1, col, stateCount);
+
+    const float2 rho0 = float2(inReal[idx0], inImag[idx0]);
+    const float2 rho1 = float2(inReal[idx1], inImag[idx1]);
+
+    const float2 u00 = gateMatrix[0];
+    const float2 u01 = gateMatrix[1];
+    const float2 u10 = gateMatrix[2];
+    const float2 u11 = gateMatrix[3];
+
+    float2 result = float2(0.0f, 0.0f);
+    if (rowBit == 0u) {
+        result = dm_complex_add(dm_complex_mul(u00, rho0), dm_complex_mul(u01, rho1));
+    } else {
+        result = dm_complex_add(dm_complex_mul(u10, rho0), dm_complex_mul(u11, rho1));
+    }
+
+    outReal[id] = result.x;
+    outImag[id] = result.y;
+}
+
+kernel void dm_right_multiply_single_qubit_dagger(device const float* inReal [[buffer(0)]],
+                                                   device const float* inImag [[buffer(1)]],
+                                                   device float* outReal [[buffer(2)]],
+                                                   device float* outImag [[buffer(3)]],
+                                                   constant uint& stateCount [[buffer(4)]],
+                                                   constant uint& targetQubit [[buffer(5)]],
+                                                   constant uint& controlMask [[buffer(6)]],
+                                                   constant float2* gateMatrix [[buffer(7)]],
+                                                   uint id [[thread_position_in_grid]]) {
+    const uint elementCount = stateCount * stateCount;
+    if (id >= elementCount) {
+        return;
+    }
+
+    const uint row = id / stateCount;
+    const uint col = id - row * stateCount;
+    const uint targetMask = (1u << targetQubit);
+
+    if (controlMask != 0u && ((col & controlMask) != controlMask)) {
+        outReal[id] = inReal[id];
+        outImag[id] = inImag[id];
+        return;
+    }
+
+    const uint col0 = col & ~targetMask;
+    const uint col1 = col0 | targetMask;
+    const uint colBit = (col & targetMask) != 0u ? 1u : 0u;
+
+    const uint idx0 = dm_index(row, col0, stateCount);
+    const uint idx1 = dm_index(row, col1, stateCount);
+
+    const float2 rho0 = float2(inReal[idx0], inImag[idx0]);
+    const float2 rho1 = float2(inReal[idx1], inImag[idx1]);
+
+    const float2 u00 = gateMatrix[0];
+    const float2 u01 = gateMatrix[1];
+    const float2 u10 = gateMatrix[2];
+    const float2 u11 = gateMatrix[3];
+
+    float2 result = float2(0.0f, 0.0f);
+    if (colBit == 0u) {
+        result = dm_complex_add(
+            dm_complex_mul(rho0, dm_complex_conj(u00)),
+            dm_complex_mul(rho1, dm_complex_conj(u10))
+        );
+    } else {
+        result = dm_complex_add(
+            dm_complex_mul(rho0, dm_complex_conj(u01)),
+            dm_complex_mul(rho1, dm_complex_conj(u11))
+        );
+    }
+
+    outReal[id] = result.x;
+    outImag[id] = result.y;
+}
+
+kernel void dm_apply_kraus_single_qubit(device const float* inReal [[buffer(0)]],
+                                        device const float* inImag [[buffer(1)]],
+                                        device float* outReal [[buffer(2)]],
+                                        device float* outImag [[buffer(3)]],
+                                        constant uint& stateCount [[buffer(4)]],
+                                        constant uint& targetQubit [[buffer(5)]],
+                                        constant uint& krausCount [[buffer(6)]],
+                                        constant float2* krausData [[buffer(7)]],
+                                        uint id [[thread_position_in_grid]]) {
+    const uint elementCount = stateCount * stateCount;
+    if (id >= elementCount) {
+        return;
+    }
+
+    const uint row = id / stateCount;
+    const uint col = id - row * stateCount;
+    const uint targetMask = (1u << targetQubit);
+
+    const uint row0 = row & ~targetMask;
+    const uint row1 = row0 | targetMask;
+    const uint col0 = col & ~targetMask;
+    const uint col1 = col0 | targetMask;
+
+    const uint rowBit = (row & targetMask) != 0u ? 1u : 0u;
+    const uint colBit = (col & targetMask) != 0u ? 1u : 0u;
+
+    const float2 rho00 = float2(inReal[dm_index(row0, col0, stateCount)], inImag[dm_index(row0, col0, stateCount)]);
+    const float2 rho01 = float2(inReal[dm_index(row0, col1, stateCount)], inImag[dm_index(row0, col1, stateCount)]);
+    const float2 rho10 = float2(inReal[dm_index(row1, col0, stateCount)], inImag[dm_index(row1, col0, stateCount)]);
+    const float2 rho11 = float2(inReal[dm_index(row1, col1, stateCount)], inImag[dm_index(row1, col1, stateCount)]);
+
+    float2 accum = float2(0.0f, 0.0f);
+    for (uint k = 0u; k < krausCount; k++) {
+        const uint offset = k * 4u;
+        const float2 e_r0 = krausData[offset + (rowBit * 2u) + 0u];
+        const float2 e_r1 = krausData[offset + (rowBit * 2u) + 1u];
+
+        const float2 e_c0 = dm_complex_conj(krausData[offset + (colBit * 2u) + 0u]);
+        const float2 e_c1 = dm_complex_conj(krausData[offset + (colBit * 2u) + 1u]);
+
+        float2 term = float2(0.0f, 0.0f);
+        term = dm_complex_add(term, dm_complex_mul(dm_complex_mul(e_r0, rho00), e_c0));
+        term = dm_complex_add(term, dm_complex_mul(dm_complex_mul(e_r0, rho01), e_c1));
+        term = dm_complex_add(term, dm_complex_mul(dm_complex_mul(e_r1, rho10), e_c0));
+        term = dm_complex_add(term, dm_complex_mul(dm_complex_mul(e_r1, rho11), e_c1));
+        accum = dm_complex_add(accum, term);
+    }
+
+    outReal[id] = accum.x;
+    outImag[id] = accum.y;
+}

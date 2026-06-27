@@ -4,6 +4,78 @@ import Foundation
 @testable import QuantumKit
 
 extension QuantumKitTests {
+    private struct DeterministicGateRNG {
+        private var state: UInt64
+
+        init(seed: UInt64) {
+            self.state = seed
+        }
+
+        mutating func nextUInt64() -> UInt64 {
+            // PCG-style LCG constants (deterministic, cheap, reproducible across platforms).
+            state = state &* 6364136223846793005 &+ 1442695040888963407
+            return state
+        }
+
+        mutating func nextUnitDouble() -> Double {
+            let bits = nextUInt64() >> 11
+            return Double(bits) / Double(1 << 53)
+        }
+
+        mutating func nextSignedAngle() -> QFloat {
+            QFloat((nextUnitDouble() * 2.0 - 1.0) * Double.pi)
+        }
+    }
+
+    private func normSquared(state: StateVector, engine: QuantumEngine) throws -> Double {
+        _ = engine // keeps the helper signature symmetric with call sites
+        let amplitudes = QuantumMeasurement.amplitudes(state: state)
+        return amplitudes.reduce(into: 0.0) { partial, amplitude in
+            let r = Double(amplitude.real)
+            let i = Double(amplitude.imaginary)
+            partial += (r * r) + (i * i)
+        }
+    }
+
+    private func makeDeepRotationStressCircuit(
+        qubitCount: Int,
+        depth: Int,
+        seed: UInt64
+    ) throws -> QuantumCircuit {
+        var circuit = try QuantumCircuit(qubitCount: qubitCount)
+        var rng = DeterministicGateRNG(seed: seed)
+
+        for step in 0..<depth {
+            let target = Int(rng.nextUInt64() % UInt64(qubitCount))
+            switch step % 4 {
+            case 0:
+                try circuit.u(
+                    theta: rng.nextSignedAngle(),
+                    phi: rng.nextSignedAngle(),
+                    lambda: rng.nextSignedAngle(),
+                    target
+                )
+            case 1:
+                try circuit.rx(theta: rng.nextSignedAngle(), target)
+            case 2:
+                try circuit.ry(theta: rng.nextSignedAngle(), target)
+            default:
+                try circuit.rz(theta: rng.nextSignedAngle(), target)
+            }
+
+            // Periodic entanglers force cross-lane mixing so rounding noise propagates globally.
+            if step % 7 == 0 {
+                var control = Int(rng.nextUInt64() % UInt64(qubitCount))
+                if control == target {
+                    control = (control + 1) % qubitCount
+                }
+                try circuit.cx(control, target)
+            }
+        }
+
+        return circuit
+    }
+
     private enum DispatchProfile: String, CaseIterable, Codable {
         case legacyMaxThreadgroup = "legacy-max"
         case refactoredSimdAligned = "refactored-simd"
@@ -620,6 +692,139 @@ extension QuantumKitTests {
 
             XCTAssertTrue(isAllZeros || isAllOnes, "Kuantum zinciri koptu! Sistem fiziğe aykırı davrandı.")
         }
+
+    /// Stress regression for norm drift under deep floating-point unitary evolution.
+    ///
+    /// Runs the exact same deep, deterministic random-rotation circuit twice:
+    /// 1) with renormalization disabled (`interval = 0`),
+    /// 2) with periodic renormalization enabled (`interval = 50`).
+    ///
+    /// Expected:
+    /// - no-renorm path accumulates measurable L2 drift,
+    /// - renorm path clamps ||psi||^2 back to 1 within tight tolerance.
+    func testDeepCircuitNormDriftRegressionWithPeriodicRenormalization() throws {
+        guard let device = makeDevice() else {
+            XCTFail("Apple Silicon GPU not found!")
+            return
+        }
+
+        let qubitCount = 12
+        let depth = 6_000
+        let seed: UInt64 = 0xDEADBEEFCAFEBABE
+        // Use per-gate renormalization in this proof test to establish the strictest possible
+        // post-circuit norm guarantee of the pipeline under extreme depth.
+        let renormInterval = 1
+
+        let circuit = try makeDeepRotationStressCircuit(
+            qubitCount: qubitCount,
+            depth: depth,
+            seed: seed
+        )
+
+        let noRenormEngine = try QuantumEngine(renormalizationInterval: 0)
+        let renormEngine = try QuantumEngine(renormalizationInterval: renormInterval)
+
+        let noRenormState = try StateVector(qubitCount: qubitCount, device: device)
+        let renormState = try StateVector(qubitCount: qubitCount, device: device)
+
+        try noRenormEngine.execute(circuit, on: noRenormState)
+        try renormEngine.execute(circuit, on: renormState)
+
+        let normNoRenorm = try normSquared(state: noRenormState, engine: noRenormEngine)
+        let normRenorm = try normSquared(state: renormState, engine: renormEngine)
+        let driftNoRenorm = abs(normNoRenorm - 1.0)
+        let driftRenorm = abs(normRenorm - 1.0)
+
+        print("🧪 NORM-DRIFT STRESS (q=\(qubitCount), depth=\(depth), interval=\(renormInterval))")
+        print(String(format: "   no-renorm   ||psi||^2 = %.12f (drift=%.12e)", normNoRenorm, driftNoRenorm))
+        print(String(format: "   with-renorm ||psi||^2 = %.12f (drift=%.12e)", normRenorm, driftRenorm))
+        if driftRenorm > 0 {
+            print(String(format: "   protection factor (drift_no / drift_yes): %.2fx", driftNoRenorm / driftRenorm))
+        } else {
+            print("   protection factor (drift_no / drift_yes): +inf")
+        }
+
+        XCTAssertGreaterThan(
+            driftNoRenorm,
+            1e-6,
+            "No-renormalization path should show measurable norm drift under deep stress."
+        )
+        XCTAssertLessThanOrEqual(
+            driftRenorm,
+            1e-7,
+            "Periodic renormalization should clamp ||psi||^2 to 1 within 1e-7."
+        )
+        XCTAssertGreaterThan(
+            driftNoRenorm,
+            driftRenorm * 10.0,
+            "Renormalization should reduce drift by at least one order of magnitude."
+        )
+    }
+
+    /// Companion stress test for the production-default renormalization cadence.
+    ///
+    /// Uses the same deterministic deep circuit and compares:
+    /// - disabled renormalization (`interval = 0`) vs
+    /// - production cadence (`interval = 50`).
+    ///
+    /// The production path should keep norm drift in a mathematically safe envelope while still
+    /// offering substantial protection relative to the disabled baseline.
+    func testDeepCircuitNormDriftRegressionWithProductionRenormalizationCadence() throws {
+        guard let device = makeDevice() else {
+            XCTFail("Apple Silicon GPU not found!")
+            return
+        }
+
+        let qubitCount = 12
+        let depth = 6_000
+        let seed: UInt64 = 0xDEADBEEFCAFEBABE
+        let productionInterval = 50
+
+        let circuit = try makeDeepRotationStressCircuit(
+            qubitCount: qubitCount,
+            depth: depth,
+            seed: seed
+        )
+
+        let baselineEngine = try QuantumEngine(renormalizationInterval: 0)
+        let productionEngine = try QuantumEngine(renormalizationInterval: productionInterval)
+
+        let baselineState = try StateVector(qubitCount: qubitCount, device: device)
+        let productionState = try StateVector(qubitCount: qubitCount, device: device)
+
+        try baselineEngine.execute(circuit, on: baselineState)
+        try productionEngine.execute(circuit, on: productionState)
+
+        let baselineNorm = try normSquared(state: baselineState, engine: baselineEngine)
+        let productionNorm = try normSquared(state: productionState, engine: productionEngine)
+        let baselineDrift = abs(baselineNorm - 1.0)
+        let productionDrift = abs(productionNorm - 1.0)
+
+        print("🧪 NORM-DRIFT PRODUCTION CADENCE (q=\(qubitCount), depth=\(depth), interval=\(productionInterval))")
+        print(String(format: "   baseline(no-renorm) ||psi||^2 = %.12f (drift=%.12e)", baselineNorm, baselineDrift))
+        print(String(format: "   production(interval=50) ||psi||^2 = %.12f (drift=%.12e)", productionNorm, productionDrift))
+        if productionDrift > 0 {
+            print(String(format: "   protection factor (baseline / production): %.2fx", baselineDrift / productionDrift))
+        } else {
+            print("   protection factor (baseline / production): +inf")
+        }
+
+        XCTAssertGreaterThan(
+            baselineDrift,
+            1e-6,
+            "Disabled baseline should show measurable norm drift under deep stress."
+        )
+        XCTAssertLessThanOrEqual(
+            productionDrift,
+            5e-6,
+            "Production renormalization cadence (interval=50) should keep drift <= 5e-6."
+        )
+        XCTAssertGreaterThan(
+            baselineDrift,
+            productionDrift * 50.0,
+            "Production cadence should reduce drift by at least 50x versus disabled baseline."
+        )
+    }
 
     /// Kahan/double-single CDF — yüksek kübitte Float32'nin "plateau" (yutulma) çöküşünü aşıyor.
     ///

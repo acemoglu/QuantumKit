@@ -3,6 +3,12 @@ import Metal
 
 extension QuantumEngine {
     static let pairCountBufferIndex = 15
+    struct RenormalizationScratch {
+        let hiA: MTLBuffer
+        let loA: MTLBuffer
+        let hiB: MTLBuffer
+        let loB: MTLBuffer
+    }
 
     /// Uses a SIMD-aligned width so each threadgroup maps cleanly onto SIMDs while still pushing
     /// occupancy near the hardware maximum.
@@ -44,6 +50,87 @@ extension QuantumEngine {
         encoder.dispatchThreads(threadsPerGrid, threadsPerThreadgroup: threadsPerThreadgroup)
     }
 
+    func shouldRenormalize(afterAppliedGateCount gateCount: Int) -> Bool {
+        renormalizationInterval > 0 && gateCount % renormalizationInterval == 0
+    }
+
+    func renormBlockCount(for elementCount: Int) -> Int {
+        max((elementCount + Self.renormalizationBlockSize - 1) / Self.renormalizationBlockSize, 1)
+    }
+
+    func makeRenormalizationScratch(stateCount: Int) throws -> RenormalizationScratch {
+        let maxPartialCount = renormBlockCount(for: stateCount)
+        let bytes = maxPartialCount * MemoryLayout<QFloat>.stride
+        return RenormalizationScratch(
+            hiA: try bufferPool.acquire(length: bytes),
+            loA: try bufferPool.acquire(length: bytes),
+            hiB: try bufferPool.acquire(length: bytes),
+            loB: try bufferPool.acquire(length: bytes)
+        )
+    }
+
+    func releaseRenormalizationScratch(_ scratch: RenormalizationScratch) {
+        bufferPool.release(scratch.hiA)
+        bufferPool.release(scratch.loA)
+        bufferPool.release(scratch.hiB)
+        bufferPool.release(scratch.loB)
+    }
+
+    func encodeStateRenormalization(
+        encoder: MTLComputeCommandEncoder,
+        state: StateVector,
+        scratch: RenormalizationScratch
+    ) throws {
+        let blockSize = Self.renormalizationBlockSize
+        let threadgroupSize = MTLSize(width: blockSize, height: 1, depth: 1)
+
+        var stateElementCount = UInt32(state.stateCount)
+        var partialCount = renormBlockCount(for: state.stateCount)
+
+        encoder.setComputePipelineState(pipelines.renormStateNormPartial)
+        encoder.setBuffer(state.realBuffer, offset: 0, index: 0)
+        encoder.setBuffer(state.imagBuffer, offset: 0, index: 1)
+        encoder.setBytes(&stateElementCount, length: MemoryLayout<UInt32>.stride, index: 2)
+        encoder.setBuffer(scratch.hiA, offset: 0, index: 3)
+        encoder.setBuffer(scratch.loA, offset: 0, index: 4)
+        encoder.dispatchThreadgroups(
+            MTLSize(width: partialCount, height: 1, depth: 1),
+            threadsPerThreadgroup: threadgroupSize
+        )
+
+        var readHi = scratch.hiA
+        var readLo = scratch.loA
+        var writeHi = scratch.hiB
+        var writeLo = scratch.loB
+
+        while partialCount > 1 {
+            var partialElementCount = UInt32(partialCount)
+            let nextCount = renormBlockCount(for: partialCount)
+
+            encoder.setComputePipelineState(pipelines.renormCompensatedPartial)
+            encoder.setBuffer(readHi, offset: 0, index: 0)
+            encoder.setBuffer(readLo, offset: 0, index: 1)
+            encoder.setBytes(&partialElementCount, length: MemoryLayout<UInt32>.stride, index: 2)
+            encoder.setBuffer(writeHi, offset: 0, index: 3)
+            encoder.setBuffer(writeLo, offset: 0, index: 4)
+            encoder.dispatchThreadgroups(
+                MTLSize(width: nextCount, height: 1, depth: 1),
+                threadsPerThreadgroup: threadgroupSize
+            )
+
+            swap(&readHi, &writeHi)
+            swap(&readLo, &writeLo)
+            partialCount = nextCount
+        }
+
+        dispatchFullStateKernel(encoder: encoder, pipeline: pipelines.renormScale, state: state) { encoder in
+            var elementCount = UInt32(state.stateCount)
+            encoder.setBuffer(readHi, offset: 0, index: 2)
+            encoder.setBuffer(readLo, offset: 0, index: 3)
+            encoder.setBytes(&elementCount, length: MemoryLayout<UInt32>.stride, index: 4)
+        }
+    }
+
     func dispatchFullStateKernel(
         encoder: MTLComputeCommandEncoder,
         pipeline: MTLComputePipelineState,
@@ -66,12 +153,29 @@ extension QuantumEngine {
     }
 
     func executeUnitaryGate(_ gate: Gate, on state: StateVector) throws {
+        var gateCounter = 0
+        try executeUnitaryGate(gate, on: state, gateCounter: &gateCounter)
+    }
+
+    func executeUnitaryGate(_ gate: Gate, on state: StateVector, gateCounter: inout Int) throws {
         guard let commandBuffer = commandQueue.makeCommandBuffer(),
               let computeEncoder = commandBuffer.makeComputeCommandEncoder() else {
             throw QuantumEngineError.commandBufferCreationFailed
         }
+        var scratch: RenormalizationScratch?
+        defer {
+            if let scratch {
+                releaseRenormalizationScratch(scratch)
+            }
+        }
 
         encodeUnitaryGate(gate, encoder: computeEncoder, state: state)
+        gateCounter += 1
+        if shouldRenormalize(afterAppliedGateCount: gateCounter) {
+            let localScratch = try makeRenormalizationScratch(stateCount: state.stateCount)
+            scratch = localScratch
+            try encodeStateRenormalization(encoder: computeEncoder, state: state, scratch: localScratch)
+        }
 
         computeEncoder.endEncoding()
         commandBuffer.commit()
@@ -82,15 +186,35 @@ extension QuantumEngine {
     }
 
     func flushUnitaryGates(_ gates: [Gate], on state: StateVector) throws {
+        var gateCounter = 0
+        try flushUnitaryGates(gates, on: state, gateCounter: &gateCounter)
+    }
+
+    func flushUnitaryGates(_ gates: [Gate], on state: StateVector, gateCounter: inout Int) throws {
         guard !gates.isEmpty else { return }
 
         guard let commandBuffer = commandQueue.makeCommandBuffer(),
               let computeEncoder = commandBuffer.makeComputeCommandEncoder() else {
             throw QuantumEngineError.commandBufferCreationFailed
         }
+        var scratch: RenormalizationScratch?
+        defer {
+            if let scratch {
+                releaseRenormalizationScratch(scratch)
+            }
+        }
 
         for gate in gates {
             encodeUnitaryGate(gate, encoder: computeEncoder, state: state)
+            gateCounter += 1
+            if shouldRenormalize(afterAppliedGateCount: gateCounter) {
+                if scratch == nil {
+                    scratch = try makeRenormalizationScratch(stateCount: state.stateCount)
+                }
+                if let scratch {
+                    try encodeStateRenormalization(encoder: computeEncoder, state: state, scratch: scratch)
+                }
+            }
         }
 
         computeEncoder.endEncoding()

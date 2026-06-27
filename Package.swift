@@ -24,7 +24,10 @@ let package = Package(
                 // scan/collapse path. Using a non-`.metal` extension keeps the raw text in the
                 // bundle on every toolchain, so CLI and Xcode behave identically.
                 .copy("Metal/Gates.metalsrc"),
-                .copy("Metal/GateKernels.metalsrc")
+                .copy("Metal/GateKernels.metalsrc"),
+                .copy("Metal/Renormalization.metalsrc"),
+                .copy("Metal/DensityMatrixKernels.metalsrc"),
+                .copy("Metal/Trajectories.metalsrc")
             ]
         ),
         .testTarget(

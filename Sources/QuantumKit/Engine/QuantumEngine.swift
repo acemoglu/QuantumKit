@@ -63,7 +63,13 @@ public struct Pipelines: @unchecked Sendable {
     let resetQubit: MTLComputePipelineState
     let amplitudeDampingJump: MTLComputePipelineState
     let amplitudeDampingNoJump: MTLComputePipelineState
+    let phaseDampingJump: MTLComputePipelineState
+    let phaseDampingNoJump: MTLComputePipelineState
+    let trajectoryWeightedPopulationPartial: MTLComputePipelineState
     let normalize: MTLComputePipelineState
+    let renormStateNormPartial: MTLComputePipelineState
+    let renormCompensatedPartial: MTLComputePipelineState
+    let renormScale: MTLComputePipelineState
 
     init(device: MTLDevice, library: MTLLibrary, preciseLibrary: MTLLibrary) throws {
         guard let hFunc = library.makeFunction(name: "hadamard_gate") else { throw QuantumEngineError.functionNotFound("hadamard_gate") }
@@ -173,8 +179,26 @@ public struct Pipelines: @unchecked Sendable {
         guard let ampDampingNoJumpFunc = library.makeFunction(name: "amplitude_damping_no_jump") else { throw QuantumEngineError.functionNotFound("amplitude_damping_no_jump") }
         self.amplitudeDampingNoJump = try device.makeComputePipelineState(function: ampDampingNoJumpFunc)
 
+        guard let phaseDampingJumpFunc = library.makeFunction(name: "phase_damping_jump") else { throw QuantumEngineError.functionNotFound("phase_damping_jump") }
+        self.phaseDampingJump = try device.makeComputePipelineState(function: phaseDampingJumpFunc)
+
+        guard let phaseDampingNoJumpFunc = library.makeFunction(name: "phase_damping_no_jump") else { throw QuantumEngineError.functionNotFound("phase_damping_no_jump") }
+        self.phaseDampingNoJump = try device.makeComputePipelineState(function: phaseDampingNoJumpFunc)
+
+        guard let trajectoryWeightedPopFunc = preciseLibrary.makeFunction(name: "trajectory_weighted_population_partial") else { throw QuantumEngineError.functionNotFound("trajectory_weighted_population_partial") }
+        self.trajectoryWeightedPopulationPartial = try device.makeComputePipelineState(function: trajectoryWeightedPopFunc)
+
         guard let normalizeFunc = library.makeFunction(name: "normalize_state_vector") else { throw QuantumEngineError.functionNotFound("normalize_state_vector") }
         self.normalize = try device.makeComputePipelineState(function: normalizeFunc)
+
+        guard let renormStatePartialFunc = preciseLibrary.makeFunction(name: "renorm_state_norm_partial") else { throw QuantumEngineError.functionNotFound("renorm_state_norm_partial") }
+        self.renormStateNormPartial = try device.makeComputePipelineState(function: renormStatePartialFunc)
+
+        guard let renormCompensatedPartialFunc = preciseLibrary.makeFunction(name: "renorm_compensated_partial") else { throw QuantumEngineError.functionNotFound("renorm_compensated_partial") }
+        self.renormCompensatedPartial = try device.makeComputePipelineState(function: renormCompensatedPartialFunc)
+
+        guard let renormScaleFunc = library.makeFunction(name: "renorm_scale_state") else { throw QuantumEngineError.functionNotFound("renorm_scale_state") }
+        self.renormScale = try device.makeComputePipelineState(function: renormScaleFunc)
 
     }
 }
@@ -235,11 +259,13 @@ final class BufferPool: @unchecked Sendable {
 public final class QuantumEngine: @unchecked Sendable {
 
     static let scanBlockSize = 256
+    static let renormalizationBlockSize = 256
 
     let device: MTLDevice
     let commandQueue: MTLCommandQueue
     let pipelines: Pipelines
     let bufferPool: BufferPool
+    public let renormalizationInterval: Int
 
     static func loadMetalLibrary(device: MTLDevice) throws -> MTLLibrary {
         if let library = try? device.makeDefaultLibrary(bundle: Bundle.module) {
@@ -279,7 +305,7 @@ public final class QuantumEngine: @unchecked Sendable {
     /// from these sources, so they are concatenated into a single translation unit here. Duplicate
     /// `#include <metal_stdlib>` / `using namespace metal;` lines across the files are harmless.
     static func metalShaderSource() throws -> String {
-        let metalFileNames = ["Gates", "GateKernels"]
+        let metalFileNames = ["Gates", "GateKernels", "Renormalization", "Trajectories"]
         let bundle = Bundle.module
 
         var combined = ""
@@ -298,9 +324,10 @@ public final class QuantumEngine: @unchecked Sendable {
         return combined
     }
 
-    public init() throws {
+    public init(renormalizationInterval: Int = 50) throws {
         guard let defaultDevice = MTLCreateSystemDefaultDevice() else { throw QuantumEngineError.deviceNotFound }
         self.device = defaultDevice
+        self.renormalizationInterval = max(0, renormalizationInterval)
 
         guard let queue = device.makeCommandQueue() else { throw QuantumEngineError.commandQueueCreationFailed }
         self.commandQueue = queue
@@ -336,10 +363,23 @@ public final class QuantumEngine: @unchecked Sendable {
               let computeEncoder = commandBuffer.makeComputeCommandEncoder() else {
             throw QuantumEngineError.commandBufferCreationFailed
         }
+        var gateCounters = [Int](repeating: 0, count: states.count)
+        var renormScratchByState: [ObjectIdentifier: RenormalizationScratch] = [:]
+        defer {
+            for scratch in renormScratchByState.values {
+                releaseRenormalizationScratch(scratch)
+            }
+        }
 
         for gate in circuit.gates {
-            for state in states {
+            for (index, state) in states.enumerated() {
                 encodeUnitaryGate(gate, encoder: computeEncoder, state: state)
+                gateCounters[index] += 1
+                guard shouldRenormalize(afterAppliedGateCount: gateCounters[index]) else { continue }
+                let key = ObjectIdentifier(state)
+                let scratch = try renormScratchByState[key] ?? makeRenormalizationScratch(stateCount: state.stateCount)
+                renormScratchByState[key] = scratch
+                try encodeStateRenormalization(encoder: computeEncoder, state: state, scratch: scratch)
             }
         }
 
@@ -365,11 +405,12 @@ public final class QuantumEngine: @unchecked Sendable {
         let noiseEnabled = noise?.hasGateNoise == true
         var measurementOutcomes: [[Int]] = []
         var pendingUnitaryGates: [Gate] = []
+        var unitaryGateCounter = 0
 
         for gate in circuit.gates {
             switch gate {
             case .measure(let qubits):
-                try flushUnitaryGates(pendingUnitaryGates, on: state)
+                try flushUnitaryGates(pendingUnitaryGates, on: state, gateCounter: &unitaryGateCounter)
                 pendingUnitaryGates.removeAll(keepingCapacity: true)
 
                 let outcome = try executePartialMeasurementCollapse(
@@ -381,15 +422,15 @@ public final class QuantumEngine: @unchecked Sendable {
                 measurementOutcomes.append(measuredBits(outcome: outcome, qubits: qubits))
 
             case .reset(let qubit):
-                try flushUnitaryGates(pendingUnitaryGates, on: state)
+                try flushUnitaryGates(pendingUnitaryGates, on: state, gateCounter: &unitaryGateCounter)
                 pendingUnitaryGates.removeAll(keepingCapacity: true)
                 try executeResetQubit(on: state, qubit: qubit, rng: &rng)
 
             default:
                 if noiseEnabled, let noise {
-                    try flushUnitaryGates(pendingUnitaryGates, on: state)
+                    try flushUnitaryGates(pendingUnitaryGates, on: state, gateCounter: &unitaryGateCounter)
                     pendingUnitaryGates.removeAll(keepingCapacity: true)
-                    try executeUnitaryGate(gate, on: state)
+                    try executeUnitaryGate(gate, on: state, gateCounter: &unitaryGateCounter)
                     if noise.appliesDepolarizing {
                         try applyDepolarizingNoise(
                             after: gate,
@@ -410,7 +451,7 @@ public final class QuantumEngine: @unchecked Sendable {
                         try applyPhaseDamping(
                             after: gate,
                             on: state,
-                            flipProbability: noise.effectivePhaseFlipProbability,
+                            flipProbability: noise.phaseDampingProbability,
                             rng: &rng
                         )
                     }
@@ -420,7 +461,7 @@ public final class QuantumEngine: @unchecked Sendable {
             }
         }
 
-        try flushUnitaryGates(pendingUnitaryGates, on: state)
+        try flushUnitaryGates(pendingUnitaryGates, on: state, gateCounter: &unitaryGateCounter)
         return CircuitExecutionResult(measurementOutcomes: measurementOutcomes)
     }
 }
