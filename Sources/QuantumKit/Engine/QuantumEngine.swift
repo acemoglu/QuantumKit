@@ -285,8 +285,8 @@ public final class QuantumEngine: @unchecked Sendable {
         var combined = ""
         for name in metalFileNames {
             let candidateURLs = [
-                bundle.url(forResource: name, withExtension: "metal", subdirectory: "Metal"),
-                bundle.url(forResource: name, withExtension: "metal"),
+                bundle.url(forResource: name, withExtension: "metalsrc", subdirectory: "Metal"),
+                bundle.url(forResource: name, withExtension: "metalsrc"),
             ]
             guard let metalURL = candidateURLs.compactMap({ $0 }).first else {
                 throw QuantumEngineError.libraryNotFound

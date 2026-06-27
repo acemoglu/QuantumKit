@@ -16,8 +16,15 @@ let package = Package(
         .target(
             name: "QuantumKit",
             resources: [
-                .process("Metal/Gates.metal"),
-                .process("Metal/GateKernels.metal")
+                // Shaders are bundled as raw text via the `.metalsrc` extension (not `.metal`) and
+                // compiled at runtime. Xcode's build rule compiles any bundled `.metal` file into a
+                // `default.metallib` and drops the raw source, regardless of `.process` vs `.copy`.
+                // That breaks `loadPreciseLibrary`, which must recompile the shaders from source
+                // with fast-math disabled to preserve the compensated (Kahan) summation in the
+                // scan/collapse path. Using a non-`.metal` extension keeps the raw text in the
+                // bundle on every toolchain, so CLI and Xcode behave identically.
+                .copy("Metal/Gates.metalsrc"),
+                .copy("Metal/GateKernels.metalsrc")
             ]
         ),
         .testTarget(
