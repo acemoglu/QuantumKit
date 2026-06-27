@@ -269,8 +269,11 @@ public final class QuantumEngine: @unchecked Sendable {
         configure(encoder)
 
         let threadsPerGrid = MTLSize(width: pairCount, height: 1, depth: 1)
-        let executionWidth = pipeline.threadExecutionWidth
-        let threadsPerThreadgroup = MTLSize(width: min(executionWidth, pairCount), height: 1, depth: 1)
+        // Fill the threadgroup up to the pipeline's hardware maximum (≈1024) rather than a single
+        // SIMD width (≈32); these gate kernels use no threadgroup memory and index purely off
+        // thread_position_in_grid, so a wider group only raises occupancy.
+        let threadgroupWidth = min(pipeline.maxTotalThreadsPerThreadgroup, max(pairCount, 1))
+        let threadsPerThreadgroup = MTLSize(width: threadgroupWidth, height: 1, depth: 1)
         encoder.dispatchThreads(threadsPerGrid, threadsPerThreadgroup: threadsPerThreadgroup)
     }
 
@@ -288,8 +291,10 @@ public final class QuantumEngine: @unchecked Sendable {
         configure(encoder)
 
         let threadsPerGrid = MTLSize(width: threadCount, height: 1, depth: 1)
-        let executionWidth = pipeline.threadExecutionWidth
-        let threadsPerThreadgroup = MTLSize(width: min(executionWidth, threadCount), height: 1, depth: 1)
+        // See `dispatchPairwiseGate`: these kernels carry no threadgroup state, so we size the group
+        // at the pipeline maximum for occupancy instead of a single execution width.
+        let threadgroupWidth = min(pipeline.maxTotalThreadsPerThreadgroup, threadCount)
+        let threadsPerThreadgroup = MTLSize(width: threadgroupWidth, height: 1, depth: 1)
         encoder.dispatchThreads(threadsPerGrid, threadsPerThreadgroup: threadsPerThreadgroup)
     }
 

@@ -84,36 +84,78 @@ public struct AlgebraicPreCompiler: Sendable {
         return result
     }
 
-    /// True when swapping `leftIndex` and `rightIndex` moves same-qubit gates closer together.
+    /// True when swapping the adjacent gates at `leftIndex` and `rightIndex` (`rightIndex ==
+    /// leftIndex + 1`) moves same-qubit gates closer together, i.e. strictly lowers the total
+    /// same-qubit span Σ_q (maxPosition_q − minPosition_q).
+    ///
+    /// Rather than rebuilding the whole index map twice (the old O(n) before/after sum, run for
+    /// every candidate → O(n³) overall), this computes only the net change. A swap moves at most the
+    /// two gates at `leftIndex`/`rightIndex`; multi-qubit gates do not contribute to the span, and a
+    /// single-qubit gate shifted by one slot changes its qubit's span by ±1 only when that gate sits
+    /// at the qubit's extreme (min/max) position. So the decision needs just each moved qubit's
+    /// current min/max positions.
     private static func reorderingAdjacentPairReducesSameQubitDistance(
         in gates: [Gate],
         leftIndex: Int,
         rightIndex: Int
     ) -> Bool {
-        let before = sameQubitPairDistanceSum(gates)
-        var reordered = gates
-        reordered.swapAt(leftIndex, rightIndex)
-        let after = sameQubitPairDistanceSum(reordered)
-        return after < before
+        let leftQubit = gates[leftIndex].asSingleQubitGate?.qubit
+        let rightQubit = gates[rightIndex].asSingleQubitGate?.qubit
+
+        // Same qubit (or neither single-qubit): the position set of every qubit is unchanged.
+        guard leftQubit != rightQubit else { return false }
+
+        var delta = 0
+        if let qubit = leftQubit {
+            // This gate slides one slot to the right (leftIndex → rightIndex).
+            delta += spanDelta(movingRight: true, extreme: positionExtreme(of: qubit, at: leftIndex, in: gates))
+        }
+        if let qubit = rightQubit {
+            // This gate slides one slot to the left (rightIndex → leftIndex).
+            delta += spanDelta(movingRight: false, extreme: positionExtreme(of: qubit, at: rightIndex, in: gates))
+        }
+
+        return delta < 0
     }
 
-    private static func sameQubitPairDistanceSum(_ gates: [Gate]) -> Int {
-        var indicesByQubit: [Int: [Int]] = [:]
+    private enum PositionExtreme {
+        case soleOrInterior
+        case minimum
+        case maximum
+    }
 
-        for (index, gate) in gates.enumerated() {
-            guard let single = gate.asSingleQubitGate else { continue }
-            indicesByQubit[single.qubit, default: []].append(index)
+    /// Classifies `position` among the positions of `qubit`'s single-qubit gates: whether it is that
+    /// qubit's minimum, maximum, or neither (a lone gate or an interior one, both of which leave the
+    /// span unchanged when shifted by one slot).
+    private static func positionExtreme(of qubit: Int, at position: Int, in gates: [Gate]) -> PositionExtreme {
+        var minPosition = Int.max
+        var maxPosition = Int.min
+        var count = 0
+
+        for (index, gate) in gates.enumerated() where gate.asSingleQubitGate?.qubit == qubit {
+            count += 1
+            if index < minPosition { minPosition = index }
+            if index > maxPosition { maxPosition = index }
         }
 
-        var distanceSum = 0
-        for indices in indicesByQubit.values where indices.count > 1 {
-            let sorted = indices.sorted()
-            for pair in zip(sorted, sorted.dropFirst()) {
-                distanceSum += pair.1 - pair.0
-            }
-        }
+        guard count > 1 else { return .soleOrInterior }
+        if position == minPosition { return .minimum }
+        if position == maxPosition { return .maximum }
+        return .soleOrInterior
+    }
 
-        return distanceSum
+    /// Net change to a qubit's span (max − min) when one of its gates moves a single slot.
+    /// Moving the minimum right, or the maximum left, shrinks the span (−1); moving the minimum
+    /// left, or the maximum right, grows it (+1); an interior or lone gate leaves it unchanged.
+    private static func spanDelta(movingRight: Bool, extreme: PositionExtreme) -> Int {
+        switch extreme {
+        case .soleOrInterior:
+            return 0
+        case .minimum:
+            return movingRight ? -1 : 1
+        case .maximum:
+            return movingRight ? 1 : -1
+        }
     }
 
     /// Whether two unitary gates can be reordered: `lhs * rhs == rhs * lhs`.
