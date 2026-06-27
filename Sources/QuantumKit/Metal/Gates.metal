@@ -655,15 +655,15 @@ kernel void compute_probabilities(device float* realBuffer [[buffer(0)]],
 }
 
 // Reduces the Born-rule probability of the subspace where `targetQubit == |1>`.
-// Each threadgroup performs a tree reduction over 256 elements and atomically accumulates
-// its partial sum into `result[0]` (which must be zeroed by the host before dispatch).
+// Each threadgroup performs a tree reduction over 256 elements and writes its partial sum into
 kernel void masked_population_reduce(device const float* realBuffer [[buffer(0)]],
                                      device const float* imagBuffer [[buffer(1)]],
                                      constant uint& targetQubit [[buffer(2)]],
                                      constant uint& elementCount [[buffer(3)]],
-                                     device atomic_float* result [[buffer(4)]],
+                                     device float* partials [[buffer(4)]],
                                      uint globalID [[thread_position_in_grid]],
                                      uint localID [[thread_index_in_threadgroup]],
+                                     uint groupID [[threadgroup_position_in_grid]],
                                      uint groupSize [[threads_per_threadgroup]]) {
     threadgroup float shared[256];
 
@@ -684,7 +684,7 @@ kernel void masked_population_reduce(device const float* realBuffer [[buffer(0)]
     }
 
     if (localID == 0) {
-        atomic_fetch_add_explicit(result, shared[0], memory_order_relaxed);
+        partials[groupID] = shared[0];
     }
 }
 

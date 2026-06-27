@@ -179,13 +179,56 @@ public struct Pipelines: @unchecked Sendable {
     }
 }
 
+/// A thread-safe free list of reusable `MTLBuffer`s, keyed by byte length.
+///
+/// Measurement and normalization need large (2ⁿ-sized) scratch buffers on every call; re-allocating
+/// them per shot or per mid-circuit measurement is expensive (~1 GB at 28 qubits). The pool hands
+/// out a buffer of the requested size — reused if one is free, freshly allocated otherwise — and
+/// takes it back when the caller is done. Because every GPU dispatch here is synchronous
+/// (`waitUntilCompleted`), a released buffer is guaranteed idle.
+///
+/// An acquired buffer holds arbitrary stale contents, so callers must fully overwrite (or clear) it
+/// before reading. The free list is lock-guarded so the owning engine stays safe to share across
+/// threads.
+private final class BufferPool: @unchecked Sendable {
+    private let device: MTLDevice
+    private let lock = NSLock()
+    private var freeBuffersByLength: [Int: [MTLBuffer]] = [:]
+
+    init(device: MTLDevice) {
+        self.device = device
+    }
+
+    func acquire(length: Int) throws -> MTLBuffer {
+        lock.lock()
+        if var bucket = freeBuffersByLength[length], let reused = bucket.popLast() {
+            freeBuffersByLength[length] = bucket
+            lock.unlock()
+            return reused
+        }
+        lock.unlock()
+
+        guard length > 0,
+              let buffer = device.makeBuffer(length: length, options: .storageModeShared) else {
+            throw QuantumEngineError.bufferAllocationFailed(requiredBytes: max(length, 0))
+        }
+        return buffer
+    }
+
+    func release(_ buffer: MTLBuffer) {
+        lock.lock()
+        freeBuffersByLength[buffer.length, default: []].append(buffer)
+        lock.unlock()
+    }
+}
+
 /// GPU-backed executor for quantum circuits.
 ///
-/// `QuantumEngine` is safe to share across threads: it holds only immutable Metal objects
-/// (`MTLDevice`, a thread-safe `MTLCommandQueue`, and immutable pipeline states) and keeps no
-/// mutable Swift state between calls — each call allocates its own command buffers and scratch
-/// buffers. Therefore distinct ``StateVector`` instances may be executed concurrently from
-/// different threads using the same engine.
+/// `QuantumEngine` is safe to share across threads: it holds immutable Metal objects (`MTLDevice`,
+/// a thread-safe `MTLCommandQueue`, and immutable pipeline states) plus a lock-guarded
+/// ``BufferPool`` for scratch reuse. Each call allocates its own command buffers, so distinct
+/// ``StateVector`` instances may be executed concurrently from different threads using the same
+/// engine.
 ///
 /// - Important: A *single* ``StateVector`` must not be operated on from multiple threads
 ///   simultaneously; serialize access to a given state yourself if you share one.
@@ -196,6 +239,7 @@ public final class QuantumEngine: @unchecked Sendable {
     private let device: MTLDevice
     private let commandQueue: MTLCommandQueue
     private let pipelines: Pipelines
+    private let bufferPool: BufferPool
 
     private static func loadMetalLibrary(device: MTLDevice) throws -> MTLLibrary {
         if let library = try? device.makeDefaultLibrary(bundle: Bundle.module) {
@@ -249,6 +293,7 @@ public final class QuantumEngine: @unchecked Sendable {
 
         guard let queue = device.makeCommandQueue() else { throw QuantumEngineError.commandQueueCreationFailed }
         self.commandQueue = queue
+        self.bufferPool = BufferPool(device: defaultDevice)
 
         let library = try Self.loadMetalLibrary(device: device)
         let preciseLibrary = try Self.loadPreciseLibrary(device: device)
@@ -518,20 +563,22 @@ public final class QuantumEngine: @unchecked Sendable {
     /// Born-rule probability that `qubit` is measured in state |1⟩ given the current amplitudes.
     ///
     /// Computed with a GPU tree reduction (`masked_population_reduce`): each threadgroup reduces
-    /// 256 squared amplitudes restricted to the `qubit == |1⟩` subspace and atomically accumulates
-    /// its partial into a single result, avoiding an `O(2ⁿ)` host-side scan.
+    /// 256 squared amplitudes restricted to the `qubit == |1⟩` subspace into one partial, and the
+    /// host sums the `2ⁿ / 256` partials, avoiding an `O(2ⁿ)` host-side scan of the amplitudes.
     private func qubitOnePopulation(on state: StateVector, qubit: Int) throws -> QFloat {
-        let resultBuffer = try makeSharedBuffer(length: MemoryLayout<QFloat>.stride)
-        resultBuffer.contents().assumingMemoryBound(to: QFloat.self)[0] = 0
+        let blockSize = Self.scanBlockSize
+        let elementCount = state.stateCount
+        let blockCount = max((elementCount + blockSize - 1) / blockSize, 1)
+
+        // One partial sum per threadgroup; the kernel writes each block's reduced total here and the
+        // host sums them below (no float atomics, deterministic order).
+        let partialsBuffer = try bufferPool.acquire(length: blockCount * MemoryLayout<QFloat>.stride)
+        defer { bufferPool.release(partialsBuffer) }
 
         guard let commandBuffer = commandQueue.makeCommandBuffer(),
               let computeEncoder = commandBuffer.makeComputeCommandEncoder() else {
             throw QuantumEngineError.commandBufferCreationFailed
         }
-
-        let blockSize = Self.scanBlockSize
-        let elementCount = state.stateCount
-        let blockCount = max((elementCount + blockSize - 1) / blockSize, 1)
 
         var targetQubit = UInt32(qubit)
         var countValue = UInt32(elementCount)
@@ -541,7 +588,7 @@ public final class QuantumEngine: @unchecked Sendable {
         computeEncoder.setBuffer(state.imagBuffer, offset: 0, index: 1)
         computeEncoder.setBytes(&targetQubit, length: MemoryLayout<UInt32>.stride, index: 2)
         computeEncoder.setBytes(&countValue, length: MemoryLayout<UInt32>.stride, index: 3)
-        computeEncoder.setBuffer(resultBuffer, offset: 0, index: 4)
+        computeEncoder.setBuffer(partialsBuffer, offset: 0, index: 4)
 
         computeEncoder.dispatchThreadgroups(
             MTLSize(width: blockCount, height: 1, depth: 1),
@@ -555,7 +602,13 @@ public final class QuantumEngine: @unchecked Sendable {
             throw QuantumEngineError.commandBufferExecutionFailed(underlying: error)
         }
 
-        return resultBuffer.contents().assumingMemoryBound(to: QFloat.self)[0]
+        let partials = partialsBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        var total = 0.0
+        for index in 0..<blockCount {
+            total += Double(partials[index])
+        }
+
+        return QFloat(total)
     }
 
     /// Phase damping realized as its equivalent phase-flip (random Z) channel.
@@ -878,9 +931,15 @@ public final class QuantumEngine: @unchecked Sendable {
     private func normalizeState(on state: StateVector) throws {
         let stateCount = state.stateCount
         let probabilityBytes = stateCount * MemoryLayout<QFloat>.stride
-        let probHi = try makeSharedBuffer(length: probabilityBytes)
-        let probLo = try makeSharedBuffer(length: probabilityBytes)
-        let aux = try makePrefixSumAuxBuffers(stateCount: stateCount)
+        let probHi = try bufferPool.acquire(length: probabilityBytes)
+        let probLo = try bufferPool.acquire(length: probabilityBytes)
+        let aux = try makePrefixSumAuxBuffers(stateCount: stateCount, pooled: true)
+        // Safe to recycle at scope exit: both command buffers below are waited on synchronously.
+        defer {
+            bufferPool.release(probHi)
+            bufferPool.release(probLo)
+            releasePrefixSumAuxBuffers(aux)
+        }
 
         guard let commandBuffer = commandQueue.makeCommandBuffer(),
               let computeEncoder = commandBuffer.makeComputeCommandEncoder() else {
@@ -938,9 +997,8 @@ public final class QuantumEngine: @unchecked Sendable {
 
     private func samplePartialOutcome(on state: StateVector, qubits: [Int], diceRoll: Double) throws -> Int {
         let byteCount = state.stateCount * MemoryLayout<QFloat>.stride
-        guard let buffer = device.makeBuffer(length: byteCount, options: .storageModeShared) else {
-            throw QuantumEngineError.bufferAllocationFailed(requiredBytes: byteCount)
-        }
+        let buffer = try bufferPool.acquire(length: byteCount)
+        defer { bufferPool.release(buffer) }
 
         try executeProbabilityKernel(on: state, outputBuffer: buffer)
         let pointer = buffer.contents().assumingMemoryBound(to: QFloat.self)
@@ -988,8 +1046,12 @@ public final class QuantumEngine: @unchecked Sendable {
     }
 
     /// Allocates the per-level block-sum scratch buffers (hi and lo halves) for a compensated scan
-    /// over `stateCount` elements.
-    private func makePrefixSumAuxBuffers(stateCount: Int) throws -> (hi: [MTLBuffer], lo: [MTLBuffer]) {
+    /// over `stateCount` elements. When `pooled` is true the buffers come from ``bufferPool`` and the
+    /// caller must hand them back with ``releasePrefixSumAuxBuffers(_:)``.
+    private func makePrefixSumAuxBuffers(
+        stateCount: Int,
+        pooled: Bool = false
+    ) throws -> (hi: [MTLBuffer], lo: [MTLBuffer]) {
         var hi: [MTLBuffer] = []
         var lo: [MTLBuffer] = []
 
@@ -997,12 +1059,18 @@ public final class QuantumEngine: @unchecked Sendable {
         while currentCount > 1 {
             let blockCount = max((currentCount + Self.scanBlockSize - 1) / Self.scanBlockSize, 1)
             let byteCount = blockCount * MemoryLayout<QFloat>.stride
-            hi.append(try makeSharedBuffer(length: byteCount))
-            lo.append(try makeSharedBuffer(length: byteCount))
+            hi.append(pooled ? try bufferPool.acquire(length: byteCount) : try makeSharedBuffer(length: byteCount))
+            lo.append(pooled ? try bufferPool.acquire(length: byteCount) : try makeSharedBuffer(length: byteCount))
             currentCount = blockCount
         }
 
         return (hi, lo)
+    }
+
+    /// Returns the buffers from a pooled ``makePrefixSumAuxBuffers(stateCount:pooled:)`` call.
+    private func releasePrefixSumAuxBuffers(_ aux: (hi: [MTLBuffer], lo: [MTLBuffer])) {
+        for buffer in aux.hi { bufferPool.release(buffer) }
+        for buffer in aux.lo { bufferPool.release(buffer) }
     }
 
     private func dispatchPrefixSumPhase(
@@ -1291,10 +1359,16 @@ public final class QuantumEngine: @unchecked Sendable {
         let stateCount = state.stateCount
         let probabilityBytes = stateCount * MemoryLayout<QFloat>.stride
 
-        let probHi = try makeSharedBuffer(length: probabilityBytes)
-        let probLo = try makeSharedBuffer(length: probabilityBytes)
+        let probHi = try bufferPool.acquire(length: probabilityBytes)
+        let probLo = try bufferPool.acquire(length: probabilityBytes)
         let collapsedBuffer = try makeSharedBuffer(length: MemoryLayout<UInt32>.stride)
-        let aux = try makePrefixSumAuxBuffers(stateCount: stateCount)
+        let aux = try makePrefixSumAuxBuffers(stateCount: stateCount, pooled: true)
+        // Safe to recycle at scope exit: both command buffers below are waited on synchronously.
+        defer {
+            bufferPool.release(probHi)
+            bufferPool.release(probLo)
+            releasePrefixSumAuxBuffers(aux)
+        }
 
         guard let commandBuffer = commandQueue.makeCommandBuffer(),
               let computeEncoder = commandBuffer.makeComputeCommandEncoder() else {
