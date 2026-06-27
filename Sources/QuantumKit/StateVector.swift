@@ -14,7 +14,16 @@ public enum StateVectorError: Error {
     case bufferAllocationFailed(requiredBytes: Int)
 }
 
-public struct StateVector {
+/// A GPU-resident quantum state vector.
+///
+/// `StateVector` is a **reference type**: its amplitudes live in shared `MTLBuffer`s, so two
+/// variables that refer to the same instance read and write the same GPU memory (mutating one
+/// via ``resetToZero()`` or a kernel mutates the other). Create a fresh instance per independent
+/// state rather than copying.
+///
+/// - Important: A single `StateVector` is **not** safe to mutate from multiple threads at once.
+///   Distinct `StateVector` instances may be operated on concurrently (see ``QuantumEngine``).
+public final class StateVector {
 
     public static let maxQubitCount = 28
 

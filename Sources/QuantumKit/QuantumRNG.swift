@@ -17,9 +17,39 @@ public enum QuantumRNG: Sendable {
         case .seeded(let state):
             let nextState = Self.splitMix64(state)
             self = .seeded(nextState)
-            let bits = UInt32(truncatingIfNeeded: nextState >> 11)
-            return Float(bits) / (Float(UInt32.max) + 1.0)
+            return Self.unitFloat(from: UInt32(truncatingIfNeeded: nextState >> 32))
         }
+    }
+
+    /// A `Double` uniformly distributed in the half-open range `[0, 1)` with full 53-bit resolution.
+    ///
+    /// Used for measurement dice rolls: a 24-bit `Float` can only address ~16M distinct thresholds,
+    /// which is too coarse for the CDF of a state with more than ~24 qubits. The extra precision is
+    /// what makes the compensated (double-single) CDF on the GPU actually reachable.
+    public mutating func nextUnitDouble() -> Double {
+        switch self {
+        case .hardware:
+            return TRNGCollapse.generateHardwareDouble()
+        case .seeded(let state):
+            let nextState = Self.splitMix64(state)
+            self = .seeded(nextState)
+            return Self.unitDouble(from: nextState)
+        }
+    }
+
+    /// Maps 32 random bits to a uniformly distributed `Float` in the half-open range `[0, 1)`.
+    ///
+    /// `Float32` has a 24-bit significand, so the top 24 bits are scaled by `2⁻²⁴`. Every result is
+    /// an exact multiple of `2⁻²⁴`, evenly spaced, and strictly less than `1.0` — unlike dividing by
+    /// `Float(UInt32.max) + 1`, which rounds to `2³²` and can yield exactly `1.0`.
+    static func unitFloat(from bits: UInt32) -> Float {
+        Float(bits >> 8) * (1.0 / 16_777_216.0)
+    }
+
+    /// Maps 64 random bits to a uniformly distributed `Double` in `[0, 1)` using the top 53 bits
+    /// (the `Double` significand width), scaled by `2⁻⁵³`. Always strictly less than `1.0`.
+    static func unitDouble(from bits: UInt64) -> Double {
+        Double(bits >> 11) * (1.0 / 9_007_199_254_740_992.0)
     }
 
     private static func splitMix64(_ value: UInt64) -> UInt64 {

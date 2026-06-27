@@ -25,7 +25,7 @@ public enum QuantumEngineError: Error {
 
 }
 
-public struct Pipelines {
+public struct Pipelines: @unchecked Sendable {
 
     let hadamard: MTLComputePipelineState
     let pauliX: MTLComputePipelineState
@@ -56,6 +56,7 @@ public struct Pipelines {
     let probabilities: MTLComputePipelineState
     let maskedPopulationReduce: MTLComputePipelineState
     let prefixSum: MTLComputePipelineState
+    let prefixSumNaive: MTLComputePipelineState
     let collapseSearch: MTLComputePipelineState
     let collapseState: MTLComputePipelineState
     let partialCollapse: MTLComputePipelineState
@@ -64,7 +65,7 @@ public struct Pipelines {
     let amplitudeDampingNoJump: MTLComputePipelineState
     let normalize: MTLComputePipelineState
 
-    init(device: MTLDevice, library: MTLLibrary) throws {
+    init(device: MTLDevice, library: MTLLibrary, preciseLibrary: MTLLibrary) throws {
         guard let hFunc = library.makeFunction(name: "hadamard_gate") else { throw QuantumEngineError.functionNotFound("hadamard_gate") }
         self.hadamard = try device.makeComputePipelineState(function: hFunc)
 
@@ -146,10 +147,15 @@ public struct Pipelines {
         guard let maskedPopFunc = library.makeFunction(name: "masked_population_reduce") else { throw QuantumEngineError.functionNotFound("masked_population_reduce") }
         self.maskedPopulationReduce = try device.makeComputePipelineState(function: maskedPopFunc)
 
-        guard let prefixSumFunc = library.makeFunction(name: "prefix_sum_probabilities") else { throw QuantumEngineError.functionNotFound("prefix_sum_probabilities") }
+        // Precision-critical: compiled with fast math off so the compensated summation is preserved.
+        guard let prefixSumFunc = preciseLibrary.makeFunction(name: "prefix_sum_probabilities") else { throw QuantumEngineError.functionNotFound("prefix_sum_probabilities") }
         self.prefixSum = try device.makeComputePipelineState(function: prefixSumFunc)
 
-        guard let collapseFunc = library.makeFunction(name: "find_collapsed_state") else { throw QuantumEngineError.functionNotFound("find_collapsed_state") }
+        // Benchmark-only Float32 baseline (loaded from the fast default library).
+        guard let prefixSumNaiveFunc = library.makeFunction(name: "prefix_sum_probabilities_naive") else { throw QuantumEngineError.functionNotFound("prefix_sum_probabilities_naive") }
+        self.prefixSumNaive = try device.makeComputePipelineState(function: prefixSumNaiveFunc)
+
+        guard let collapseFunc = preciseLibrary.makeFunction(name: "find_collapsed_state") else { throw QuantumEngineError.functionNotFound("find_collapsed_state") }
         self.collapseSearch = try device.makeComputePipelineState(function: collapseFunc)
 
         guard let collapseStateFunc = library.makeFunction(name: "collapse_state_vector") else { throw QuantumEngineError.functionNotFound("collapse_state_vector") }
@@ -173,7 +179,17 @@ public struct Pipelines {
     }
 }
 
-public class QuantumEngine {
+/// GPU-backed executor for quantum circuits.
+///
+/// `QuantumEngine` is safe to share across threads: it holds only immutable Metal objects
+/// (`MTLDevice`, a thread-safe `MTLCommandQueue`, and immutable pipeline states) and keeps no
+/// mutable Swift state between calls — each call allocates its own command buffers and scratch
+/// buffers. Therefore distinct ``StateVector`` instances may be executed concurrently from
+/// different threads using the same engine.
+///
+/// - Important: A *single* ``StateVector`` must not be operated on from multiple threads
+///   simultaneously; serialize access to a given state yourself if you share one.
+public final class QuantumEngine: @unchecked Sendable {
 
     private static let scanBlockSize = 256
 
@@ -190,6 +206,30 @@ public class QuantumEngine {
             return library
         }
 
+        let source = try metalShaderSource()
+        return try device.makeLibrary(source: source, options: nil)
+    }
+
+    /// Compiles the shader source with **fast math disabled** so the compensated (double-single)
+    /// summation in `prefix_sum_probabilities`/`find_collapsed_state` survives.
+    ///
+    /// The default library keeps fast math on for maximum gate throughput; algebraic reassociation
+    /// there is harmless. But that same reassociation cancels the error term of a Kahan/two-sum
+    /// (`err = (a - (s - bb)) + (b - bb)` collapses to `0`), silently degrading the CDF back to naive
+    /// Float32 and reintroducing the high-qubit plateau. Only the two precision-critical kernels are
+    /// taken from this library; every gate still runs from the fast default library.
+    private static func loadPreciseLibrary(device: MTLDevice) throws -> MTLLibrary {
+        let source = try metalShaderSource()
+        let options = MTLCompileOptions()
+        if #available(macOS 15.0, iOS 18.0, tvOS 18.0, *) {
+            options.mathMode = .safe
+        } else {
+            options.fastMathEnabled = false
+        }
+        return try device.makeLibrary(source: source, options: options)
+    }
+
+    private static func metalShaderSource() throws -> String {
         let bundle = Bundle.module
         let candidateURLs = [
             bundle.url(forResource: "Gates", withExtension: "metal", subdirectory: "Metal"),
@@ -200,8 +240,7 @@ public class QuantumEngine {
             throw QuantumEngineError.libraryNotFound
         }
 
-        let source = try String(contentsOf: metalURL, encoding: .utf8)
-        return try device.makeLibrary(source: source, options: nil)
+        return try String(contentsOf: metalURL, encoding: .utf8)
     }
 
     public init() throws {
@@ -212,7 +251,8 @@ public class QuantumEngine {
         self.commandQueue = queue
 
         let library = try Self.loadMetalLibrary(device: device)
-        self.pipelines = try Pipelines(device: device, library: library)
+        let preciseLibrary = try Self.loadPreciseLibrary(device: device)
+        self.pipelines = try Pipelines(device: device, library: library, preciseLibrary: preciseLibrary)
     }
 
     private func dispatchPairwiseGate(
@@ -325,7 +365,7 @@ public class QuantumEngine {
             case .reset(let qubit):
                 try flushUnitaryGates(pendingUnitaryGates, on: state)
                 pendingUnitaryGates.removeAll(keepingCapacity: true)
-                try executeResetQubit(on: state, qubit: qubit)
+                try executeResetQubit(on: state, qubit: qubit, rng: &rng)
 
             default:
                 if noiseEnabled, let noise {
@@ -750,7 +790,7 @@ public class QuantumEngine {
             throw QuantumMeasurementError.emptyQubitSelection
         }
 
-        let diceRoll = rng.nextUnitFloat()
+        let diceRoll = rng.nextUnitDouble()
         let outcome = try samplePartialOutcome(on: state, qubits: qubits, diceRoll: diceRoll)
 
         let qubitIndices = qubits.map { UInt32($0) }
@@ -794,8 +834,8 @@ public class QuantumEngine {
         rng: inout QuantumRNG,
         noise: NoiseModel? = nil
     ) throws -> Int {
-        let diceRoll = rng.nextUnitFloat()
-        var collapsedIndex = try executeMeasurementCollapse(on: state, diceRoll: diceRoll)
+        let diceRoll = rng.nextUnitDouble()
+        var collapsedIndex = try executeMeasurementCollapse(on: state, dice: diceRoll)
         if let noise {
             collapsedIndex = noise.flipReadoutOutcome(
                 collapsedIndex,
@@ -807,39 +847,35 @@ public class QuantumEngine {
     }
 
     public func executeResetQubit(on state: StateVector, qubit: Int) throws {
-        guard let commandBuffer = commandQueue.makeCommandBuffer(),
-              let computeEncoder = commandBuffer.makeComputeCommandEncoder() else {
-            throw QuantumEngineError.commandBufferCreationFailed
-        }
+        var rng: QuantumRNG = .hardware
+        try executeResetQubit(on: state, qubit: qubit, rng: &rng)
+    }
 
-        var targetQubit = UInt32(qubit)
-        dispatchFullStateKernel(encoder: computeEncoder, pipeline: pipelines.resetQubit, state: state) { encoder in
-            encoder.setBytes(&targetQubit, length: MemoryLayout<UInt32>.stride, index: 2)
-        }
+    /// Resets `qubit` to |0⟩ by measuring it in the computational basis and flipping it back to
+    /// |0⟩ when the (random) outcome is |1⟩.
+    ///
+    /// This is the standard state-vector reset realized as a measurement trajectory: collapsing
+    /// first keeps the post-reset vector pure (a valid single trajectory) and, unlike a bare
+    /// projection onto |0⟩, it never annihilates a qubit that is fully in |1⟩.
+    func executeResetQubit(on state: StateVector, qubit: Int, rng: inout QuantumRNG) throws {
+        let outcome = try executePartialMeasurementCollapse(
+            on: state,
+            qubits: [qubit],
+            rng: &rng,
+            noise: nil
+        )
 
-        computeEncoder.endEncoding()
-        commandBuffer.commit()
-        commandBuffer.waitUntilCompleted()
-        if let error = commandBuffer.error {
-            throw QuantumEngineError.commandBufferExecutionFailed(underlying: error)
+        if outcome & 1 == 1 {
+            try executeUnitaryGate(.x(target: qubit), on: state)
         }
-
-        try normalizeState(on: state)
     }
 
     private func normalizeState(on state: StateVector) throws {
         let stateCount = state.stateCount
         let probabilityBytes = stateCount * MemoryLayout<QFloat>.stride
-        let probBuffer = try makeSharedBuffer(length: probabilityBytes)
-        var auxiliaryBuffers: [MTLBuffer] = []
-
-        var currentCount = stateCount
-        while currentCount > 1 {
-            let blockCount = max((currentCount + Self.scanBlockSize - 1) / Self.scanBlockSize, 1)
-            let byteCount = blockCount * MemoryLayout<QFloat>.stride
-            auxiliaryBuffers.append(try makeSharedBuffer(length: byteCount))
-            currentCount = blockCount
-        }
+        let probHi = try makeSharedBuffer(length: probabilityBytes)
+        let probLo = try makeSharedBuffer(length: probabilityBytes)
+        let aux = try makePrefixSumAuxBuffers(stateCount: stateCount)
 
         guard let commandBuffer = commandQueue.makeCommandBuffer(),
               let computeEncoder = commandBuffer.makeComputeCommandEncoder() else {
@@ -847,17 +883,17 @@ public class QuantumEngine {
         }
 
         dispatchFullStateKernel(encoder: computeEncoder, pipeline: pipelines.probabilities, state: state) { encoder in
-            encoder.setBuffer(probBuffer, offset: 0, index: 2)
+            encoder.setBuffer(probHi, offset: 0, index: 2)
         }
 
-        if stateCount > 1 {
-            try encodeInclusivePrefixSum(
-                encoder: computeEncoder,
-                buffer: probBuffer,
-                elementCount: stateCount,
-                auxiliaryBuffers: auxiliaryBuffers
-            )
-        }
+        try encodeInclusivePrefixSum(
+            encoder: computeEncoder,
+            hiBuffer: probHi,
+            loBuffer: probLo,
+            elementCount: stateCount,
+            auxiliaryHi: aux.hi,
+            auxiliaryLo: aux.lo
+        )
 
         computeEncoder.endEncoding()
         commandBuffer.commit()
@@ -866,13 +902,16 @@ public class QuantumEngine {
             throw QuantumEngineError.commandBufferExecutionFailed(underlying: error)
         }
 
-        let probabilityPointer = probBuffer.contents().assumingMemoryBound(to: QFloat.self)
-        let totalProbability = stateCount == 1 ? probabilityPointer[0] : probabilityPointer[stateCount - 1]
+        // The final CDF element is the total probability; sum its (hi, lo) halves in Double so the
+        // compensated GPU scan is not re-truncated to Float before taking the norm.
+        let hiPointer = probHi.contents().assumingMemoryBound(to: QFloat.self)
+        let loPointer = probLo.contents().assumingMemoryBound(to: QFloat.self)
+        let totalProbability = Double(hiPointer[stateCount - 1]) + Double(loPointer[stateCount - 1])
         guard totalProbability > 0 else {
             throw QuantumEngineError.zeroStateNorm
         }
 
-        let invNorm = 1 / sqrt(totalProbability)
+        let invNorm = 1 / totalProbability.squareRoot()
 
         guard let normalizeCommandBuffer = commandQueue.makeCommandBuffer(),
               let normalizeEncoder = normalizeCommandBuffer.makeComputeCommandEncoder() else {
@@ -892,7 +931,7 @@ public class QuantumEngine {
         }
     }
 
-    private func samplePartialOutcome(on state: StateVector, qubits: [Int], diceRoll: Float) throws -> Int {
+    private func samplePartialOutcome(on state: StateVector, qubits: [Int], diceRoll: Double) throws -> Int {
         let byteCount = state.stateCount * MemoryLayout<QFloat>.stride
         guard let buffer = device.makeBuffer(length: byteCount, options: .storageModeShared) else {
             throw QuantumEngineError.bufferAllocationFailed(requiredBytes: byteCount)
@@ -900,15 +939,16 @@ public class QuantumEngine {
 
         try executeProbabilityKernel(on: state, outputBuffer: buffer)
         let pointer = buffer.contents().assumingMemoryBound(to: QFloat.self)
-        let fullDistribution = Array(UnsafeBufferPointer(start: pointer, count: state.stateCount))
 
-        var marginal = [QFloat](repeating: 0, count: 1 << qubits.count)
-        for (stateIndex, probability) in fullDistribution.enumerated() {
+        // Accumulate the marginal in Double: the O(2ⁿ) host fold over per-state float probabilities
+        // is exactly where Float32 cancellation would otherwise erase sub-ulp contributions.
+        var marginal = [Double](repeating: 0, count: 1 << qubits.count)
+        for stateIndex in 0..<state.stateCount {
             let outcome = partialOutcomeIndex(stateIndex: stateIndex, qubits: qubits)
-            marginal[outcome] += probability
+            marginal[outcome] += Double(pointer[stateIndex])
         }
 
-        var cumulative: QFloat = 0
+        var cumulative = 0.0
         for (index, probability) in marginal.enumerated() {
             cumulative += probability
             if diceRoll < cumulative {
@@ -942,9 +982,116 @@ public class QuantumEngine {
         return buffer
     }
 
+    /// Allocates the per-level block-sum scratch buffers (hi and lo halves) for a compensated scan
+    /// over `stateCount` elements.
+    private func makePrefixSumAuxBuffers(stateCount: Int) throws -> (hi: [MTLBuffer], lo: [MTLBuffer]) {
+        var hi: [MTLBuffer] = []
+        var lo: [MTLBuffer] = []
+
+        var currentCount = stateCount
+        while currentCount > 1 {
+            let blockCount = max((currentCount + Self.scanBlockSize - 1) / Self.scanBlockSize, 1)
+            let byteCount = blockCount * MemoryLayout<QFloat>.stride
+            hi.append(try makeSharedBuffer(length: byteCount))
+            lo.append(try makeSharedBuffer(length: byteCount))
+            currentCount = blockCount
+        }
+
+        return (hi, lo)
+    }
+
     private func dispatchPrefixSumPhase(
         encoder: MTLComputeCommandEncoder,
-        pipeline: MTLComputePipelineState,
+        dataHi: MTLBuffer,
+        dataLo: MTLBuffer,
+        blockHi: MTLBuffer,
+        blockLo: MTLBuffer,
+        elementCount: Int,
+        phase: UInt32,
+        readInputLo: UInt32
+    ) {
+        let blockSize = Self.scanBlockSize
+        let threadCount = max(elementCount, 1)
+        var countValue = UInt32(elementCount)
+        var phaseValue = phase
+        var readInputLoValue = readInputLo
+
+        encoder.setComputePipelineState(pipelines.prefixSum)
+        encoder.setBuffer(dataHi, offset: 0, index: 0)
+        encoder.setBuffer(dataLo, offset: 0, index: 1)
+        encoder.setBuffer(blockHi, offset: 0, index: 2)
+        encoder.setBuffer(blockLo, offset: 0, index: 3)
+        encoder.setBytes(&countValue, length: MemoryLayout<UInt32>.stride, index: 4)
+        encoder.setBytes(&phaseValue, length: MemoryLayout<UInt32>.stride, index: 5)
+        encoder.setBytes(&readInputLoValue, length: MemoryLayout<UInt32>.stride, index: 6)
+
+        let threadsPerGrid = MTLSize(width: threadCount, height: 1, depth: 1)
+        let threadsPerThreadgroup = MTLSize(width: min(blockSize, threadCount), height: 1, depth: 1)
+        encoder.dispatchThreads(threadsPerGrid, threadsPerThreadgroup: threadsPerThreadgroup)
+    }
+
+    /// Compensated (double-single) inclusive prefix sum over `(hiBuffer, loBuffer)`. The leaf level
+    /// (`level == 0`) feeds raw float probabilities (no `lo` term yet); recursive block-sum passes
+    /// carry the compensation through.
+    private func encodeInclusivePrefixSum(
+        encoder: MTLComputeCommandEncoder,
+        hiBuffer: MTLBuffer,
+        loBuffer: MTLBuffer,
+        elementCount: Int,
+        auxiliaryHi: [MTLBuffer],
+        auxiliaryLo: [MTLBuffer],
+        level: Int = 0
+    ) throws {
+        guard elementCount > 1 else { return }
+        guard level < auxiliaryHi.count else {
+            throw QuantumEngineError.prefixSumBufferLevelMissing(level: level)
+        }
+
+        let blockSize = Self.scanBlockSize
+        let numBlocks = (elementCount + blockSize - 1) / blockSize
+        let blockHi = auxiliaryHi[level]
+        let blockLo = auxiliaryLo[level]
+        let readInputLo: UInt32 = level == 0 ? 0 : 1
+
+        dispatchPrefixSumPhase(
+            encoder: encoder,
+            dataHi: hiBuffer,
+            dataLo: loBuffer,
+            blockHi: blockHi,
+            blockLo: blockLo,
+            elementCount: elementCount,
+            phase: 0,
+            readInputLo: readInputLo
+        )
+
+        if numBlocks > 1 {
+            try encodeInclusivePrefixSum(
+                encoder: encoder,
+                hiBuffer: blockHi,
+                loBuffer: blockLo,
+                elementCount: numBlocks,
+                auxiliaryHi: auxiliaryHi,
+                auxiliaryLo: auxiliaryLo,
+                level: level + 1
+            )
+
+            dispatchPrefixSumPhase(
+                encoder: encoder,
+                dataHi: hiBuffer,
+                dataLo: loBuffer,
+                blockHi: blockHi,
+                blockLo: blockLo,
+                elementCount: elementCount,
+                phase: 2,
+                readInputLo: readInputLo
+            )
+        }
+    }
+
+    // MARK: - Benchmark baseline (naive Float32 scan)
+
+    private func dispatchPrefixSumPhaseNaive(
+        encoder: MTLComputeCommandEncoder,
         dataBuffer: MTLBuffer,
         blockSumsBuffer: MTLBuffer,
         elementCount: Int,
@@ -955,7 +1102,7 @@ public class QuantumEngine {
         var countValue = UInt32(elementCount)
         var phaseValue = phase
 
-        encoder.setComputePipelineState(pipeline)
+        encoder.setComputePipelineState(pipelines.prefixSumNaive)
         encoder.setBuffer(dataBuffer, offset: 0, index: 0)
         encoder.setBuffer(blockSumsBuffer, offset: 0, index: 1)
         encoder.setBytes(&countValue, length: MemoryLayout<UInt32>.stride, index: 2)
@@ -966,7 +1113,7 @@ public class QuantumEngine {
         encoder.dispatchThreads(threadsPerGrid, threadsPerThreadgroup: threadsPerThreadgroup)
     }
 
-    private func encodeInclusivePrefixSum(
+    private func encodeInclusivePrefixSumNaive(
         encoder: MTLComputeCommandEncoder,
         buffer: MTLBuffer,
         elementCount: Int,
@@ -982,9 +1129,8 @@ public class QuantumEngine {
         let numBlocks = (elementCount + blockSize - 1) / blockSize
         let blockSumsBuffer = auxiliaryBuffers[level]
 
-        dispatchPrefixSumPhase(
+        dispatchPrefixSumPhaseNaive(
             encoder: encoder,
-            pipeline: pipelines.prefixSum,
             dataBuffer: buffer,
             blockSumsBuffer: blockSumsBuffer,
             elementCount: elementCount,
@@ -992,7 +1138,7 @@ public class QuantumEngine {
         )
 
         if numBlocks > 1 {
-            try encodeInclusivePrefixSum(
+            try encodeInclusivePrefixSumNaive(
                 encoder: encoder,
                 buffer: blockSumsBuffer,
                 elementCount: numBlocks,
@@ -1000,9 +1146,8 @@ public class QuantumEngine {
                 level: level + 1
             )
 
-            dispatchPrefixSumPhase(
+            dispatchPrefixSumPhaseNaive(
                 encoder: encoder,
-                pipeline: pipelines.prefixSum,
                 dataBuffer: buffer,
                 blockSumsBuffer: blockSumsBuffer,
                 elementCount: elementCount,
@@ -1011,21 +1156,140 @@ public class QuantumEngine {
         }
     }
 
+    /// Timing comparison of the CDF prefix-sum stage only: the uncompensated Float32 baseline versus
+    /// the shipped compensated (double-single) scan, averaged over `iterations` GPU runs.
+    public struct ScanBenchmarkResult: Sendable {
+        public let stateCount: Int
+        public let iterations: Int
+        public let naiveMillisecondsAverage: Double
+        public let compensatedMillisecondsAverage: Double
+
+        /// Extra wall-clock cost of the compensated scan, as a percentage of the naive scan.
+        public var overheadPercent: Double {
+            guard naiveMillisecondsAverage > 0 else { return 0 }
+            return (compensatedMillisecondsAverage - naiveMillisecondsAverage) / naiveMillisecondsAverage * 100
+        }
+    }
+
+    /// Benchmarks only the CDF/scan stage for a `qubitCount`-wide probability array.
+    ///
+    /// Both variants run the identical hierarchical scan structure over the same uniform input; only
+    /// the per-element work (and the extra `lo` compensation buffer traffic) differs. Buffer refills
+    /// are excluded from the timing, so the measurement reflects the GPU scan alone.
+    public func benchmarkPrefixSumScan(qubitCount: Int, iterations: Int) throws -> ScanBenchmarkResult {
+        precondition(qubitCount > 0 && iterations > 0)
+        let stateCount = 1 << qubitCount
+        let bytes = stateCount * MemoryLayout<QFloat>.stride
+
+        let source = try makeSharedBuffer(length: bytes)
+        let sourcePointer = source.contents().assumingMemoryBound(to: QFloat.self)
+        let uniform = QFloat(1.0 / Double(stateCount))
+        for index in 0..<stateCount { sourcePointer[index] = uniform }
+
+        let naiveData = try makeSharedBuffer(length: bytes)
+        var naiveAux: [MTLBuffer] = []
+        var remaining = stateCount
+        while remaining > 1 {
+            let blockCount = max((remaining + Self.scanBlockSize - 1) / Self.scanBlockSize, 1)
+            naiveAux.append(try makeSharedBuffer(length: blockCount * MemoryLayout<QFloat>.stride))
+            remaining = blockCount
+        }
+
+        let compensatedHi = try makeSharedBuffer(length: bytes)
+        let compensatedLo = try makeSharedBuffer(length: bytes)
+        let compensatedAux = try makePrefixSumAuxBuffers(stateCount: stateCount)
+
+        func refill(_ buffer: MTLBuffer) {
+            buffer.contents().copyMemory(from: source.contents(), byteCount: bytes)
+        }
+
+        func runNaiveOnce() throws {
+            guard let commandBuffer = commandQueue.makeCommandBuffer(),
+                  let encoder = commandBuffer.makeComputeCommandEncoder() else {
+                throw QuantumEngineError.commandBufferCreationFailed
+            }
+            try encodeInclusivePrefixSumNaive(
+                encoder: encoder,
+                buffer: naiveData,
+                elementCount: stateCount,
+                auxiliaryBuffers: naiveAux
+            )
+            encoder.endEncoding()
+            commandBuffer.commit()
+            commandBuffer.waitUntilCompleted()
+            if let error = commandBuffer.error {
+                throw QuantumEngineError.commandBufferExecutionFailed(underlying: error)
+            }
+        }
+
+        func runCompensatedOnce() throws {
+            guard let commandBuffer = commandQueue.makeCommandBuffer(),
+                  let encoder = commandBuffer.makeComputeCommandEncoder() else {
+                throw QuantumEngineError.commandBufferCreationFailed
+            }
+            try encodeInclusivePrefixSum(
+                encoder: encoder,
+                hiBuffer: compensatedHi,
+                loBuffer: compensatedLo,
+                elementCount: stateCount,
+                auxiliaryHi: compensatedAux.hi,
+                auxiliaryLo: compensatedAux.lo
+            )
+            encoder.endEncoding()
+            commandBuffer.commit()
+            commandBuffer.waitUntilCompleted()
+            if let error = commandBuffer.error {
+                throw QuantumEngineError.commandBufferExecutionFailed(underlying: error)
+            }
+        }
+
+        // Warm-up (pipeline/caches) — untimed.
+        refill(naiveData); try runNaiveOnce()
+        refill(compensatedHi); try runCompensatedOnce()
+
+        var naiveTotal = 0.0
+        for _ in 0..<iterations {
+            refill(naiveData)
+            let start = CFAbsoluteTimeGetCurrent()
+            try runNaiveOnce()
+            naiveTotal += CFAbsoluteTimeGetCurrent() - start
+        }
+
+        var compensatedTotal = 0.0
+        for _ in 0..<iterations {
+            refill(compensatedHi)
+            let start = CFAbsoluteTimeGetCurrent()
+            try runCompensatedOnce()
+            compensatedTotal += CFAbsoluteTimeGetCurrent() - start
+        }
+
+        return ScanBenchmarkResult(
+            stateCount: stateCount,
+            iterations: iterations,
+            naiveMillisecondsAverage: naiveTotal / Double(iterations) * 1000,
+            compensatedMillisecondsAverage: compensatedTotal / Double(iterations) * 1000
+        )
+    }
+
     public func executeMeasurementCollapse(on state: StateVector, diceRoll: Float) throws -> Int {
+        try executeMeasurementCollapse(on: state, dice: Double(diceRoll))
+    }
+
+    /// Collapses `state` to a computational-basis index sampled at the (high-resolution) `dice`
+    /// position of the cumulative distribution.
+    ///
+    /// The CDF is built with the compensated (double-single) GPU prefix sum and searched in the
+    /// same precision, and `dice` is a 53-bit `Double` split into a `(hi, lo)` float pair — together
+    /// these let the sampler resolve states whose probability is below the float32 ulp of the
+    /// running total, eliminating the high-qubit CDF plateaus.
+    func executeMeasurementCollapse(on state: StateVector, dice: Double) throws -> Int {
         let stateCount = state.stateCount
         let probabilityBytes = stateCount * MemoryLayout<QFloat>.stride
 
-        let probBuffer = try makeSharedBuffer(length: probabilityBytes)
+        let probHi = try makeSharedBuffer(length: probabilityBytes)
+        let probLo = try makeSharedBuffer(length: probabilityBytes)
         let collapsedBuffer = try makeSharedBuffer(length: MemoryLayout<UInt32>.stride)
-        var auxiliaryBuffers: [MTLBuffer] = []
-
-        var currentCount = stateCount
-        while currentCount > 1 {
-            let blockCount = max((currentCount + Self.scanBlockSize - 1) / Self.scanBlockSize, 1)
-            let byteCount = blockCount * MemoryLayout<QFloat>.stride
-            auxiliaryBuffers.append(try makeSharedBuffer(length: byteCount))
-            currentCount = blockCount
-        }
+        let aux = try makePrefixSumAuxBuffers(stateCount: stateCount)
 
         guard let commandBuffer = commandQueue.makeCommandBuffer(),
               let computeEncoder = commandBuffer.makeComputeCommandEncoder() else {
@@ -1033,23 +1297,28 @@ public class QuantumEngine {
         }
 
         dispatchFullStateKernel(encoder: computeEncoder, pipeline: pipelines.probabilities, state: state) { encoder in
-            encoder.setBuffer(probBuffer, offset: 0, index: 2)
+            encoder.setBuffer(probHi, offset: 0, index: 2)
         }
 
         try encodeInclusivePrefixSum(
             encoder: computeEncoder,
-            buffer: probBuffer,
+            hiBuffer: probHi,
+            loBuffer: probLo,
             elementCount: stateCount,
-            auxiliaryBuffers: auxiliaryBuffers
+            auxiliaryHi: aux.hi,
+            auxiliaryLo: aux.lo
         )
 
-        var diceRollValue = diceRoll
+        // Split the Double dice roll into a double-single (hi, lo) float pair for the search.
+        let diceHi = Float(dice)
+        var dicePair = SIMD2<Float>(diceHi, Float(dice - Double(diceHi)))
         var elementCount = UInt32(stateCount)
         computeEncoder.setComputePipelineState(pipelines.collapseSearch)
-        computeEncoder.setBuffer(probBuffer, offset: 0, index: 0)
-        computeEncoder.setBytes(&diceRollValue, length: MemoryLayout<Float>.stride, index: 1)
-        computeEncoder.setBytes(&elementCount, length: MemoryLayout<UInt32>.stride, index: 2)
-        computeEncoder.setBuffer(collapsedBuffer, offset: 0, index: 3)
+        computeEncoder.setBuffer(probHi, offset: 0, index: 0)
+        computeEncoder.setBuffer(probLo, offset: 0, index: 1)
+        computeEncoder.setBytes(&dicePair, length: MemoryLayout<SIMD2<Float>>.stride, index: 2)
+        computeEncoder.setBytes(&elementCount, length: MemoryLayout<UInt32>.stride, index: 3)
+        computeEncoder.setBuffer(collapsedBuffer, offset: 0, index: 4)
         computeEncoder.dispatchThreads(MTLSize(width: 1, height: 1, depth: 1), threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1))
 
         computeEncoder.endEncoding()

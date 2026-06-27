@@ -8,6 +8,39 @@
 #include <metal_stdlib>
 using namespace metal;
 
+// MARK: - Double-single (compensated) arithmetic
+//
+// To fight Float32 catastrophic cancellation while building the cumulative distribution (the CDF
+// plateaus that appear above ~24 qubits), probability sums are carried as an unevaluated pair
+// `value = hi + lo`, where `lo` holds the rounding error that a single float would discard. This is
+// the same idea as Kahan summation, reshaped into an associative operator so it survives a parallel
+// (Hillis–Steele) prefix scan. The compensation lives entirely in thread registers — no extra VRAM
+// traffic — so the gate kernels stay pure, single-precision Float32 and run at full speed.
+//
+// The two kernels that use these helpers (`prefix_sum_probabilities`, `find_collapsed_state`) are
+// compiled into a separate library with fast math OFF, so the compiler cannot algebraically cancel
+// the error term (`err`). That makes a `volatile` barrier unnecessary here and lets the scheduler
+// pipeline the dependent rounding steps — important since this scan is bandwidth-bound.
+
+inline float2 compensated_two_sum(float a, float b) {
+    float s = a + b;
+    float bb = s - a;
+    float err = (a - (s - bb)) + (b - bb);
+    return float2(s, err);
+}
+
+// Sum of two double-single numbers, renormalized so |lo| <= 0.5 ulp(hi).
+inline float2 df_add(float2 a, float2 b) {
+    float2 s = compensated_two_sum(a.x, b.x);
+    float lo = s.y + (a.y + b.y);
+    return compensated_two_sum(s.x, lo);
+}
+
+// Lexicographic comparison of double-single numbers: a < b.
+inline bool df_less(float2 a, float2 b) {
+    return (a.x < b.x) || (a.x == b.x && a.y < b.y);
+}
+
 kernel void hadamard_gate(device float* realBuffer [[buffer(0)]],
                           device float* imagBuffer [[buffer(1)]],
                           constant uint& targetQubit [[buffer(2)]],
@@ -655,45 +688,109 @@ kernel void masked_population_reduce(device const float* realBuffer [[buffer(0)]
     }
 }
 
-constant uint scanBlockSize [[function_constant(0)]];
-
-inline uint prefix_scan_block_size() {
-    return scanBlockSize > 0 ? scanBlockSize : 256;
-}
-
-inline void threadgroup_inclusive_scan(threadgroup float* sharedData, uint localID, uint groupSize) {
-    for (uint stride = 1; stride < groupSize; stride <<= 1) {
-        float accumulated = 0.0f;
-        if (localID >= stride) {
-            accumulated = sharedData[localID - stride];
-        }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-        sharedData[localID] += accumulated;
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-    }
-}
-
-// Phase 0: block-local inclusive scan on `dataBuffer`, storing each block total in `blockSums`.
-// Phase 2: add exclusive block offsets from scanned `blockSums` into `dataBuffer`.
-kernel void prefix_sum_probabilities(device float* dataBuffer [[buffer(0)]],
-                                     device float* blockSums [[buffer(1)]],
-                                     constant uint& elementCount [[buffer(2)]],
-                                     constant uint& phase [[buffer(3)]],
+// Compensated (double-single) inclusive prefix sum building the CDF.
+//
+// The running value is carried as `(hi, lo)` across both the in-block Hillis–Steele scan and the
+// block-offset pass, so probabilities far below the float32 ulp of the accumulated total are no
+// longer swallowed. `dataHi/dataLo` hold the per-element CDF; `blockHi/blockLo` hold the per-block
+// totals (themselves scanned recursively). `readInputLo` is 0 at the leaf level (input probabilities
+// have no compensation term yet) and 1 for the recursive block-sum passes.
+//
+// Phase 0: block-local inclusive scan, writing each block total into `blockHi/blockLo`.
+// Phase 2: add the (exclusive) scanned block offset into every element of the block.
+kernel void prefix_sum_probabilities(device float* dataHi [[buffer(0)]],
+                                     device float* dataLo [[buffer(1)]],
+                                     device float* blockHi [[buffer(2)]],
+                                     device float* blockLo [[buffer(3)]],
+                                     constant uint& elementCount [[buffer(4)]],
+                                     constant uint& phase [[buffer(5)]],
+                                     constant uint& readInputLo [[buffer(6)]],
                                      uint globalID [[thread_position_in_grid]],
                                      uint localID [[thread_index_in_threadgroup]],
                                      uint groupID [[threadgroup_position_in_grid]],
                                      uint groupSize [[threads_per_threadgroup]]) {
-    const uint blockSize = prefix_scan_block_size();
-    threadgroup float sharedData[256];
+    threadgroup float sharedHi[256];
+    threadgroup float sharedLo[256];
+
+    const uint index = groupID * groupSize + localID;
 
     if (phase == 0) {
-        const uint index = groupID * groupSize + localID;
-        const float value = (index < elementCount) ? dataBuffer[index] : 0.0f;
-        sharedData[localID] = value;
+        sharedHi[localID] = (index < elementCount) ? dataHi[index] : 0.0f;
+        sharedLo[localID] = (index < elementCount && readInputLo != 0u) ? dataLo[index] : 0.0f;
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
-        threadgroup_inclusive_scan(sharedData, localID, groupSize);
+        for (uint stride = 1; stride < groupSize; stride <<= 1) {
+            // Partner partial sum is read into registers; the compensation term never touches VRAM.
+            float addHi = 0.0f;
+            float addLo = 0.0f;
+            if (localID >= stride) {
+                addHi = sharedHi[localID - stride];
+                addLo = sharedLo[localID - stride];
+            }
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+
+            if (localID >= stride) {
+                float2 sum = df_add(float2(sharedHi[localID], sharedLo[localID]),
+                                    float2(addHi, addLo));
+                sharedHi[localID] = sum.x;
+                sharedLo[localID] = sum.y;
+            }
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+        }
+
+        if (index < elementCount) {
+            dataHi[index] = sharedHi[localID];
+            dataLo[index] = sharedLo[localID];
+        }
+
+        const uint blockEnd = min((groupID + 1) * groupSize, elementCount);
+        if (blockEnd > 0 && index == blockEnd - 1) {
+            blockHi[groupID] = sharedHi[localID];
+            blockLo[groupID] = sharedLo[localID];
+        }
+        return;
+    }
+
+    if (phase == 2) {
+        if (index >= elementCount) {
+            return;
+        }
+
+        float2 offset = (groupID > 0) ? float2(blockHi[groupID - 1], blockLo[groupID - 1])
+                                      : float2(0.0f, 0.0f);
+        float2 sum = df_add(float2(dataHi[index], dataLo[index]), offset);
+        dataHi[index] = sum.x;
+        dataLo[index] = sum.y;
+    }
+}
+
+// Naive single-precision inclusive prefix sum. NOT used by the production collapse path — it is the
+// uncompensated Float32 baseline kept solely so benchmarks can measure the cost of the compensated
+// scan against the plain one under identical memory access patterns.
+kernel void prefix_sum_probabilities_naive(device float* dataBuffer [[buffer(0)]],
+                                           device float* blockSums [[buffer(1)]],
+                                           constant uint& elementCount [[buffer(2)]],
+                                           constant uint& phase [[buffer(3)]],
+                                           uint globalID [[thread_position_in_grid]],
+                                           uint localID [[thread_index_in_threadgroup]],
+                                           uint groupID [[threadgroup_position_in_grid]],
+                                           uint groupSize [[threads_per_threadgroup]]) {
+    threadgroup float sharedData[256];
+    const uint index = groupID * groupSize + localID;
+
+    if (phase == 0) {
+        sharedData[localID] = (index < elementCount) ? dataBuffer[index] : 0.0f;
         threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        for (uint stride = 1; stride < groupSize; stride <<= 1) {
+            float accumulated = 0.0f;
+            if (localID >= stride) {
+                accumulated = sharedData[localID - stride];
+            }
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+            sharedData[localID] += accumulated;
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+        }
 
         if (index < elementCount) {
             dataBuffer[index] = sharedData[localID];
@@ -707,20 +804,22 @@ kernel void prefix_sum_probabilities(device float* dataBuffer [[buffer(0)]],
     }
 
     if (phase == 2) {
-        const uint index = groupID * groupSize + localID;
         if (index >= elementCount) {
             return;
         }
-
         const float blockOffset = (groupID > 0) ? blockSums[groupID - 1] : 0.0f;
         dataBuffer[index] += blockOffset;
     }
 }
 
-kernel void find_collapsed_state(device const float* cdfBuffer [[buffer(0)]],
-                                 constant float& diceRoll [[buffer(1)]],
-                                 constant uint& elementCount [[buffer(2)]],
-                                 device uint* collapsedIndex [[buffer(3)]],
+// Binary search over the double-single CDF for the first index whose cumulative probability
+// exceeds the (also double-single) dice roll. Comparing in compensated precision is what lets the
+// search resolve states whose probability is below the float32 ulp of the running total.
+kernel void find_collapsed_state(device const float* cdfHi [[buffer(0)]],
+                                 device const float* cdfLo [[buffer(1)]],
+                                 constant float2& diceRoll [[buffer(2)]],
+                                 constant uint& elementCount [[buffer(3)]],
+                                 device uint* collapsedIndex [[buffer(4)]],
                                  uint threadID [[thread_position_in_grid]]) {
     if (threadID != 0 || elementCount == 0) {
         return;
@@ -732,7 +831,7 @@ kernel void find_collapsed_state(device const float* cdfBuffer [[buffer(0)]],
 
     while (low <= high) {
         const uint mid = (low + high) >> 1;
-        if (diceRoll < cdfBuffer[mid]) {
+        if (df_less(diceRoll, float2(cdfHi[mid], cdfLo[mid]))) {
             result = mid;
             if (mid == 0) {
                 break;
@@ -776,6 +875,7 @@ kernel void partial_collapse_state_vector(device float* realBuffer [[buffer(0)]]
         }
     }
 }
+
 
 kernel void reset_qubit_state_vector(device float* realBuffer [[buffer(0)]],
                                      device float* imagBuffer [[buffer(1)]],

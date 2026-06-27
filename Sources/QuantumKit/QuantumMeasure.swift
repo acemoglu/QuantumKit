@@ -107,14 +107,16 @@ public struct QuantumMeasurement {
         try validateQubits(qubits, qubitCount: state.qubitCount)
 
         let fullDistribution = try probabilities(state: state, engine: engine)
-        var marginal = [QFloat](repeating: 0, count: 1 << qubits.count)
 
+        // Accumulate in Double so summing 2ⁿ sub-ulp float probabilities does not lose mass to
+        // Float32 cancellation, then narrow the (bounded, small) marginal back to QFloat.
+        var marginal = [Double](repeating: 0, count: 1 << qubits.count)
         for (stateIndex, probability) in fullDistribution.enumerated() {
             let outcome = partialOutcomeIndex(stateIndex: stateIndex, qubits: qubits)
-            marginal[outcome] += probability
+            marginal[outcome] += Double(probability)
         }
 
-        return marginal
+        return marginal.map { QFloat($0) }
     }
 
     public static func sampleCounts(
@@ -170,17 +172,17 @@ public struct QuantumMeasurement {
         try validateQubits(qubits, qubitCount: state.qubitCount)
 
         let distribution = try probabilities(state: state, engine: engine)
-        var expectation: QFloat = 0
+        var expectation = 0.0
 
         for (stateIndex, probability) in distribution.enumerated() {
             var eigenvalue: QFloat = 1
             for qubit in qubits {
                 eigenvalue *= pauliZEigenvalue(stateIndex: stateIndex, qubit: qubit)
             }
-            expectation += probability * eigenvalue
+            expectation += Double(probability) * Double(eigenvalue)
         }
 
-        return expectation
+        return QFloat(expectation)
     }
 
     /// Runs the circuit `shots` times from |0…0⟩, collapsing each run before the next.
@@ -239,15 +241,15 @@ public struct QuantumMeasurement {
         let realPointer = state.realBuffer.contents().assumingMemoryBound(to: QFloat.self)
         let imagPointer = state.imagBuffer.contents().assumingMemoryBound(to: QFloat.self)
 
-        var expectation: QFloat = 0
+        var expectation = 0.0
         for index in 0..<state.stateCount {
             let flipped = index ^ mask
             let realProduct = realPointer[index] * realPointer[flipped]
             let imagProduct = imagPointer[index] * imagPointer[flipped]
-            expectation += realProduct + imagProduct
+            expectation += Double(realProduct + imagProduct)
         }
 
-        return expectation
+        return QFloat(expectation)
     }
 
     /// ⟨ψ|P|ψ⟩ for an arbitrary Pauli tensor product `P`.
@@ -303,7 +305,7 @@ public struct QuantumMeasurement {
         let imagPointer = state.imagBuffer.contents().assumingMemoryBound(to: QFloat.self)
 
         let signMask = yMask | zMask
-        var expectation: QFloat = 0
+        var expectation = 0.0
 
         for j in 0..<state.stateCount {
             let k = j ^ flipMask
@@ -316,11 +318,11 @@ public struct QuantumMeasurement {
             // phase(j) · a_j
             let xr = pr * rj - pi * ij
             let xi = pr * ij + pi * rj
-            // Re[ conj(a_k) · phase(j) · a_j ]
-            expectation += realPointer[k] * xr + imagPointer[k] * xi
+            // Re[ conj(a_k) · phase(j) · a_j ], accumulated in Double to avoid Float32 cancellation.
+            expectation += Double(realPointer[k] * xr + imagPointer[k] * xi)
         }
 
-        return expectation
+        return QFloat(expectation)
     }
 
     /// ⟨ψ|P|ψ⟩ for a Pauli label such as `"XYZ"` or `"IXZ"`.
@@ -401,11 +403,14 @@ public struct QuantumMeasurement {
     }
 
     private static func sampleIndex(from distribution: [QFloat], rng: inout QuantumRNG) -> Int {
-        let roll = rng.nextUnitFloat()
-        var cumulative: QFloat = 0
+        // 53-bit roll + Double cumulative: at high qubit counts a 24-bit Float roll and a Float CDF
+        // both quantize away the tail of the distribution, so this host sampler mirrors the
+        // compensated GPU collapse path.
+        let roll = rng.nextUnitDouble()
+        var cumulative = 0.0
 
         for (index, probability) in distribution.enumerated() {
-            cumulative += probability
+            cumulative += Double(probability)
             if roll < cumulative {
                 return index
             }
