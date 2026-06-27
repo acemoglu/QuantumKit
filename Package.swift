@@ -16,7 +16,8 @@ let package = Package(
         .target(
             name: "QuantumKit",
             resources: [
-                .process("Metal/Gates.metal")
+                .process("Metal/Gates.metal"),
+                .process("Metal/GateKernels.metal")
             ]
         ),
         .testTarget(

@@ -1,0 +1,206 @@
+import XCTest
+import Metal
+@testable import QuantumKit
+
+extension QuantumKitTests {
+
+    // MARK: - Algebraic pre-compiler
+
+    func testAlgebraicPreCompilerCancelsDoubleHadamard() throws {
+        var circuit = try QuantumCircuit(qubitCount: 1)
+        try circuit.h(0)
+        try circuit.h(0)
+
+        let result = AlgebraicPreCompiler.optimize(gates: circuit.gates)
+        XCTAssertEqual(result.originalGateCount, 2)
+        XCTAssertEqual(result.optimizedGateCount, 0)
+        XCTAssertTrue(result.gates.isEmpty)
+    }
+
+    func testAlgebraicPreCompilerSSBecomesZ() throws {
+        var circuit = try QuantumCircuit(qubitCount: 1)
+        try circuit.s(0)
+        try circuit.s(0)
+
+        let result = AlgebraicPreCompiler.optimize(gates: circuit.gates)
+        XCTAssertEqual(result.optimizedGateCount, 1)
+        XCTAssertEqual(result.gates, [.z(target: 0)])
+    }
+
+    func testAlgebraicPreCompilerTTBecomesS() throws {
+        var circuit = try QuantumCircuit(qubitCount: 1)
+        try circuit.t(0)
+        try circuit.t(0)
+
+        let result = AlgebraicPreCompiler.optimize(gates: circuit.gates)
+        XCTAssertEqual(result.optimizedGateCount, 1)
+        XCTAssertEqual(result.gates, [.s(target: 0)])
+    }
+
+    func testAlgebraicPreCompilerMergesAdjacentRotations() throws {
+        var circuit = try QuantumCircuit(qubitCount: 1)
+        let quarter = QFloat(Double.pi / 4.0)
+        try circuit.rx(theta: quarter, 0)
+        try circuit.rx(theta: quarter, 0)
+
+        let result = AlgebraicPreCompiler.optimize(gates: circuit.gates)
+        XCTAssertEqual(result.optimizedGateCount, 1)
+        XCTAssertEqual(result.gates, [.rx(theta: QFloat(Double.pi / 2.0), target: 0)])
+    }
+
+    func testAlgebraicPreCompilerCancelsSWithSDagger() throws {
+        var circuit = try QuantumCircuit(qubitCount: 1)
+        try circuit.s(0)
+        try circuit.sdg(0)
+
+        let result = AlgebraicPreCompiler.optimize(gates: circuit.gates)
+        XCTAssertEqual(result.optimizedGateCount, 0, "S·S† should cancel completely")
+    }
+
+    func testAlgebraicPreCompilerCancelsTWithTDagger() throws {
+        var circuit = try QuantumCircuit(qubitCount: 1)
+        try circuit.t(0)
+        try circuit.tdg(0)
+
+        let result = AlgebraicPreCompiler.optimize(gates: circuit.gates)
+        XCTAssertEqual(result.optimizedGateCount, 0, "T·T† should cancel completely")
+    }
+
+    func testAlgebraicPreCompilerMergesPhaseGatesIntoS() throws {
+        var circuit = try QuantumCircuit(qubitCount: 1)
+        let quarter = QFloat(Double.pi / 4.0)
+        try circuit.p(theta: quarter, 0)
+        try circuit.p(theta: quarter, 0)
+
+        let result = AlgebraicPreCompiler.optimize(gates: circuit.gates)
+        XCTAssertEqual(result.optimizedGateCount, 1)
+        XCTAssertEqual(result.gates, [.s(target: 0)], "P(π/4)·P(π/4) = P(π/2) = S")
+    }
+
+    func testAlgebraicPreCompilerMergesTWithPhaseIntoSDagger() throws {
+        // T (π/4) followed by P(-3π/4) sums to -π/2 → S†.
+        var circuit = try QuantumCircuit(qubitCount: 1)
+        try circuit.t(0)
+        try circuit.p(theta: QFloat(-3.0 * Double.pi / 4.0), 0)
+
+        let result = AlgebraicPreCompiler.optimize(gates: circuit.gates)
+        XCTAssertEqual(result.optimizedGateCount, 1)
+        XCTAssertEqual(result.gates, [.sdg(target: 0)])
+    }
+
+    func testAlgebraicPreCompilerCancelsDoubleCZ() throws {
+        var circuit = try QuantumCircuit(qubitCount: 2)
+        try circuit.cz(0, 1)
+        try circuit.cz(0, 1)
+
+        let result = AlgebraicPreCompiler.optimize(gates: circuit.gates)
+        XCTAssertEqual(result.optimizedGateCount, 0, "CZ·CZ should cancel completely")
+    }
+
+    func testAlgebraicPreCompilerCancelsDoubleSwap() throws {
+        var circuit = try QuantumCircuit(qubitCount: 2)
+        try circuit.swap(0, 1)
+        try circuit.swap(0, 1)
+
+        let result = AlgebraicPreCompiler.optimize(gates: circuit.gates)
+        XCTAssertEqual(result.optimizedGateCount, 0, "SWAP·SWAP should cancel completely")
+    }
+
+    func testAlgebraicPreCompilerSlidesZAxisGatesThroughCZ() throws {
+        // S(0), CZ(0,1), S(0): the two S gates commute through CZ and fold into Z.
+        var circuit = try QuantumCircuit(qubitCount: 2)
+        try circuit.s(0)
+        try circuit.cz(0, 1)
+        try circuit.s(0)
+
+        let result = AlgebraicPreCompiler.optimize(gates: circuit.gates)
+        XCTAssertEqual(result.optimizedGateCount, 2)
+        // Z and CZ commute, so either ordering is a valid optimization.
+        XCTAssertTrue(result.gates.contains(.z(target: 0)))
+        XCTAssertTrue(result.gates.contains(.cz(control: 0, target: 1)))
+    }
+
+    func testCommutationSlidesHadamardThroughDisjointPauli() throws {
+        let gates: [Gate] = [.h(target: 0), .x(target: 1), .h(target: 0)]
+
+        var circuit = try QuantumCircuit(qubitCount: 2)
+        try circuit.h(0)
+        try circuit.x(1)
+        try circuit.h(0)
+
+        let slid = AlgebraicPreCompiler.slideGates(gates)
+        XCTAssertEqual(slid, [.x(target: 1), .h(target: 0), .h(target: 0)])
+
+        let result = AlgebraicPreCompiler.optimize(gates: circuit.gates)
+        XCTAssertEqual(result.optimizedGateCount, 1)
+        XCTAssertEqual(result.gates, [.x(target: 1)])
+    }
+
+    func testCommutationDoesNotCancelSameQubitHadamardSandwich() throws {
+        var circuit = try QuantumCircuit(qubitCount: 1)
+        try circuit.h(0)
+        try circuit.x(0)
+        try circuit.h(0)
+
+        let result = AlgebraicPreCompiler.optimize(gates: circuit.gates)
+        XCTAssertEqual(result.optimizedGateCount, 3)
+    }
+
+    func testCommutationDoesNotSlidePastMeasurement() throws {
+        var circuit = try QuantumCircuit(qubitCount: 2)
+        try circuit.h(0)
+        try circuit.measure(1)
+        try circuit.h(0)
+
+        let result = AlgebraicPreCompiler.optimize(gates: circuit.gates)
+        XCTAssertEqual(result.optimizedGateCount, 3)
+        XCTAssertEqual(result.gates, circuit.gates)
+    }
+
+    func testCommutationSlidesZThroughCXOnTarget() throws {
+        var circuit = try QuantumCircuit(qubitCount: 2)
+        try circuit.z(1)
+        try circuit.cx(0, 1)
+        try circuit.z(1)
+
+        let result = AlgebraicPreCompiler.optimize(gates: circuit.gates)
+        XCTAssertEqual(result.optimizedGateCount, 1)
+        XCTAssertEqual(result.gates, [.cx(control: 0, target: 1)])
+    }
+
+    func testAlgebraicPreCompilerPreservesBellStateProbabilities() throws {
+        let engine = try QuantumEngine()
+
+        guard let device = makeDevice() else {
+            XCTFail("Apple Silicon GPU not found!")
+            return
+        }
+
+        var original = try QuantumCircuit(qubitCount: 2)
+        try original.applyBellState()
+
+        var redundant = try QuantumCircuit(qubitCount: 2)
+        try redundant.applyBellState()
+        try redundant.h(0)
+        try redundant.h(0)
+        try redundant.cx(0, 1)
+        try redundant.cx(0, 1)
+
+        let optimized = try redundant.algebraicallyOptimized()
+
+        let originalState = try StateVector(qubitCount: 2, device: device)
+        try engine.execute(original, on: originalState)
+
+        let optimizedState = try StateVector(qubitCount: 2, device: device)
+        try engine.execute(optimized, on: optimizedState)
+
+        let originalProbabilities = try QuantumMeasurement.probabilities(state: originalState, engine: engine)
+        let optimizedProbabilities = try QuantumMeasurement.probabilities(state: optimizedState, engine: engine)
+
+        XCTAssertLessThan(optimized.gates.count, redundant.gates.count)
+        XCTAssertEqual(originalProbabilities.count, optimizedProbabilities.count)
+        for index in 0..<originalProbabilities.count {
+            XCTAssertEqual(originalProbabilities[index], optimizedProbabilities[index], accuracy: 1e-5)
+        }
+    }
+}
