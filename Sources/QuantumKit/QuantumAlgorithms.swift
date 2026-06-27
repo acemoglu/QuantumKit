@@ -265,54 +265,82 @@ extension QuantumCircuit {
                                b: registerB[0], a: registerA[0], ancilla: ancilla)
     }
 
-    /// Semantics: |ctrl⟩|a⟩|b⟩ → |ctrl⟩|a⟩|b − ctrl·a⟩ via two's-complement addition.
-    private mutating func applyControlledQuantumSubtract(
-        control: Int,
-        registerA: [Int],
-        registerB: [Int],
-        carryIn: Int,
-        carryOut: Int,
-        ancilla: Int
+    // MARK: - Wrapping (mod 2^n) Ripple-Carry Adders
+
+    /// In-place ripple-carry adder that discards the final carry: |a⟩|b⟩ → |a⟩|(a + b) mod 2^n⟩.
+    /// Identical to ``applyQuantumAdd(registerA:registerB:carryIn:carryOut:)`` but without an
+    /// overflow qubit, so two's-complement arithmetic wraps cleanly inside the register.
+    /// `carryIn` must be |0⟩ and is restored.
+    private mutating func applyQuantumAddWrapping(
+        registerA: [Int], registerB: [Int], carryIn: Int
     ) throws {
-        guard registerA.count == registerB.count, !registerA.isEmpty else {
-            throw QuantumCircuitError.invalidAlgorithmParameter(
-                reason: "registerA and registerB must be non-empty and of equal length"
-            )
-        }
-        try validateRegisterIndex(control)
-        for idx in registerA { try validateRegisterIndex(idx) }
-        for idx in registerB { try validateRegisterIndex(idx) }
-        try validateRegisterIndex(carryIn)
-        try validateRegisterIndex(carryOut)
-        try validateRegisterIndex(ancilla)
-
         let n = registerA.count
-
-        for i in 0..<n {
-            try cx(control, registerA[i])
+        try applyMAJ(carryIn, registerB[0], registerA[0])
+        for i in 1..<n {
+            try applyMAJ(registerA[i - 1], registerB[i], registerA[i])
         }
-        try cx(control, carryIn)
-
-        try applyControlledQuantumAdd(
-            control: control,
-            registerA: registerA,
-            registerB: registerB,
-            carryIn: carryIn,
-            carryOut: carryOut,
-            ancilla: ancilla
-        )
-
-        try cx(control, carryIn)
-        for i in 0..<n {
-            try cx(control, registerA[i])
+        for i in stride(from: n - 1, through: 1, by: -1) {
+            try applyUMA(registerA[i - 1], registerB[i], registerA[i])
         }
+        try applyUMA(carryIn, registerB[0], registerA[0])
     }
 
-    // MARK: - Modular Arithmetic (VBE scaffold)
+    /// Wrapping two's-complement subtraction: |a⟩|b⟩ → |a⟩|(b − a) mod 2^n⟩ (carry discarded).
+    private mutating func applyQuantumSubtractWrapping(
+        registerA: [Int], registerB: [Int], carryIn: Int
+    ) throws {
+        let n = registerA.count
+        for i in 0..<n { try x(registerA[i]) }
+        try x(carryIn)
+        try applyQuantumAddWrapping(registerA: registerA, registerB: registerB, carryIn: carryIn)
+        try x(carryIn)
+        for i in 0..<n { try x(registerA[i]) }
+    }
 
-    /// Vedral-Barenco-Ekert modular addition: |x⟩ → |(x + a) mod N⟩.
-    /// `ancillaRegister` layout: `[constantReg (n) | carryInAdd | carryOutAdd | carryInSub | carryOutSub | c3xAncilla]`.
-    /// Classical `a` is synthesised into `constantReg` via controlled-X encoding (assumes |0⟩ initial state).
+    /// Controlled wrapping adder: |ctrl⟩|a⟩|b⟩ → |ctrl⟩|a⟩|(b + ctrl·a) mod 2^n⟩ (carry discarded).
+    /// `ancilla` is a clean |0⟩ scratch qubit for the C3X decomposition, restored on exit.
+    private mutating func applyControlledQuantumAddWrapping(
+        control: Int, registerA: [Int], registerB: [Int], carryIn: Int, ancilla: Int
+    ) throws {
+        let n = registerA.count
+        try applyControlledMAJ(ctrl: control, c: carryIn,
+                               b: registerB[0], a: registerA[0], ancilla: ancilla)
+        for i in 1..<n {
+            try applyControlledMAJ(ctrl: control, c: registerA[i - 1],
+                                   b: registerB[i], a: registerA[i], ancilla: ancilla)
+        }
+        for i in stride(from: n - 1, through: 1, by: -1) {
+            try applyControlledUMA(ctrl: control, c: registerA[i - 1],
+                                   b: registerB[i], a: registerA[i], ancilla: ancilla)
+        }
+        try applyControlledUMA(ctrl: control, c: carryIn,
+                               b: registerB[0], a: registerA[0], ancilla: ancilla)
+    }
+
+    /// Controlled wrapping subtraction: |ctrl⟩|a⟩|b⟩ → |ctrl⟩|a⟩|(b − ctrl·a) mod 2^n⟩.
+    private mutating func applyControlledQuantumSubtractWrapping(
+        control: Int, registerA: [Int], registerB: [Int], carryIn: Int, ancilla: Int
+    ) throws {
+        let n = registerA.count
+        for i in 0..<n { try cx(control, registerA[i]) }
+        try cx(control, carryIn)
+        try applyControlledQuantumAddWrapping(
+            control: control, registerA: registerA, registerB: registerB,
+            carryIn: carryIn, ancilla: ancilla
+        )
+        try cx(control, carryIn)
+        for i in 0..<n { try cx(control, registerA[i]) }
+    }
+
+    // MARK: - Modular Arithmetic (VBE)
+
+    /// Vedral-Barenco-Ekert modular addition: |x⟩ → |(x + a) mod N⟩, valid for 0 ≤ x, a < N ≤ 2^n.
+    ///
+    /// `ancillaRegister` layout (n + 5 qubits, all restored to |0⟩ on exit):
+    /// `[constReg (n) | constHigh | workHigh | flag | carryIn | c3xAncilla]`.
+    /// `constReg`+`constHigh` form the (n+1)-bit constant register; `workHigh` is the (n+1)-th
+    /// (sign/overflow) bit of the work value `registerX`; `flag` records the comparison `x+a < N`.
+    /// Classical `a`/`N` are synthesised into `constReg` via X encoding (assumes |0⟩ initial state).
     public mutating func applyModularAdd(
         a: Int,
         modulus N: Int,
@@ -331,55 +359,66 @@ extension QuantumCircuit {
         let n = registerX.count
         guard ancillaRegister.count >= n + 5 else {
             throw QuantumCircuitError.invalidAlgorithmParameter(
-                reason: "ancillaRegister requires at least registerX.count + 5 qubits (constantReg, carryInAdd, carryOutAdd, carryInSub, carryOutSub, c3xAncilla)"
+                reason: "ancillaRegister requires at least registerX.count + 5 qubits (constReg, constHigh, workHigh, flag, carryIn, c3xAncilla)"
+            )
+        }
+        guard n < Int.bitWidth - 1, N <= (1 << n) - 1 else {
+            throw QuantumCircuitError.invalidAlgorithmParameter(
+                reason: "modulus N must satisfy N < 2^registerX.count so it fits in the register"
             )
         }
 
         for idx in registerX { try validateRegisterIndex(idx) }
         for idx in ancillaRegister { try validateRegisterIndex(idx) }
 
-        let constantReg = Array(ancillaRegister[0..<n])
-        let carryInAdd = ancillaRegister[n]
-        let carryOutAdd = ancillaRegister[n + 1]
-        let carryInSub = ancillaRegister[n + 2]
-        let carryOutSub = ancillaRegister[n + 3]
+        let constReg = Array(ancillaRegister[0..<n])
+        let constHigh = ancillaRegister[n]
+        let workHigh = ancillaRegister[n + 1]
+        let flag = ancillaRegister[n + 2]
+        let carryIn = ancillaRegister[n + 3]
         let c3xAncilla = ancillaRegister[n + 4]
+
+        // (n+1)-bit two's-complement registers: workReg holds x (sign/overflow in workHigh),
+        // constFull holds the classical operand (high bit constHigh stays |0⟩ since a, N < 2^n).
+        let workReg = registerX + [workHigh]
+        let constFull = constReg + [constHigh]
 
         let addend = a % N
 
-        // Step 1: |x⟩ → |x + a⟩
-        try encodeClassicalValue(addend, bitCount: n, register: constantReg)
-        try applyQuantumAdd(
-            registerA: constantReg,
-            registerB: registerX,
-            carryIn: carryInAdd,
-            carryOut: carryOutAdd
-        )
-        try encodeClassicalValue(addend, bitCount: n, register: constantReg)
+        // Step 1: x → x + a   (wraps in n+1 bits; no overflow since x + a < 2N ≤ 2^(n+1))
+        try encodeClassicalValue(addend, bitCount: n, register: constReg)
+        try applyQuantumAddWrapping(registerA: constFull, registerB: workReg, carryIn: carryIn)
+        try encodeClassicalValue(addend, bitCount: n, register: constReg)
 
-        // Step 2: |x + a⟩ → |x + a − N⟩
-        try encodeClassicalValue(N, bitCount: n, register: constantReg)
-        try applyQuantumSubtract(
-            registerA: constantReg,
-            registerB: registerX,
-            carryIn: carryInSub,
-            carryOut: carryOutSub
-        )
-        try encodeClassicalValue(N, bitCount: n, register: constantReg)
+        // Step 2: x → x + a − N   (workHigh becomes the sign bit: 1 iff x + a < N)
+        try encodeClassicalValue(N, bitCount: n, register: constReg)
+        try applyQuantumSubtractWrapping(registerA: constFull, registerB: workReg, carryIn: carryIn)
+        try encodeClassicalValue(N, bitCount: n, register: constReg)
 
-        // Step 3: if underflow (no carry out), add N back → |(x + a) mod N⟩
-        try x(carryOutSub)
-        try encodeClassicalValue(N, bitCount: n, register: constantReg)
-        try applyControlledQuantumAdd(
-            control: carryOutSub,
-            registerA: constantReg,
-            registerB: registerX,
-            carryIn: carryInSub,
-            carryOut: carryOutAdd,
-            ancilla: c3xAncilla
+        // Step 3: copy the sign bit into flag.
+        try cx(workHigh, flag)
+
+        // Step 4: if flag (underflow), add N back → workReg = (x + a) mod N, workHigh = 0.
+        try encodeClassicalValue(N, bitCount: n, register: constReg)
+        try applyControlledQuantumAddWrapping(
+            control: flag, registerA: constFull, registerB: workReg,
+            carryIn: carryIn, ancilla: c3xAncilla
         )
-        try encodeClassicalValue(N, bitCount: n, register: constantReg)
-        try x(carryOutSub)
+        try encodeClassicalValue(N, bitCount: n, register: constReg)
+
+        // Step 5: uncompute flag. Subtracting a makes the sign bit equal to NOT(flag),
+        // so X·CNOT·X drives flag back to |0⟩ without disturbing the data.
+        try encodeClassicalValue(addend, bitCount: n, register: constReg)
+        try applyQuantumSubtractWrapping(registerA: constFull, registerB: workReg, carryIn: carryIn)
+        try encodeClassicalValue(addend, bitCount: n, register: constReg)
+        try x(workHigh)
+        try cx(workHigh, flag)
+        try x(workHigh)
+
+        // Step 6: restore the addition → workReg = (x + a) mod N, all ancilla back to |0⟩.
+        try encodeClassicalValue(addend, bitCount: n, register: constReg)
+        try applyQuantumAddWrapping(registerA: constFull, registerB: workReg, carryIn: carryIn)
+        try encodeClassicalValue(addend, bitCount: n, register: constReg)
     }
 
     /// Controlled modular addition: |ctrl⟩|x⟩ → |ctrl⟩|(x + ctrl·a) mod N⟩.
@@ -402,7 +441,12 @@ extension QuantumCircuit {
         let n = registerX.count
         guard ancillaRegister.count >= n + 5 else {
             throw QuantumCircuitError.invalidAlgorithmParameter(
-                reason: "ancillaRegister requires at least registerX.count + 5 qubits (constantReg, carryInAdd, carryOutAdd, carryInSub, carryOutSub, c3xAncilla)"
+                reason: "ancillaRegister requires at least registerX.count + 5 qubits (constReg, constHigh, workHigh, flag, carryIn, c3xAncilla)"
+            )
+        }
+        guard n < Int.bitWidth - 1, N <= (1 << n) - 1 else {
+            throw QuantumCircuitError.invalidAlgorithmParameter(
+                reason: "modulus N must satisfy N < 2^registerX.count so it fits in the register"
             )
         }
 
@@ -410,49 +454,67 @@ extension QuantumCircuit {
         for idx in registerX { try validateRegisterIndex(idx) }
         for idx in ancillaRegister { try validateRegisterIndex(idx) }
 
-        let constantReg = Array(ancillaRegister[0..<n])
-        let carryInAdd = ancillaRegister[n]
-        let carryOutAdd = ancillaRegister[n + 1]
-        let carryInSub = ancillaRegister[n + 2]
-        let carryOutSub = ancillaRegister[n + 3]
+        let constReg = Array(ancillaRegister[0..<n])
+        let constHigh = ancillaRegister[n]
+        let workHigh = ancillaRegister[n + 1]
+        let flag = ancillaRegister[n + 2]
+        let carryIn = ancillaRegister[n + 3]
         let c3xAncilla = ancillaRegister[n + 4]
+
+        let workReg = registerX + [workHigh]
+        let constFull = constReg + [constHigh]
 
         let addend = a % N
 
-        try applyControlledClassicalValue(control: control, value: addend, bitCount: n, register: constantReg)
-        try applyControlledQuantumAdd(
-            control: control,
-            registerA: constantReg,
-            registerB: registerX,
-            carryIn: carryInAdd,
-            carryOut: carryOutAdd,
-            ancilla: c3xAncilla
-        )
-        try applyControlledClassicalValue(control: control, value: addend, bitCount: n, register: constantReg)
+        // Same VBE schedule as the uncontrolled adder, but every arithmetic step (and the
+        // flag bookkeeping) is gated on `control`. When control = |0⟩ each operation is a
+        // no-op, so the whole adder — including all ancilla — is a strict identity.
 
-        try applyControlledClassicalValue(control: control, value: N, bitCount: n, register: constantReg)
-        try applyControlledQuantumSubtract(
-            control: control,
-            registerA: constantReg,
-            registerB: registerX,
-            carryIn: carryInSub,
-            carryOut: carryOutSub,
-            ancilla: c3xAncilla
+        // Step 1: x → x + ctrl·a
+        try encodeClassicalValue(addend, bitCount: n, register: constReg)
+        try applyControlledQuantumAddWrapping(
+            control: control, registerA: constFull, registerB: workReg,
+            carryIn: carryIn, ancilla: c3xAncilla
         )
-        try applyControlledClassicalValue(control: control, value: N, bitCount: n, register: constantReg)
+        try encodeClassicalValue(addend, bitCount: n, register: constReg)
 
-        try cx(control, carryOutSub)
-        try applyControlledClassicalValue(control: control, value: N, bitCount: n, register: constantReg)
-        try applyControlledQuantumAdd(
-            control: carryOutSub,
-            registerA: constantReg,
-            registerB: registerX,
-            carryIn: carryInSub,
-            carryOut: carryOutAdd,
-            ancilla: c3xAncilla
+        // Step 2: x → x + ctrl·a − ctrl·N  (workHigh = sign bit when control = 1)
+        try encodeClassicalValue(N, bitCount: n, register: constReg)
+        try applyControlledQuantumSubtractWrapping(
+            control: control, registerA: constFull, registerB: workReg,
+            carryIn: carryIn, ancilla: c3xAncilla
         )
-        try applyControlledClassicalValue(control: control, value: N, bitCount: n, register: constantReg)
-        try cx(control, carryOutSub)
+        try encodeClassicalValue(N, bitCount: n, register: constReg)
+
+        // Step 3: copy the sign bit into flag (only when control = 1).
+        try ccx(control, workHigh, flag)
+
+        // Step 4: if flag, add N back → workReg = (x + a) mod N, workHigh = 0.
+        try encodeClassicalValue(N, bitCount: n, register: constReg)
+        try applyControlledQuantumAddWrapping(
+            control: flag, registerA: constFull, registerB: workReg,
+            carryIn: carryIn, ancilla: c3xAncilla
+        )
+        try encodeClassicalValue(N, bitCount: n, register: constReg)
+
+        // Step 5: uncompute flag (sign bit becomes NOT(flag) after subtracting a).
+        try encodeClassicalValue(addend, bitCount: n, register: constReg)
+        try applyControlledQuantumSubtractWrapping(
+            control: control, registerA: constFull, registerB: workReg,
+            carryIn: carryIn, ancilla: c3xAncilla
+        )
+        try encodeClassicalValue(addend, bitCount: n, register: constReg)
+        try cx(control, workHigh)
+        try ccx(control, workHigh, flag)
+        try cx(control, workHigh)
+
+        // Step 6: restore the addition → workReg = (x + ctrl·a) mod N, all ancilla |0⟩.
+        try encodeClassicalValue(addend, bitCount: n, register: constReg)
+        try applyControlledQuantumAddWrapping(
+            control: control, registerA: constFull, registerB: workReg,
+            carryIn: carryIn, ancilla: c3xAncilla
+        )
+        try encodeClassicalValue(addend, bitCount: n, register: constReg)
     }
 
     /// Doubly-controlled modular addition conditioned on both `control1` and `control2` being |1⟩.
@@ -467,7 +529,7 @@ extension QuantumCircuit {
     ) throws {
         guard ancillaRegister.count >= registerX.count + 5 else {
             throw QuantumCircuitError.invalidAlgorithmParameter(
-                reason: "ancillaRegister requires at least registerX.count + 5 qubits (constantReg, carryInAdd, carryOutAdd, carryInSub, carryOutSub, c3xAncilla)"
+                reason: "ancillaRegister requires at least registerX.count + 5 qubits (constReg, constHigh, workHigh, flag, carryIn, c3xAncilla)"
             )
         }
         try validateRegisterIndex(control1)
@@ -493,19 +555,6 @@ extension QuantumCircuit {
         for i in 0..<bitCount {
             if (value >> i) & 1 != 0 {
                 try x(register[i])
-            }
-        }
-    }
-
-    private mutating func applyControlledClassicalValue(
-        control: Int,
-        value: Int,
-        bitCount: Int,
-        register: [Int]
-    ) throws {
-        for i in 0..<bitCount {
-            if (value >> i) & 1 != 0 {
-                try cx(control, register[i])
             }
         }
     }
@@ -582,7 +631,7 @@ extension QuantumCircuit {
         let requiredAncillaCount = (targetIndices.count * 2) + 6
         guard ancillaIndices.count >= requiredAncillaCount else {
             throw QuantumCircuitError.invalidAlgorithmParameter(
-                reason: "ancillaRegister requires at least (2 * targetRegister.count) + 4 qubits"
+                reason: "ancillaRegister requires at least (2 * targetRegister.count) + 6 qubits"
             )
         }
 
@@ -602,7 +651,22 @@ extension QuantumCircuit {
         }
     }
 
+    /// Controlled SWAP (Fredkin) of `q1` and `q2`, conditioned on `control`.
+    /// Decomposed as CX(q2,q1)·CCX(control,q1,q2)·CX(q2,q1); leaves both qubits
+    /// unchanged when `control = |0⟩` and exchanges them when `control = |1⟩`.
+    private mutating func applyControlledSwap(control: Int, _ q1: Int, _ q2: Int) throws {
+        try cx(q2, q1)
+        try ccx(control, q1, q2)
+        try cx(q2, q1)
+    }
+
     /// VBE controlled modular multiplication: |c⟩|y⟩ → |c⟩|(c · a · y) mod N⟩.
+    ///
+    /// Implemented out-of-place: the product is accumulated into a clean `|0⟩`
+    /// scratch register, a `control`-conditioned SWAP moves it into the target, and
+    /// the scratch register is uncomputed with `a⁻¹`. Crucially every step is gated
+    /// on `control`, so when `control = |0⟩` the whole operation is the identity and
+    /// the ancilla register is guaranteed to return to `|0⟩` (no entanglement leak).
     private mutating func applyControlledModularMultiply(
         control: Int,
         a: Int,
@@ -623,7 +687,7 @@ extension QuantumCircuit {
         let n = targetRegister.count
         guard ancillaRegister.count >= (n * 2) + 6 else {
             throw QuantumCircuitError.invalidAlgorithmParameter(
-                reason: "ancillaRegister requires at least (2 * targetRegister.count) + 6 qubits (accumulator, constantReg, carryInAdd, carryOutAdd, carryInSub, carryOutSub, c3xAncilla, scratchFlag)"
+                reason: "ancillaRegister requires at least (2 * targetRegister.count) + 6 qubits (accumulator, constReg, constHigh, workHigh, flag, carryIn, c3xAncilla, scratchFlag)"
             )
         }
 
@@ -650,17 +714,26 @@ extension QuantumCircuit {
             )
         }
 
+        // Step 2: control-conditioned SWAP of target ↔ accumulator (Fredkin).
+        // control = 1 → target now holds a·y mod N, accumulator holds the original y.
+        // control = 0 → identity, accumulator stays |0⟩.
         for i in 0..<n {
-            try cx(targetRegister[i], accumulator[i])
+            try applyControlledSwap(control: control, targetRegister[i], accumulator[i])
         }
 
+        // Step 3: uncompute the accumulator back to |0⟩ using a⁻¹.
+        // Modular subtraction of v is realised as modular addition of (N − v) mod N,
+        // doubly controlled on `control` and the (post-swap) target bits. This drives
+        // the accumulator to |0⟩ in the control = 1 branch and is a no-op otherwise,
+        // so no which-path information is left behind in the ancilla.
         let aInverse = try modularInverse(multiplier, modulus: N)
         for i in stride(from: n - 1, through: 0, by: -1) {
-            let addend = (aInverse * (1 << i)) % N
+            let inverseAddend = (aInverse * (1 << i)) % N
+            let subtrahend = (N - inverseAddend) % N
             try applyDoublyControlledModularAdd(
                 control1: control,
                 control2: targetRegister[i],
-                a: addend,
+                a: subtrahend,
                 modulus: N,
                 registerX: accumulator,
                 ancillaRegister: adderAncilla,

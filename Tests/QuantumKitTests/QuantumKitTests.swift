@@ -1682,6 +1682,60 @@ final class QuantumKitTests: XCTestCase {
         XCTAssertEqual(result[8], 0, "constantReg LSB (qubit 4) should be restored to 0")
     }
 
+    /// Exhaustive reversibility sweep of the rewritten VBE modular adder: for several
+    /// moduli (prime and composite) and every 0 ≤ x, a < N, the data register must hold
+    /// exactly (x + a) mod N and ALL ancilla qubits must return to |0⟩.
+    func testModularAddExhaustiveReversibility() throws {
+        let engine = try QuantumEngine()
+
+        guard let device = makeDevice() else {
+            XCTFail("Apple Silicon GPU not found!")
+            return
+        }
+
+        // (modulus, bit-width) pairs with N < 2^n.
+        let cases: [(N: Int, n: Int)] = [(3, 2), (5, 3), (6, 3), (7, 3)]
+
+        for (N, n) in cases {
+            let qubitCount = 2 * n + 5
+            let registerX = Array(0..<n)
+            let ancilla = Array(n..<(2 * n + 5))
+
+            for x in 0..<N {
+                for a in 0..<N {
+                    let state = try StateVector(qubitCount: qubitCount, device: device)
+                    var circuit = try QuantumCircuit(qubitCount: qubitCount)
+
+                    for i in 0..<n where (x >> i) & 1 == 1 { try circuit.x(registerX[i]) }
+
+                    try circuit.applyModularAdd(
+                        a: a, modulus: N, registerX: registerX, ancillaRegister: ancilla
+                    )
+
+                    try engine.execute(circuit, on: state)
+
+                    let amplitudes = QuantumMeasurement.amplitudes(state: state)
+                    var nonZero: [Int] = []
+                    for (index, amp) in amplitudes.enumerated() {
+                        let mag = (Double(amp.real) * Double(amp.real)
+                                   + Double(amp.imaginary) * Double(amp.imaginary)).squareRoot()
+                        if mag > 1e-3 { nonZero.append(index) }
+                    }
+
+                    XCTAssertEqual(nonZero.count, 1,
+                                   "N=\(N) x=\(x) a=\(a): result must be a single basis state")
+                    let index = nonZero[0]
+                    let dataValue = index & ((1 << n) - 1)
+                    let ancillaBits = index >> n
+                    XCTAssertEqual(dataValue, (x + a) % N,
+                                   "N=\(N) x=\(x) a=\(a): registerX must equal (x+a) mod N")
+                    XCTAssertEqual(ancillaBits, 0,
+                                   "N=\(N) x=\(x) a=\(a): all ancilla must be restored to |0⟩")
+                }
+            }
+        }
+    }
+
     func testCCXRejectsOutOfBoundsIndex() throws {
         var circuit = try QuantumCircuit(qubitCount: 3)
 
@@ -1753,10 +1807,12 @@ final class QuantumKitTests: XCTestCase {
 
         let shots = 512
         var rng: QuantumRNG = .seeded(0x5100_0015)
+        // The inverse QFT emits its phase estimate in bit-reversed order, so the counting
+        // register must be read most-significant qubit first to recover the true numerator.
         let counts = try QuantumMeasurement.sampleCountsRNG(
             state: state,
             engine: engine,
-            qubits: Array(controlRange),
+            qubits: Array(controlRange).reversed(),
             shots: shots,
             rng: &rng
         )
@@ -1779,6 +1835,237 @@ final class QuantumKitTests: XCTestCase {
             [3, 5],
             "Shor post-processing should factor 15 into 3 and 5"
         )
+    }
+
+    // MARK: - Ancilla uncompute / no-entanglement-leak (Shor controlled modular multiply)
+
+    /// Direct regression test for the controlled-modular-multiply ancilla cleanup
+    /// bug ("Madde 4"): when the control qubit is |0⟩, the operation must be a strict
+    /// identity and every ancilla qubit must be returned to a clean |0⟩.
+    ///
+    /// The previous implementation used an unconditional `cx` "swap" plus a
+    /// wrong-direction uncompute, so even with control = |0⟩ it copied the target
+    /// into the accumulator (`accumulator ^= target`) and never cleared it — leaving
+    /// the ancilla entangled with the main register. Here we assert the full state
+    /// vector is untouched (only |control=0, y, ancilla=0⟩ has amplitude), which fails
+    /// on the buggy code and passes once the swap/uncompute are control-gated.
+    func testControlledModularMultiplyControlZeroLeavesNoTrace() throws {
+        let engine = try QuantumEngine()
+
+        guard let device = makeDevice() else {
+            XCTFail("Apple Silicon GPU not found!")
+            return
+        }
+
+        // Layout (13 qubits): control = qubit 0, target = qubits 1,2 (n = 2),
+        // ancilla = qubits 3...12 (2 * n + 6 = 10).
+        let qubitCount = 13
+        let controlRange = 0...0
+        let targetRange = 1...2
+        let ancillaRange = 3...12
+
+        let state = try StateVector(qubitCount: qubitCount, device: device)
+        var circuit = try QuantumCircuit(qubitCount: qubitCount)
+
+        // control = |0⟩ (left untouched), |y⟩ = |1⟩ on the target register.
+        try circuit.x(targetRange.lowerBound)
+
+        try circuit.applyModularExponentiation(
+            a: 2,
+            modulus: 3,
+            controlRegister: controlRange,
+            targetRegister: targetRange,
+            ancillaRegister: ancillaRange
+        )
+
+        try engine.execute(circuit, on: state)
+
+        let amplitudes = QuantumMeasurement.amplitudes(state: state)
+
+        // basis index = Σ qubit_i · 2^i (qubit 0 = control = LSB).
+        // Expected: identity → |control=0, y=1, ancilla=0⟩ → only index 2 (qubit 1 set).
+        let expectedIndex = 2
+        for (index, amplitude) in amplitudes.enumerated() {
+            let magnitude = (Double(amplitude.real) * Double(amplitude.real)
+                             + Double(amplitude.imaginary) * Double(amplitude.imaginary)).squareRoot()
+            let expected: Double = (index == expectedIndex) ? 1.0 : 0.0
+            XCTAssertEqual(magnitude, expected, accuracy: 1e-4,
+                           "control = |0⟩ must be the identity with all ancilla restored to |0⟩; "
+                           + "unexpected amplitude at basis state \(index)")
+        }
+    }
+
+    /// Superposition / interference test ("Madde 4"). Puts the control qubit into a
+    /// Hadamard superposition, applies the controlled modular multiply, then verifies
+    /// that the resulting state is EXACTLY the clean two-branch superposition
+    ///     (|c=0, y=1⟩ + |c=1, y=(a·y) mod N⟩) / √2  ⊗  |ancilla = 0⟩,
+    /// i.e. every ancilla qubit is restored to |0⟩ in BOTH branches (no which-path
+    /// information leaks anywhere) and the interference pattern is fully intact.
+    ///
+    /// The buggy code populated extra basis states (ancilla ≠ 0) in both branches; this
+    /// strict full-state-vector check fails there and passes only with a leak-free
+    /// controlled multiply and a fully reversible modular adder.
+    func testControlledModularMultiplyAncillaUncomputeNoLeak() throws {
+        let engine = try QuantumEngine()
+
+        guard let device = makeDevice() else {
+            XCTFail("Apple Silicon GPU not found!")
+            return
+        }
+
+        let qubitCount = 13
+        let controlRange = 0...0      // qubit 0
+        let targetRange = 1...2       // qubits 1,2  (n = 2, LSB = qubit 1)
+        let ancillaRange = 3...12     // qubits 3...12
+
+        let base = 2
+        let modulus = 3
+
+        let state = try StateVector(qubitCount: qubitCount, device: device)
+        var circuit = try QuantumCircuit(qubitCount: qubitCount)
+
+        // |y⟩ = |1⟩
+        try circuit.x(targetRange.lowerBound)
+
+        // Control into superposition (|0⟩ + |1⟩)/√2.
+        try circuit.h(controlRange.lowerBound)
+
+        try circuit.applyModularExponentiation(
+            a: base,
+            modulus: modulus,
+            controlRegister: controlRange,
+            targetRegister: targetRange,
+            ancillaRegister: ancillaRange
+        )
+
+        try engine.execute(circuit, on: state)
+
+        let amplitudes = QuantumMeasurement.amplitudes(state: state)
+        let invSqrt2 = Double(1.0 / 2.0.squareRoot())
+
+        func magnitude(_ a: ComplexAmplitude) -> Double {
+            (Double(a.real) * Double(a.real) + Double(a.imaginary) * Double(a.imaginary)).squareRoot()
+        }
+
+        // basis index = Σ qubit_i · 2^i (qubit 0 = control = LSB), ancilla = qubits ≥ 3.
+        //   c = 0 branch: control=0, y=1                 → index 2
+        //   c = 1 branch: control=1, y=(2·1) mod 3 = 2   → index 5  (1 + 4)
+        let cleanZeroBranchIndex = 2
+        let cleanOneBranchIndex = 5
+
+        for (index, amplitude) in amplitudes.enumerated() {
+            let mag = magnitude(amplitude)
+            if index == cleanZeroBranchIndex || index == cleanOneBranchIndex {
+                XCTAssertEqual(mag, invSqrt2, accuracy: 1e-4,
+                               "Branch \(index) must carry amplitude 1/√2 with all ancilla clean")
+            } else {
+                XCTAssertEqual(mag, 0, accuracy: 1e-4,
+                               "No amplitude may leak to basis state \(index) — ancilla must stay |0⟩")
+            }
+        }
+    }
+
+    /// Interference (Hadamard-refocus) test. With an identity multiply (a = 1) a clean,
+    /// leak-free controlled multiply leaves the control qubit completely disentangled,
+    /// so H · multiply · H must refocus it deterministically back to |0⟩. Any residual
+    /// ancilla entanglement (which-path information) would wash this interference out.
+    func testControlledModularMultiplyPreservesInterference() throws {
+        let engine = try QuantumEngine()
+
+        guard let device = makeDevice() else {
+            XCTFail("Apple Silicon GPU not found!")
+            return
+        }
+
+        let qubitCount = 13
+        let controlRange = 0...0
+        let targetRange = 1...2
+        let ancillaRange = 3...12
+
+        let state = try StateVector(qubitCount: qubitCount, device: device)
+        var circuit = try QuantumCircuit(qubitCount: qubitCount)
+
+        // |y⟩ = |1⟩
+        try circuit.x(targetRange.lowerBound)
+
+        // H · (controlled multiply by 1) · H — identity on the control if no leak.
+        try circuit.h(controlRange.lowerBound)
+        try circuit.applyModularExponentiation(
+            a: 1,
+            modulus: 3,
+            controlRegister: controlRange,
+            targetRegister: targetRange,
+            ancillaRegister: ancillaRange
+        )
+        try circuit.h(controlRange.lowerBound)
+
+        try engine.execute(circuit, on: state)
+
+        let probabilities = try QuantumMeasurement.probabilities(state: state, engine: engine)
+
+        // Control refocused to |0⟩, target still |y=1⟩, all ancilla |0⟩ → only index 2.
+        let expectedIndex = 2
+        for (index, probability) in probabilities.enumerated() {
+            let expected: Double = (index == expectedIndex) ? 1.0 : 0.0
+            XCTAssertEqual(Double(probability), expected, accuracy: 1e-4,
+                           "Interference must refocus the control to |0⟩; unexpected probability at \(index)")
+        }
+    }
+
+    /// End-to-end correctness of the modular-exponentiation oracle: with the counting
+    /// register driven to a definite value `c`, the target must hold exactly `a^c mod N`
+    /// and every ancilla qubit must be restored to |0⟩ (unitary, leak-free oracle).
+    func testModularExponentiationOracleIsExactAndCleanForAllExponents() throws {
+        let engine = try QuantumEngine()
+
+        guard let device = makeDevice() else {
+            XCTFail("Apple Silicon GPU not found!")
+            return
+        }
+
+        let controlN = 4, targetN = 4
+        let ancN = targetN * 2 + 6
+        let total = controlN + targetN + ancN
+        let controlRange = 0..<controlN
+        let targetRange = controlN..<(controlN + targetN)
+        let ancRange = (controlN + targetN)..<total
+        let base = 7, modulus = 15
+
+        for c in 0..<(1 << controlN) {
+            let state = try StateVector(qubitCount: total, device: device)
+            var circuit = try QuantumCircuit(qubitCount: total)
+
+            try circuit.x(targetRange.lowerBound)   // |y⟩ = |1⟩
+            for j in 0..<controlN where (c >> j) & 1 == 1 {
+                try circuit.x(controlRange.lowerBound + j)
+            }
+
+            try circuit.applyModularExponentiation(
+                a: base, modulus: modulus,
+                controlRegister: controlRange.lowerBound...(controlRange.upperBound - 1),
+                targetRegister: targetRange.lowerBound...(targetRange.upperBound - 1),
+                ancillaRegister: ancRange.lowerBound...(ancRange.upperBound - 1)
+            )
+
+            try engine.execute(circuit, on: state)
+
+            let amplitudes = QuantumMeasurement.amplitudes(state: state)
+            var nonZero: [Int] = []
+            for (index, a) in amplitudes.enumerated() {
+                let mag = (Double(a.real) * Double(a.real)
+                           + Double(a.imaginary) * Double(a.imaginary)).squareRoot()
+                if mag > 1e-3 { nonZero.append(index) }
+            }
+
+            XCTAssertEqual(nonZero.count, 1,
+                           "Oracle must be a permutation (single basis state) for exponent \(c)")
+            let index = nonZero[0]
+            let targetValue = (index >> controlN) & ((1 << targetN) - 1)
+            let ancillaBits = index >> (controlN + targetN)
+            XCTAssertEqual(targetValue, ShorClassical.modularPower(base, exponent: c, modulus: modulus),
+                           "Target must equal \(base)^\(c) mod \(modulus)")
+            XCTAssertEqual(ancillaBits, 0, "All ancilla must be restored to |0⟩ for exponent \(c)")
+        }
     }
 
     // MARK: - Task 1: amplitudes()
