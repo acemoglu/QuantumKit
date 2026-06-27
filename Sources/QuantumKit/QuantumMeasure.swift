@@ -372,11 +372,18 @@ public struct QuantumMeasurement {
         shots: Int,
         rng: inout QuantumRNG
     ) throws -> ShotCounts {
+        // Build the cumulative distribution once, then sample each shot with an O(log n) binary
+        // search instead of re-scanning the whole distribution per shot. This drops histogram
+        // building from O(shots · 2ⁿ) to O(2ⁿ + shots · log 2ⁿ) and is bit-for-bit identical to the
+        // old linear scan for any given roll (same CDF, same first-exceeding index).
+        let cumulative = cumulativeDistribution(distribution)
+
         var histogram: [Int: Int] = [:]
         histogram.reserveCapacity(min(shots, distribution.count))
 
         for _ in 0..<shots {
-            let outcome = sampleIndex(from: distribution, rng: &rng)
+            let roll = rng.nextUnitDouble()
+            let outcome = sampleIndex(roll: roll, cumulative: cumulative)
             histogram[outcome, default: 0] += 1
         }
 
@@ -402,21 +409,39 @@ public struct QuantumMeasurement {
         return outcome
     }
 
-    private static func sampleIndex(from distribution: [QFloat], rng: inout QuantumRNG) -> Int {
-        // 53-bit roll + Double cumulative: at high qubit counts a 24-bit Float roll and a Float CDF
-        // both quantize away the tail of the distribution, so this host sampler mirrors the
-        // compensated GPU collapse path.
-        let roll = rng.nextUnitDouble()
-        var cumulative = 0.0
-
+    /// Inclusive CDF accumulated in `Double`.
+    ///
+    /// At high qubit counts a Float32 CDF quantizes away the tail of the distribution (summing 2ⁿ
+    /// sub-ulp probabilities loses mass to cancellation), so the running total is carried in `Double`
+    /// — mirroring the compensated GPU collapse path.
+    private static func cumulativeDistribution(_ distribution: [QFloat]) -> [Double] {
+        var cumulative = [Double](repeating: 0, count: distribution.count)
+        var running = 0.0
         for (index, probability) in distribution.enumerated() {
-            cumulative += Double(probability)
-            if roll < cumulative {
-                return index
+            running += Double(probability)
+            cumulative[index] = running
+        }
+        return cumulative
+    }
+
+    /// Smallest index `i` with `roll < cumulative[i]` — exactly the index the linear scan would
+    /// return for the same roll. Because the CDF is non-decreasing the predicate is monotonic, so a
+    /// binary search finds it in O(log n); the final index is returned when the roll lands in the
+    /// rounding gap above the total mass.
+    private static func sampleIndex(roll: Double, cumulative: [Double]) -> Int {
+        var low = 0
+        var high = cumulative.count - 1
+
+        while low < high {
+            let mid = (low + high) / 2
+            if roll < cumulative[mid] {
+                high = mid
+            } else {
+                low = mid + 1
             }
         }
 
-        return distribution.count - 1
+        return low
     }
 
     private static func toBitArray(value: Int, qubitCount: Int) -> [Int] {
