@@ -86,6 +86,12 @@ public enum Gate: Equatable, Sendable {
     /// Project a qubit onto |0⟩ and renormalize (non-unitary).
     case reset(qubit: Int)
 
+    /// Classically conditioned gate: applies `gate` only when the classical register
+    /// `classicalRegister` holds `expectedValue`. Marked `indirect` so a `Gate` can nest inside
+    /// another `Gate`, giving the recursive classical-feedback representation required by the
+    /// deferred-measurement principle.
+    indirect case c_if(classicalRegister: Int, expectedValue: Int, gate: Gate)
+
 }
 
 extension Gate {
@@ -110,6 +116,8 @@ extension Gate {
             return controls + [target]
         case .measure(let qubits):
             return qubits
+        case .c_if(_, _, let gate):
+            return gate.affectedQubits
         }
     }
 
@@ -155,6 +163,8 @@ extension Gate {
             return .u(theta: -theta, phi: -lambda, lambda: -phi, target: target)
         case .measure, .reset:
             return self
+        case .c_if(let classicalRegister, let expectedValue, let gate):
+            return .c_if(classicalRegister: classicalRegister, expectedValue: expectedValue, gate: gate.adjoint)
         }
     }
 

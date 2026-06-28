@@ -245,7 +245,7 @@ public final class DensityMatrixEngine: @unchecked Sendable {
             }
 
             if noise.appliesPhaseDamping {
-                let lambda = noise.phaseDampingProbability
+                let lambda = noise.effectivePhaseDampingProbability
                 let keep = sqrt(max(0, 1 - lambda))
                 let dephase = sqrt(max(0, lambda))
                 try applyKrausChannel(
@@ -545,7 +545,7 @@ public final class DensityMatrixEngine: @unchecked Sendable {
                 controlMask: bitMask(of: control),
                 matrix: [complex(1, 0), complex(0, 0), complex(0, 0), complex(cos(theta), sin(theta))]
             )
-        case .swap, .measure, .reset:
+        case .swap, .measure, .reset, .c_if:
             throw DensityMatrixEngineError.unsupportedGate(gate)
         }
     }

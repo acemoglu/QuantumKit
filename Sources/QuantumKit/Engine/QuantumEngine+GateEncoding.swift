@@ -414,6 +414,13 @@ extension QuantumEngine {
 
         case .measure, .reset:
             break
+
+        case .c_if:
+            // Classically conditioned gates encode deferred measurement / classical feedback. The
+            // state-vector engine carries no classical register, so the conditional is not dispatched
+            // here; it is preserved purely as circuit structure (and treated as a barrier by the
+            // algebraic precompiler).
+            break
         }
     }
 }

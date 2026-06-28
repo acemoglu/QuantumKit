@@ -3,6 +3,15 @@ import Metal
 
 extension QuantumEngine {
 
+    /// Depolarizing noise via Pauli-jump unraveling.
+    ///
+    /// - 1-qubit gates: with probability `p` a jump occurs and one of the 3 non-identity
+    ///   single-qubit Paulis (X, Y, Z) is applied uniformly.
+    /// - 2-qubit gates (e.g. `cx`, `cz`, `swap`): the channel is the *two-qubit* depolarizing
+    ///   channel, so with probability `p` a single jump occurs and one of the 15 non-identity
+    ///   two-qubit Paulis (IX, IY, IZ, XI, XX, XY, XZ, YI, YX, YY, YZ, ZI, ZX, ZY, ZZ) is applied
+    ///   uniformly — rather than (incorrectly) drawing an independent single-qubit Pauli per qubit.
+    /// - ≥3-qubit gates: fall back to independent per-qubit single-qubit depolarizing.
     func applyDepolarizingNoise(
         after gate: Gate,
         on state: StateVector,
@@ -11,20 +20,68 @@ extension QuantumEngine {
     ) throws {
         guard probability > 0 else { return }
 
-        for qubit in Set(gate.affectedQubits) {
-            guard rng.nextUnitFloat() < probability else { continue }
+        // Distinct affected qubits, order preserved.
+        var seen = Set<Int>()
+        let qubits = gate.affectedQubits.filter { seen.insert($0).inserted }
 
-            let pauliRoll = rng.nextUnitFloat()
-            let pauliGate: Gate
-            if pauliRoll < (1.0 / 3.0) {
-                pauliGate = .x(target: qubit)
-            } else if pauliRoll < (2.0 / 3.0) {
-                pauliGate = .y(target: qubit)
-            } else {
-                pauliGate = .z(target: qubit)
+        switch qubits.count {
+        case 0:
+            return
+
+        case 1:
+            guard rng.nextUnitFloat() < probability else { return }
+            try executeUnitaryGate(randomSingleQubitPauli(on: qubits[0], rng: &rng), on: state)
+
+        case 2:
+            guard rng.nextUnitFloat() < probability else { return }
+            for pauli in randomTwoQubitPauli(on: qubits[0], and: qubits[1], rng: &rng) {
+                try executeUnitaryGate(pauli, on: state)
             }
 
-            try executeUnitaryGate(pauliGate, on: state)
+        default:
+            for qubit in qubits {
+                guard rng.nextUnitFloat() < probability else { continue }
+                try executeUnitaryGate(randomSingleQubitPauli(on: qubit, rng: &rng), on: state)
+            }
+        }
+    }
+
+    /// Uniformly samples one of the 3 non-identity single-qubit Paulis {X, Y, Z}.
+    private func randomSingleQubitPauli(on qubit: Int, rng: inout QuantumRNG) -> Gate {
+        let pauliRoll = rng.nextUnitFloat()
+        if pauliRoll < (1.0 / 3.0) {
+            return .x(target: qubit)
+        } else if pauliRoll < (2.0 / 3.0) {
+            return .y(target: qubit)
+        } else {
+            return .z(target: qubit)
+        }
+    }
+
+    /// Uniformly samples one of the 15 non-identity two-qubit Paulis `P_a ⊗ P_b` (excluding I⊗I)
+    /// and returns its non-identity single-qubit factors (which act on distinct qubits and so
+    /// commute, making application order irrelevant).
+    private func randomTwoQubitPauli(on qubitA: Int, and qubitB: Int, rng: inout QuantumRNG) -> [Gate] {
+        // Enumerate the 16 combinations 0..15 with 2 bits per qubit (0=I,1=X,2=Y,3=Z) and skip I⊗I
+        // by shifting a uniform 0..14 draw into 1..15.
+        let index = min(Int(rng.nextUnitFloat() * 15), 14)
+        let combined = index + 1
+        let axisA = combined / 4
+        let axisB = combined % 4
+
+        var paulis: [Gate] = []
+        if let a = pauliGate(axis: axisA, on: qubitA) { paulis.append(a) }
+        if let b = pauliGate(axis: axisB, on: qubitB) { paulis.append(b) }
+        return paulis
+    }
+
+    /// Maps an axis code (0=I, 1=X, 2=Y, 3=Z) to a Pauli gate, or `nil` for identity.
+    private func pauliGate(axis: Int, on qubit: Int) -> Gate? {
+        switch axis {
+        case 1: return .x(target: qubit)
+        case 2: return .y(target: qubit)
+        case 3: return .z(target: qubit)
+        default: return nil
         }
     }
 

@@ -114,6 +114,20 @@ public struct QuantumCircuit {
             }
         case .reset(let qubit):
             try validateQubitIndex(qubit)
+        case .c_if(let classicalRegister, let expectedValue, let conditionedGate):
+            guard classicalRegister >= 0 else {
+                throw QuantumCircuitError.invalidAlgorithmParameter(
+                    reason: "Conditional gate requires a non-negative classical register index"
+                )
+            }
+            guard expectedValue >= 0 else {
+                throw QuantumCircuitError.invalidAlgorithmParameter(
+                    reason: "Conditional gate requires a non-negative expected classical value"
+                )
+            }
+            for qubit in conditionedGate.affectedQubits {
+                try validateQubitIndex(qubit)
+            }
         }
 
         gates.append(gate)

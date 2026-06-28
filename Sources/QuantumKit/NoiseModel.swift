@@ -15,7 +15,15 @@ public struct NoiseModel: Sendable, Equatable {
     /// damping uses `p = 1 - exp(-gateTime / t1)`.
     public var t1: QFloat
 
-    /// Duration attributed to each gate for T1 damping (same units as ``t1``).
+    /// T2 (transverse / total dephasing) time, same units as ``gateTime``. With ``gateTime`` this
+    /// drives the pure-dephasing channel so that the *total* transverse coherence decays as
+    /// `exp(-gateTime / T2)`. Because amplitude damping (T1) already contributes
+    /// `exp(-gateTime / 2·T1)` to coherence loss, the pure-dephasing rate is the remainder
+    /// `1/Tφ = 1/T2 − 1/(2·T1)` (see ``effectivePhaseDampingProbability``). Physically `T2 ≤ 2·T1`;
+    /// when `T2 ≥ 2·T1` the pure-dephasing contribution clamps to zero.
+    public var t2: QFloat
+
+    /// Duration attributed to each gate for T1/T2 damping (same units as ``t1``/``t2``).
     public var gateTime: QFloat
 
     /// Per-gate phase damping strength `λ` in `[0, 1]`. Realized as the equivalent phase-flip
@@ -33,6 +41,7 @@ public struct NoiseModel: Sendable, Equatable {
         depolarizingProbability: QFloat = 0,
         amplitudeDampingProbability: QFloat = 0,
         t1: QFloat = 0,
+        t2: QFloat = 0,
         gateTime: QFloat = 0,
         phaseDampingProbability: QFloat = 0,
         readoutErrorProbability: QFloat = 0,
@@ -42,6 +51,7 @@ public struct NoiseModel: Sendable, Equatable {
         self.depolarizingProbability = Self.clamp(depolarizingProbability)
         self.phaseDampingProbability = Self.clamp(phaseDampingProbability)
         self.t1 = max(t1, 0)
+        self.t2 = max(t2, 0)
         self.gateTime = max(gateTime, 0)
 
         if t1 > 0 && gateTime > 0 {
@@ -77,15 +87,41 @@ public struct NoiseModel: Sendable, Equatable {
     }
 
     public var appliesPhaseDamping: Bool {
-        phaseDampingProbability > 0
+        effectivePhaseDampingProbability > 0
+    }
+
+    /// Per-gate pure-dephasing strength `λ` for the phase-damping channel.
+    ///
+    /// With the time model (``usesT2TimeModel``) this is derived from `T1`/`T2`/``gateTime`` so the
+    /// total transverse coherence decays as `exp(-gateTime / T2)`. Amplitude damping already supplies
+    /// the `exp(-gateTime / 2·T1)` factor, so the pure-dephasing rate is `1/Tφ = 1/T2 − 1/(2·T1)`
+    /// (just `1/T2` when no T1 time model is active). The phase-damping channel decays coherence by
+    /// `√(1 − λ)`, hence `√(1 − λ) = exp(-gateTime / Tφ)` ⇒ `λ = 1 − exp(-2·gateTime / Tφ)`. When
+    /// `T2 ≥ 2·T1` the remaining rate is non-positive and `λ` clamps to 0. Without the time model it
+    /// falls back to the fixed ``phaseDampingProbability``.
+    public var effectivePhaseDampingProbability: QFloat {
+        guard usesT2TimeModel else { return phaseDampingProbability }
+
+        let inverseT2 = 1.0 / Double(t2)
+        let inversePureDephasing = usesT1TimeModel
+            ? inverseT2 - 1.0 / (2.0 * Double(t1))
+            : inverseT2
+        guard inversePureDephasing > 0 else { return 0 }
+
+        let lambda = 1.0 - exp(-2.0 * Double(gateTime) * inversePureDephasing)
+        return Self.clamp(QFloat(lambda))
     }
 
     /// Per-gate Pauli-Z flip probability that reproduces the phase damping channel of strength
-    /// `phaseDampingProbability` (λ): `p = (1 - √(1 - λ)) / 2`.
+    /// `λ` (``effectivePhaseDampingProbability``): `p = (1 - √(1 - λ)) / 2`.
     public var effectivePhaseFlipProbability: QFloat {
-        let lambda = phaseDampingProbability
+        let lambda = effectivePhaseDampingProbability
         guard lambda > 0 else { return 0 }
         return (1 - (1 - lambda).squareRoot()) / 2
+    }
+
+    public var usesT2TimeModel: Bool {
+        t2 > 0 && gateTime > 0
     }
 
     public var appliesReadoutError: Bool {

@@ -485,7 +485,7 @@ public final class QuantumEngine: @unchecked Sendable {
                         try applyPhaseDamping(
                             after: gate,
                             on: state,
-                            flipProbability: noise.phaseDampingProbability,
+                            flipProbability: noise.effectivePhaseDampingProbability,
                             rng: &rng
                         )
                     }
