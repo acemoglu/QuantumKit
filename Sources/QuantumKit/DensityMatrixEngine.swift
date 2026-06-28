@@ -125,6 +125,13 @@ public final class DensityMatrixEngine: @unchecked Sendable {
             pipeline: pipelines.leftMultiplySingleQubit
         )
 
+        // Pass B reads the scratch buffers that Pass A just wrote. Metal does not guarantee
+        // ordering between dispatches in the same compute pass, so a buffer-scoped barrier is
+        // required to ensure Pass B observes Pass A's writes rather than stale contents.
+        if #available(macOS 10.14, iOS 12.0, tvOS 12.0, *) {
+            encoder.memoryBarrier(scope: .buffers)
+        }
+
         // Pass B: rho = temp * U†
         encoder.setComputePipelineState(pipelines.rightMultiplySingleQubitDagger)
         encoder.setBuffer(scratchReal, offset: 0, index: 0)

@@ -112,12 +112,16 @@ kernel void renorm_scale_state(device float* realBuffer [[buffer(0)]],
         return;
     }
 
+    // The (hi, lo) pair carries the compensated norm with |lo| <= 0.5 ulp(hi). This kernel is
+    // compiled into the fast-math library, so the root and reciprocal are taken through the
+    // precise:: namespace: that forbids the compiler from substituting the fast approximate
+    // rsqrt/divide (which carries ~2 ulp error) and silently discarding the preserved lo term.
     const float norm = normHi[0] + normLo[0];
     if (!(norm > 0.0f)) {
         return;
     }
 
-    const float invNorm = 1.0f / sqrt(norm);
+    const float invNorm = precise::divide(1.0f, precise::sqrt(norm));
     realBuffer[id] *= invNorm;
     imagBuffer[id] *= invNorm;
 }

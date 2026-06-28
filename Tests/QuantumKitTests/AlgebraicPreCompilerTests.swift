@@ -157,15 +157,54 @@ extension QuantumKitTests {
         XCTAssertEqual(result.gates, circuit.gates)
     }
 
-    func testCommutationSlidesZThroughCXOnTarget() throws {
+    func testCommutationDoesNotSlideZThroughCXTarget() throws {
+        // Z on the *target* of a CX does NOT commute: Z(1)·CX(0,1)·Z(1) = Z(0)·CX(0,1) ≠ CX(0,1).
+        // The two Z(1) gates must not slide together and cancel, so all three gates survive.
         var circuit = try QuantumCircuit(qubitCount: 2)
         try circuit.z(1)
         try circuit.cx(0, 1)
         try circuit.z(1)
 
         let result = AlgebraicPreCompiler.optimize(gates: circuit.gates)
+        XCTAssertEqual(result.optimizedGateCount, 3)
+        XCTAssertEqual(result.gates, [.z(target: 1), .cx(control: 0, target: 1), .z(target: 1)])
+    }
+
+    func testCommutationSlidesZThroughCXControl() throws {
+        // Z on the *control* of a CX commutes (both diagonal in the control's basis), so the two
+        // Z(0) gates slide together through CX and fold into identity.
+        var circuit = try QuantumCircuit(qubitCount: 2)
+        try circuit.z(0)
+        try circuit.cx(0, 1)
+        try circuit.z(0)
+
+        let result = AlgebraicPreCompiler.optimize(gates: circuit.gates)
         XCTAssertEqual(result.optimizedGateCount, 1)
         XCTAssertEqual(result.gates, [.cx(control: 0, target: 1)])
+    }
+
+    func testCommutationSlidesXThroughCXTarget() throws {
+        // X on the *target* of a CX commutes, so the two X(1) gates fold into identity.
+        var circuit = try QuantumCircuit(qubitCount: 2)
+        try circuit.x(1)
+        try circuit.cx(0, 1)
+        try circuit.x(1)
+
+        let result = AlgebraicPreCompiler.optimize(gates: circuit.gates)
+        XCTAssertEqual(result.optimizedGateCount, 1)
+        XCTAssertEqual(result.gates, [.cx(control: 0, target: 1)])
+    }
+
+    func testCommutationDoesNotSlideXThroughCXControl() throws {
+        // X on the *control* of a CX does NOT commute, so no cancellation occurs.
+        var circuit = try QuantumCircuit(qubitCount: 2)
+        try circuit.x(0)
+        try circuit.cx(0, 1)
+        try circuit.x(0)
+
+        let result = AlgebraicPreCompiler.optimize(gates: circuit.gates)
+        XCTAssertEqual(result.optimizedGateCount, 3)
+        XCTAssertEqual(result.gates, [.x(target: 0), .cx(control: 0, target: 1), .x(target: 0)])
     }
 
     func testAlgebraicPreCompilerPreservesBellStateProbabilities() throws {

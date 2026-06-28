@@ -195,10 +195,15 @@ extension AlgebraicPreCompiler {
         let q = single.qubit
         guard q == control || q == target else { return true }
 
-        if single.isZAxis {
+        // CX = |0⟩⟨0|⊗I + |1⟩⟨1|⊗X. Diagonal (Z-axis) gates commute through the *control*
+        // (they share its |0⟩/|1⟩ eigenbasis), but on the *target* a Z-axis phase sees the bit
+        // get flipped by the CX, so Z(target) and CX do NOT commute.
+        if single.isZAxis && q == control {
             return true
         }
 
+        // X commutes through the *target* (X·X = X·X under the controlled flip), but X on the
+        // control flips which branch fires, so X(control) and CX do NOT commute.
         if case .x = single.kind, q == target {
             return true
         }

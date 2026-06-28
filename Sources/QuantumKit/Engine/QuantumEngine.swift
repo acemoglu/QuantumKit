@@ -359,8 +359,8 @@ public final class QuantumEngine: @unchecked Sendable {
             throw QuantumEngineError.qubitCountMismatch(circuit: qubitCount, state: states[0].qubitCount)
         }
 
-        guard let commandBuffer = commandQueue.makeCommandBuffer(),
-              let computeEncoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard var commandBuffer = commandQueue.makeCommandBuffer(),
+              var computeEncoder = commandBuffer.makeComputeCommandEncoder() else {
             throw QuantumEngineError.commandBufferCreationFailed
         }
         var gateCounters = [Int](repeating: 0, count: states.count)
@@ -371,15 +371,49 @@ public final class QuantumEngine: @unchecked Sendable {
             }
         }
 
+        // A single MTLCommandBuffer holds a bounded command stream; encoding tens of thousands of
+        // dispatches (a deep circuit fanned out across many states) overflows the driver and
+        // silently truncates or faults. Once the encoded dispatch count crosses this threshold we
+        // flush and continue on a fresh buffer. Flushes happen only at gate boundaries — never
+        // mid-renormalization, whose multi-pass reduction relies on intra-encoder ordering.
+        let maxDispatchesPerCommandBuffer = 1000
+        // Conservative upper bound on the dispatches a single renormalization expands into (one
+        // initial reduction + ≤3 compensated reduction passes + the scale kernel for ≤28 qubits).
+        let renormDispatchUpperBound = 8
+        var encodedDispatches = 0
+
+        func flushAndRestart() throws {
+            computeEncoder.endEncoding()
+            commandBuffer.commit()
+            commandBuffer.waitUntilCompleted()
+            if let error = commandBuffer.error {
+                throw QuantumEngineError.commandBufferExecutionFailed(underlying: error)
+            }
+            guard let nextBuffer = commandQueue.makeCommandBuffer(),
+                  let nextEncoder = nextBuffer.makeComputeCommandEncoder() else {
+                throw QuantumEngineError.commandBufferCreationFailed
+            }
+            commandBuffer = nextBuffer
+            computeEncoder = nextEncoder
+            encodedDispatches = 0
+        }
+
         for gate in circuit.gates {
             for (index, state) in states.enumerated() {
                 encodeUnitaryGate(gate, encoder: computeEncoder, state: state)
+                encodedDispatches += 1
                 gateCounters[index] += 1
-                guard shouldRenormalize(afterAppliedGateCount: gateCounters[index]) else { continue }
-                let key = ObjectIdentifier(state)
-                let scratch = try renormScratchByState[key] ?? makeRenormalizationScratch(stateCount: state.stateCount)
-                renormScratchByState[key] = scratch
-                try encodeStateRenormalization(encoder: computeEncoder, state: state, scratch: scratch)
+                if shouldRenormalize(afterAppliedGateCount: gateCounters[index]) {
+                    let key = ObjectIdentifier(state)
+                    let scratch = try renormScratchByState[key] ?? makeRenormalizationScratch(stateCount: state.stateCount)
+                    renormScratchByState[key] = scratch
+                    try encodeStateRenormalization(encoder: computeEncoder, state: state, scratch: scratch)
+                    encodedDispatches += renormDispatchUpperBound
+                }
+
+                if encodedDispatches >= maxDispatchesPerCommandBuffer {
+                    try flushAndRestart()
+                }
             }
         }
 
