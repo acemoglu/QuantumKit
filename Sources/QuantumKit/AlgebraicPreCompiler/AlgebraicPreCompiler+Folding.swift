@@ -59,6 +59,10 @@ extension AlgebraicPreCompiler {
         case (.ccx(let a1, let a2, let a3), .ccx(let b1, let b2, let b3))
             where a1 == b1 && a2 == b2 && a3 == b3:
             return .some(nil)
+        case (.mcx(let ac, let at), .mcx(let bc, let bt)) where at == bt && ac == bc:
+            return .some(nil)
+        case (.mcz(let ac, let at), .mcz(let bc, let bt)) where at == bt && ac == bc:
+            return .some(nil)
         default:
             return nil
         }

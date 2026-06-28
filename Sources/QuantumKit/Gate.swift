@@ -157,4 +157,50 @@ extension Gate {
             return self
         }
     }
+
+    /// Wraps every rotation/phase angle into `[-π, π]` using a robust ``Double`` modulo before the
+    /// value is truncated to `Float32` for the GPU.
+    ///
+    /// Unbounded angles (e.g. `.rz(theta: 1e7)`) that bypass the algebraic precompiler would
+    /// otherwise reach Metal's `Float32` trig functions and suffer catastrophic loss of
+    /// significance. Reducing the argument first — in `Double`, before the `Float32` cast — keeps
+    /// the GPU's `cos`/`sin` inputs small and accurate. The reduction is exact for the `2π`-periodic
+    /// `p`/`cp` gates and differs only by a (physically irrelevant) global phase for the rotation
+    /// gates, so the produced state is unchanged.
+    public var angleWrapped: Gate {
+        switch self {
+        case .p(let theta, let target):
+            return .p(theta: Gate.wrapAngle(theta), target: target)
+        case .u(let theta, let phi, let lambda, let target):
+            return .u(
+                theta: Gate.wrapAngle(theta),
+                phi: Gate.wrapAngle(phi),
+                lambda: Gate.wrapAngle(lambda),
+                target: target
+            )
+        case .rx(let theta, let target):
+            return .rx(theta: Gate.wrapAngle(theta), target: target)
+        case .ry(let theta, let target):
+            return .ry(theta: Gate.wrapAngle(theta), target: target)
+        case .rz(let theta, let target):
+            return .rz(theta: Gate.wrapAngle(theta), target: target)
+        case .crx(let theta, let control, let target):
+            return .crx(theta: Gate.wrapAngle(theta), control: control, target: target)
+        case .cry(let theta, let control, let target):
+            return .cry(theta: Gate.wrapAngle(theta), control: control, target: target)
+        case .crz(let theta, let control, let target):
+            return .crz(theta: Gate.wrapAngle(theta), control: control, target: target)
+        case .cp(let theta, let control, let target):
+            return .cp(theta: Gate.wrapAngle(theta), control: control, target: target)
+        default:
+            return self
+        }
+    }
+
+    /// Robust reduction of `angle` into `[-π, π]`, performed in `Double` so that huge `Float32`
+    /// inputs are reduced before precision is lost. `Double.remainder(dividingBy:)` is the IEEE
+    /// remainder, whose result already lies in `[-π, π]` for a divisor of `2π`.
+    static func wrapAngle(_ angle: QFloat) -> QFloat {
+        QFloat(Double(angle).remainder(dividingBy: 2.0 * Double.pi))
+    }
 }

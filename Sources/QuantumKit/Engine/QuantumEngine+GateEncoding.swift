@@ -239,6 +239,9 @@ extension QuantumEngine {
         encoder: MTLComputeCommandEncoder,
         state: StateVector
     ) {
+        // Reduce unbounded rotation/phase angles into [-π, π] (in Double) before they are cast to
+        // Float32 for the GPU, preventing Float32 trig loss of significance on huge inputs.
+        let gate = gate.angleWrapped
         switch gate {
         case .h(let target):
             dispatchPairwiseGate(encoder: encoder, pipeline: pipelines.hadamard, state: state) { encoder in

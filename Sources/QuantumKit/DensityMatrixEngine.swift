@@ -428,6 +428,9 @@ public final class DensityMatrixEngine: @unchecked Sendable {
     }
 
     private func encodeSingleQubitUnitary(_ gate: Gate) throws -> EncodedSingleQubitUnitary {
+        // Reduce unbounded rotation/phase angles into [-π, π] (in Double) before the host-side
+        // Float32 cos/sin below, matching the state-vector engine and avoiding precision loss.
+        let gate = gate.angleWrapped
         switch gate {
         case .h(let target):
             let v = QFloat(0.5).squareRoot()
