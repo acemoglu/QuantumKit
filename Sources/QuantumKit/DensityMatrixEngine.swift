@@ -11,6 +11,7 @@ public enum DensityMatrixEngineError: Error {
     case qubitCountMismatch(circuit: Int, matrix: Int)
     case unsupportedGate(Gate)
     case nonUnitaryGateUnsupported(Gate)
+    case zeroProbabilityMeasurement(qubit: Int)
 }
 
 public final class DensityMatrixEngine: @unchecked Sendable {
@@ -56,6 +57,20 @@ public final class DensityMatrixEngine: @unchecked Sendable {
     }
 
     public func execute(_ circuit: QuantumCircuit, on density: DensityMatrix, noise: NoiseModel? = nil) throws {
+        var rng: QuantumRNG = .hardware
+        _ = try executeRNG(circuit, on: density, rng: &rng, noise: noise)
+    }
+
+    /// RNG-injectable open-system execution supporting `swap`, mid-circuit `measure`, and `reset`
+    /// in addition to unitary evolution and noise channels. Returns the classical outcomes of each
+    /// `measure` gate in circuit order, mirroring ``QuantumEngine/executeRNG(_:on:rng:noise:)``.
+    @discardableResult
+    public func executeRNG(
+        _ circuit: QuantumCircuit,
+        on density: DensityMatrix,
+        rng: inout QuantumRNG,
+        noise: NoiseModel? = nil
+    ) throws -> CircuitExecutionResult {
         guard circuit.qubitCount == density.qubitCount else {
             throw DensityMatrixEngineError.qubitCountMismatch(circuit: circuit.qubitCount, matrix: density.qubitCount)
         }
@@ -68,10 +83,40 @@ public final class DensityMatrixEngine: @unchecked Sendable {
             bufferPool.release(scratchImag)
         }
 
+        var measurementOutcomes: [[Int]] = []
+
         for gate in circuit.gates {
             switch gate {
-            case .measure, .reset:
-                throw DensityMatrixEngineError.nonUnitaryGateUnsupported(gate)
+            case .measure(let qubits):
+                let bits = try applyMeasurement(
+                    qubits: qubits,
+                    on: density,
+                    rng: &rng,
+                    scratchReal: scratchReal,
+                    scratchImag: scratchImag
+                )
+                measurementOutcomes.append(bits)
+
+            case .reset(let qubit):
+                try applyReset(
+                    qubit: qubit,
+                    on: density,
+                    scratchReal: scratchReal,
+                    scratchImag: scratchImag
+                )
+
+            case .swap(let q1, let q2):
+                try applySwap(
+                    q1: q1,
+                    q2: q2,
+                    on: density,
+                    scratchReal: scratchReal,
+                    scratchImag: scratchImag
+                )
+                if let noise {
+                    try applyNoiseChannels(after: gate, on: density, noise: noise, scratchReal: scratchReal, scratchImag: scratchImag)
+                }
+
             default:
                 try applyUnitaryGate(gate, on: density, scratchReal: scratchReal, scratchImag: scratchImag)
                 if let noise {
@@ -79,6 +124,8 @@ public final class DensityMatrixEngine: @unchecked Sendable {
                 }
             }
         }
+
+        return CircuitExecutionResult(measurementOutcomes: measurementOutcomes)
     }
 
     public func probabilities(of density: DensityMatrix) -> [QFloat] {
@@ -95,10 +142,8 @@ public final class DensityMatrixEngine: @unchecked Sendable {
         scratchImag: MTLBuffer
     ) throws {
         let encoded = try encodeSingleQubitUnitary(gate)
-        let matrixBuffer = try makeSharedBuffer(
-            values: encoded.matrix,
-            byteCount: encoded.matrix.count * MemoryLayout<SIMD2<QFloat>>.stride
-        )
+        let matrixBuffer = try acquirePooledMatrixBuffer(values: encoded.matrix)
+        defer { bufferPool.release(matrixBuffer) }
 
         guard let commandBuffer = commandQueue.makeCommandBuffer(),
               let encoder = commandBuffer.makeComputeCommandEncoder() else {
@@ -225,10 +270,8 @@ public final class DensityMatrixEngine: @unchecked Sendable {
         scratchImag: MTLBuffer
     ) throws {
         let flat = kraus.flatMap { $0 }
-        let krausBuffer = try makeSharedBuffer(
-            values: flat,
-            byteCount: flat.count * MemoryLayout<SIMD2<QFloat>>.stride
-        )
+        let krausBuffer = try acquirePooledMatrixBuffer(values: flat)
+        defer { bufferPool.release(krausBuffer) }
 
         guard let commandBuffer = commandQueue.makeCommandBuffer(),
               let encoder = commandBuffer.makeComputeCommandEncoder() else {
@@ -267,6 +310,104 @@ public final class DensityMatrixEngine: @unchecked Sendable {
         if let error = commandBuffer.error {
             throw DensityMatrixEngineError.commandBufferExecutionFailed(underlying: error)
         }
+    }
+
+    /// SWAP(q1, q2) decomposed into three CNOTs — CX(q1,q2)·CX(q2,q1)·CX(q1,q2) — each applied as a
+    /// two-sided unitary update ρ → U ρ U†, reusing the existing controlled single-qubit path.
+    private func applySwap(
+        q1: Int,
+        q2: Int,
+        on density: DensityMatrix,
+        scratchReal: MTLBuffer,
+        scratchImag: MTLBuffer
+    ) throws {
+        try applyUnitaryGate(.cx(control: q1, target: q2), on: density, scratchReal: scratchReal, scratchImag: scratchImag)
+        try applyUnitaryGate(.cx(control: q2, target: q1), on: density, scratchReal: scratchReal, scratchImag: scratchImag)
+        try applyUnitaryGate(.cx(control: q1, target: q2), on: density, scratchReal: scratchReal, scratchImag: scratchImag)
+    }
+
+    /// Reset of `qubit` to |0⟩ as a CPTP map with Kraus operators K0 = |0⟩⟨0|, K1 = |0⟩⟨1|. Since
+    /// K0†K0 + K1†K1 = I the map is trace-preserving (no renormalization needed); it is dispatched
+    /// through the existing single-qubit Kraus pipeline.
+    private func applyReset(
+        qubit: Int,
+        on density: DensityMatrix,
+        scratchReal: MTLBuffer,
+        scratchImag: MTLBuffer
+    ) throws {
+        try applyKrausChannel(
+            on: density,
+            targetQubit: qubit,
+            kraus: [
+                [complex(1, 0), complex(0, 0), complex(0, 0), complex(0, 0)], // K0 = |0⟩⟨0|
+                [complex(0, 0), complex(1, 0), complex(0, 0), complex(0, 0)], // K1 = |0⟩⟨1|
+            ],
+            scratchReal: scratchReal,
+            scratchImag: scratchImag
+        )
+    }
+
+    /// Projective computational-basis measurement with state collapse. Each listed qubit is measured
+    /// independently in circuit order; on distinct qubits the projectors commute, so sequential
+    /// collapse reproduces the correct joint distribution.
+    ///
+    /// For qubit q the outcome probability is p_b = Tr(Π_b ρ), the sum of the diagonal populations
+    /// over basis states whose q-th bit equals b. After sampling b with the engine's RNG, the
+    /// selected projector is folded with its own normalization into a single Kraus operator
+    /// Π_b / √p_b, so the existing Kraus pipeline performs ρ → Π_b ρ Π_b / p_b in one pass and the
+    /// post-measurement matrix already has unit trace.
+    private func applyMeasurement(
+        qubits: [Int],
+        on density: DensityMatrix,
+        rng: inout QuantumRNG,
+        scratchReal: MTLBuffer,
+        scratchImag: MTLBuffer
+    ) throws -> [Int] {
+        guard !qubits.isEmpty else {
+            throw QuantumMeasurementError.emptyQubitSelection
+        }
+
+        var bits: [Int] = []
+        bits.reserveCapacity(qubits.count)
+
+        for qubit in qubits {
+            let p0 = diagonalPopulation(of: density, qubit: qubit, bit: 0)
+            let dice = rng.nextUnitDouble()
+            let outcome = dice < p0 ? 0 : 1
+            let probability = outcome == 0 ? p0 : 1 - p0
+            guard probability > 0 else {
+                throw DensityMatrixEngineError.zeroProbabilityMeasurement(qubit: qubit)
+            }
+
+            let scale = QFloat(1 / probability.squareRoot())
+            let projector: [SIMD2<QFloat>] = outcome == 0
+                ? [complex(scale, 0), complex(0, 0), complex(0, 0), complex(0, 0)] // Π0 / √p0
+                : [complex(0, 0), complex(0, 0), complex(0, 0), complex(scale, 0)] // Π1 / √p1
+
+            try applyKrausChannel(
+                on: density,
+                targetQubit: qubit,
+                kraus: [projector],
+                scratchReal: scratchReal,
+                scratchImag: scratchImag
+            )
+            bits.append(outcome)
+        }
+
+        return bits
+    }
+
+    /// Population of outcome `bit` on `qubit`: Σ_i ρ_ii over basis states i whose q-th bit is `bit`.
+    /// The diagonal of a valid density matrix is real and non-negative, so the imaginary part is
+    /// ignored; the fold is done in `Double` to avoid Float32 cancellation, then clamped to [0, 1].
+    private func diagonalPopulation(of density: DensityMatrix, qubit: Int, bit: Int) -> Double {
+        let real = density.realBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let stateCount = density.stateCount
+        var sum = 0.0
+        for i in 0..<stateCount where (i >> qubit) & 1 == bit {
+            sum += Double(real[i * stateCount + i])
+        }
+        return min(max(sum, 0), 1)
     }
 
     private func dispatchMatrixElements(
@@ -418,10 +559,13 @@ public final class DensityMatrixEngine: @unchecked Sendable {
         UInt32(1) << UInt32(qubit)
     }
 
-    private func makeSharedBuffer<T>(values: [T], byteCount: Int) throws -> MTLBuffer {
-        guard let buffer = device.makeBuffer(length: byteCount, options: .storageModeShared) else {
-            throw DensityMatrixError.bufferAllocationFailed(requiredBytes: byteCount)
-        }
+    /// Acquires a shared scratch buffer from the ``BufferPool`` sized to `values` and copies them in.
+    /// The caller must `release` it back to the pool. Because every gate/Kraus dispatch here is
+    /// awaited synchronously (`waitUntilCompleted`), a released buffer is guaranteed idle and is
+    /// reused on the next gate — eliminating the per-gate `makeBuffer` allocation storm.
+    private func acquirePooledMatrixBuffer<T>(values: [T]) throws -> MTLBuffer {
+        let byteCount = values.count * MemoryLayout<T>.stride
+        let buffer = try bufferPool.acquire(length: max(byteCount, 1))
         guard byteCount > 0 else { return buffer }
         values.withUnsafeBytes { source in
             buffer.contents().copyMemory(from: source.baseAddress!, byteCount: byteCount)
