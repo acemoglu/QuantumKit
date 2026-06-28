@@ -19,6 +19,7 @@ public final class DensityMatrixEngine: @unchecked Sendable {
         let leftMultiplySingleQubit: MTLComputePipelineState
         let rightMultiplySingleQubitDagger: MTLComputePipelineState
         let applyKrausSingleQubit: MTLComputePipelineState
+        let applyKrausTwoQubit: MTLComputePipelineState
 
         init(device: MTLDevice, library: MTLLibrary) throws {
             guard let leftFunc = library.makeFunction(name: "dm_left_multiply_single_qubit") else {
@@ -35,6 +36,11 @@ public final class DensityMatrixEngine: @unchecked Sendable {
                 throw DensityMatrixEngineError.functionNotFound("dm_apply_kraus_single_qubit")
             }
             self.applyKrausSingleQubit = try device.makeComputePipelineState(function: krausFunc)
+
+            guard let kraus2Func = library.makeFunction(name: "dm_apply_two_qubit_kraus") else {
+                throw DensityMatrixEngineError.functionNotFound("dm_apply_two_qubit_kraus")
+            }
+            self.applyKrausTwoQubit = try device.makeComputePipelineState(function: kraus2Func)
         }
     }
 
@@ -391,13 +397,12 @@ public final class DensityMatrixEngine: @unchecked Sendable {
     ///
     /// i.e. the 16 Kraus operators are `√(1-p)·(I⊗I)` and `√(p/15)·(Pₐ ⊗ P_b)` over the 15
     /// non-identity two-qubit Paulis. This is the exact mixed-state analogue of the state-vector
-    /// engine's two-qubit Pauli-jump unraveling, so both engines now model the identical channel for
-    /// a 2-qubit gate (rather than the DM engine applying two independent single-qubit channels).
+    /// engine's two-qubit Pauli-jump unraveling, so both engines model the identical channel for a
+    /// 2-qubit gate (rather than the DM engine applying two independent single-qubit channels).
     ///
-    /// Each `Pₐ ⊗ P_b` is the product of two single-qubit Pauli unitaries on distinct qubits, so the
-    /// term `(Pₐ ⊗ P_b) ρ (Pₐ ⊗ P_b)†` is produced by the existing two-sided unitary path. Paulis are
-    /// involutions, so re-applying the same pair restores ρ for the next term. The weighted sum is
-    /// accumulated on the (shared-storage) host buffers; no new GPU kernel is required.
+    /// The whole 16-operator mixture is realized in a **single** `dm_apply_two_qubit_kraus` GPU
+    /// dispatch: each output element depends only on the 4×4 subspace block of ρ, so there is no
+    /// host-side accumulation over the full 4ⁿ matrix and no per-Pauli command-buffer round trip.
     private func applyTwoQubitDepolarizing(
         on density: DensityMatrix,
         qubitA: Int,
@@ -406,95 +411,120 @@ public final class DensityMatrixEngine: @unchecked Sendable {
         scratchReal: MTLBuffer,
         scratchImag: MTLBuffer
     ) throws {
-        let elementCount = density.elementCount
-        let bytes = elementCount * MemoryLayout<QFloat>.stride
-        let accumulatorReal = try bufferPool.acquire(length: bytes)
-        let accumulatorImag = try bufferPool.acquire(length: bytes)
-        defer {
-            bufferPool.release(accumulatorReal)
-            bufferPool.release(accumulatorImag)
-        }
+        // Kraus weights: K0 = √(1-p)·(I⊗I), K_{1..15} = √(p/15)·(Pₐ ⊗ P_b).
+        let identityWeight = max(0, 1 - p).squareRoot()
+        let pauliWeight = max(0, p / 15).squareRoot()
 
-        let densityReal = density.realBuffer.contents().assumingMemoryBound(to: QFloat.self)
-        let densityImag = density.imagBuffer.contents().assumingMemoryBound(to: QFloat.self)
-        let accReal = accumulatorReal.contents().assumingMemoryBound(to: QFloat.self)
-        let accImag = accumulatorImag.contents().assumingMemoryBound(to: QFloat.self)
+        var kraus: [SIMD2<QFloat>] = []
+        kraus.reserveCapacity(16 * 16)
+        kraus.append(contentsOf: scaledMatrix(kron(singleQubitPauli(axis: 0), singleQubitPauli(axis: 0)), by: identityWeight))
 
-        // Identity branch: acc = (1 - p)·ρ. The density buffer still holds the input ρ at this point.
-        let identityWeight = 1 - p
-        for index in 0..<elementCount {
-            accReal[index] = identityWeight * densityReal[index]
-            accImag[index] = identityWeight * densityImag[index]
-        }
-
-        // 15 non-identity two-qubit Paulis: enumerate combined codes 1...15 with 2 bits per qubit
+        // 15 non-identity two-qubit Paulis: combined codes 1...15 with 2 bits per qubit
         // (0=I, 1=X, 2=Y, 3=Z), matching the state-vector engine's enumeration exactly.
-        let pauliWeight = p / 15
         for combined in 1...15 {
             let axisA = combined / 4
             let axisB = combined % 4
-
-            // Forward: ρ → (Pₐ ⊗ P_b) ρ (Pₐ ⊗ P_b)† in place on the density buffers.
-            try applyPauliPair(axisA: axisA, qubitA: qubitA, axisB: axisB, qubitB: qubitB, on: density, scratchReal: scratchReal, scratchImag: scratchImag)
-
-            for index in 0..<elementCount {
-                accReal[index] += pauliWeight * densityReal[index]
-                accImag[index] += pauliWeight * densityImag[index]
-            }
-
-            // Restore ρ for the next term: Paulis satisfy P² = I, so re-applying the pair undoes it.
-            try applyPauliPair(axisA: axisA, qubitA: qubitA, axisB: axisB, qubitB: qubitB, on: density, scratchReal: scratchReal, scratchImag: scratchImag)
+            kraus.append(contentsOf: scaledMatrix(kron(singleQubitPauli(axis: axisA), singleQubitPauli(axis: axisB)), by: pauliWeight))
         }
 
-        // Write the mixed state back into the density matrix.
-        density.realBuffer.contents().copyMemory(from: accReal, byteCount: bytes)
-        density.imagBuffer.contents().copyMemory(from: accImag, byteCount: bytes)
-    }
-
-    /// Applies the single-qubit Pauli factors of a two-qubit Pauli as the two-sided conjugation
-    /// `ρ → (Pₐ ⊗ P_b) ρ (Pₐ ⊗ P_b)†`. The factors act on distinct qubits, so application order is
-    /// irrelevant; an identity-axis factor is skipped.
-    ///
-    /// Each factor is routed through the single-operator Kraus path (`applyKrausChannel`), which is
-    /// the verified-correct `K ρ K†` primitive, rather than the unitary two-sided path — the latter's
-    /// right-multiply kernel mishandles complex-asymmetric matrices (e.g. `Y`), which would otherwise
-    /// flip the sign of any term containing a Y factor.
-    private func applyPauliPair(
-        axisA: Int,
-        qubitA: Int,
-        axisB: Int,
-        qubitB: Int,
-        on density: DensityMatrix,
-        scratchReal: MTLBuffer,
-        scratchImag: MTLBuffer
-    ) throws {
-        try conjugateByPauli(axis: axisA, qubit: qubitA, on: density, scratchReal: scratchReal, scratchImag: scratchImag)
-        try conjugateByPauli(axis: axisB, qubit: qubitB, on: density, scratchReal: scratchReal, scratchImag: scratchImag)
-    }
-
-    /// Conjugates `density` by a single-qubit Pauli `P` (axis 0=I, 1=X, 2=Y, 3=Z): `ρ → P ρ P†`,
-    /// applied as a one-operator Kraus channel. Identity is a no-op.
-    private func conjugateByPauli(
-        axis: Int,
-        qubit: Int,
-        on density: DensityMatrix,
-        scratchReal: MTLBuffer,
-        scratchImag: MTLBuffer
-    ) throws {
-        let pauli: [SIMD2<QFloat>]
-        switch axis {
-        case 1: pauli = [complex(0, 0), complex(1, 0), complex(1, 0), complex(0, 0)]    // X
-        case 2: pauli = [complex(0, 0), complex(0, -1), complex(0, 1), complex(0, 0)]   // Y
-        case 3: pauli = [complex(1, 0), complex(0, 0), complex(0, 0), complex(-1, 0)]   // Z
-        default: return                                                                 // I
-        }
-        try applyKrausChannel(
+        try applyTwoQubitKrausChannel(
             on: density,
-            targetQubit: qubit,
-            kraus: [pauli],
+            qubitA: qubitA,
+            qubitB: qubitB,
+            krausCount: 16,
+            krausFlat: kraus,
             scratchReal: scratchReal,
             scratchImag: scratchImag
         )
+    }
+
+    /// Applies a two-qubit Kraus channel `ρ → Σ_k E_k ρ E_k†` in one GPU pass via
+    /// `dm_apply_two_qubit_kraus`. `krausFlat` is the concatenation of `krausCount` operators, each a
+    /// 4×4 row-major complex matrix (16 `SIMD2<QFloat>`, `qubitA` = high bit of the subspace code).
+    /// The kernel writes the result into scratch, which is then blitted back over ρ.
+    private func applyTwoQubitKrausChannel(
+        on density: DensityMatrix,
+        qubitA: Int,
+        qubitB: Int,
+        krausCount: Int,
+        krausFlat: [SIMD2<QFloat>],
+        scratchReal: MTLBuffer,
+        scratchImag: MTLBuffer
+    ) throws {
+        let krausBuffer = try acquirePooledMatrixBuffer(values: krausFlat)
+        defer { bufferPool.release(krausBuffer) }
+
+        guard let commandBuffer = commandQueue.makeCommandBuffer(),
+              let encoder = commandBuffer.makeComputeCommandEncoder() else {
+            throw DensityMatrixEngineError.commandBufferCreationFailed
+        }
+
+        var stateCount = UInt32(density.stateCount)
+        var qa = UInt32(qubitA)
+        var qb = UInt32(qubitB)
+        var count = UInt32(krausCount)
+
+        encoder.setComputePipelineState(pipelines.applyKrausTwoQubit)
+        encoder.setBuffer(density.realBuffer, offset: 0, index: 0)
+        encoder.setBuffer(density.imagBuffer, offset: 0, index: 1)
+        encoder.setBuffer(scratchReal, offset: 0, index: 2)
+        encoder.setBuffer(scratchImag, offset: 0, index: 3)
+        encoder.setBytes(&stateCount, length: MemoryLayout<UInt32>.stride, index: 4)
+        encoder.setBytes(&qa, length: MemoryLayout<UInt32>.stride, index: 5)
+        encoder.setBytes(&qb, length: MemoryLayout<UInt32>.stride, index: 6)
+        encoder.setBytes(&count, length: MemoryLayout<UInt32>.stride, index: 7)
+        encoder.setBuffer(krausBuffer, offset: 0, index: 8)
+        dispatchMatrixElements(
+            encoder: encoder,
+            elementCount: density.elementCount,
+            pipeline: pipelines.applyKrausTwoQubit
+        )
+        encoder.endEncoding()
+
+        guard let blit = commandBuffer.makeBlitCommandEncoder() else {
+            throw DensityMatrixEngineError.commandBufferCreationFailed
+        }
+        blit.copy(from: scratchReal, sourceOffset: 0, to: density.realBuffer, destinationOffset: 0, size: density.realBuffer.length)
+        blit.copy(from: scratchImag, sourceOffset: 0, to: density.imagBuffer, destinationOffset: 0, size: density.imagBuffer.length)
+        blit.endEncoding()
+
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+        if let error = commandBuffer.error {
+            throw DensityMatrixEngineError.commandBufferExecutionFailed(underlying: error)
+        }
+    }
+
+    /// Single-qubit Pauli as a 2×2 row-major matrix (axis 0=I, 1=X, 2=Y, 3=Z).
+    private func singleQubitPauli(axis: Int) -> [SIMD2<QFloat>] {
+        switch axis {
+        case 1: return [complex(0, 0), complex(1, 0), complex(1, 0), complex(0, 0)]    // X
+        case 2: return [complex(0, 0), complex(0, -1), complex(0, 1), complex(0, 0)]   // Y
+        case 3: return [complex(1, 0), complex(0, 0), complex(0, 0), complex(-1, 0)]   // Z
+        default: return [complex(1, 0), complex(0, 0), complex(0, 0), complex(1, 0)]   // I
+        }
+    }
+
+    /// Kronecker product of two 2×2 row-major matrices into a 4×4 row-major matrix, with `a` as the
+    /// high-order factor: `out[(iₐ·2+i_b)·4 + (jₐ·2+j_b)] = a[iₐ·2+jₐ] · b[i_b·2+j_b]`.
+    private func kron(_ a: [SIMD2<QFloat>], _ b: [SIMD2<QFloat>]) -> [SIMD2<QFloat>] {
+        var out = [SIMD2<QFloat>](repeating: complex(0, 0), count: 16)
+        for ia in 0..<2 {
+            for ja in 0..<2 {
+                let av = a[ia * 2 + ja]
+                for ib in 0..<2 {
+                    for jb in 0..<2 {
+                        out[(ia * 2 + ib) * 4 + (ja * 2 + jb)] = complexMul(av, b[ib * 2 + jb])
+                    }
+                }
+            }
+        }
+        return out
+    }
+
+    /// Scales every entry of a complex matrix by the real scalar `s`.
+    private func scaledMatrix(_ matrix: [SIMD2<QFloat>], by s: QFloat) -> [SIMD2<QFloat>] {
+        matrix.map { complex($0.x * s, $0.y * s) }
     }
 
     /// SWAP(q1, q2) decomposed into three CNOTs — CX(q1,q2)·CX(q2,q1)·CX(q1,q2) — each applied as a

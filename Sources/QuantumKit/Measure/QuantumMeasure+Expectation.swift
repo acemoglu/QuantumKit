@@ -30,18 +30,23 @@ extension QuantumMeasurement {
     ) throws -> QFloat {
         try validateQubits(qubits, qubitCount: state.qubitCount)
 
-        let distribution = try probabilities(state: state, engine: engine)
-        var expectation = 0.0
-
-        for (stateIndex, probability) in distribution.enumerated() {
-            var eigenvalue: QFloat = 1
-            for qubit in qubits {
-                eigenvalue *= pauliZEigenvalue(stateIndex: stateIndex, qubit: qubit)
-            }
-            expectation += Double(probability) * Double(eigenvalue)
+        // ⟨Π_q Z_q⟩ = Σⱼ (−1)^popcount(j & zMask)·|aⱼ|². XOR-folding the per-qubit bits preserves the
+        // original per-occurrence eigenvalue product: a qubit listed an even number of times cancels
+        // back to identity, an odd number leaves a single sign — matched by the parity over zMask.
+        var zMask = 0
+        for qubit in qubits {
+            zMask ^= (1 << qubit)
         }
 
-        return QFloat(expectation)
+        // No X/Y factors ⇒ flipMask = 0 and the global phase is +1; the sign is carried entirely by
+        // the parity of the measured Z bits, so this is the Z-only specialization of the general path.
+        return try engine.pauliExpectation(
+            on: state,
+            flipMask: 0,
+            signMask: zMask,
+            phaseBaseReal: 1,
+            phaseBaseImag: 0
+        )
     }
 
     /// ⟨X⟩ for a single qubit in the computational basis.
@@ -52,19 +57,16 @@ extension QuantumMeasurement {
     ) throws -> QFloat {
         try validateQubits([qubit], qubitCount: state.qubitCount)
 
+        // ⟨X⟩ is the single-X specialization of the general Pauli path: flip the target qubit, no
+        // sign mask, and a unit global phase (Σⱼ Re[ conj(a_{j⊕mask})·aⱼ ] = Σⱼ rⱼ·r_flip + iⱼ·i_flip).
         let mask = 1 << qubit
-        let realPointer = state.realBuffer.contents().assumingMemoryBound(to: QFloat.self)
-        let imagPointer = state.imagBuffer.contents().assumingMemoryBound(to: QFloat.self)
-
-        var expectation = 0.0
-        for index in 0..<state.stateCount {
-            let flipped = index ^ mask
-            let realProduct = realPointer[index] * realPointer[flipped]
-            let imagProduct = imagPointer[index] * imagPointer[flipped]
-            expectation += Double(realProduct + imagProduct)
-        }
-
-        return QFloat(expectation)
+        return try engine.pauliExpectation(
+            on: state,
+            flipMask: mask,
+            signMask: 0,
+            phaseBaseReal: 1,
+            phaseBaseImag: 0
+        )
     }
 
     /// ⟨ψ|P|ψ⟩ for an arbitrary Pauli tensor product `P`.
@@ -116,28 +118,18 @@ extension QuantumMeasurement {
         default: (phaseBaseReal, phaseBaseImag) = (0, -1)
         }
 
-        let realPointer = state.realBuffer.contents().assumingMemoryBound(to: QFloat.self)
-        let imagPointer = state.imagBuffer.contents().assumingMemoryBound(to: QFloat.self)
-
         let signMask = yMask | zMask
-        var expectation = 0.0
 
-        for j in 0..<state.stateCount {
-            let k = j ^ flipMask
-            let negative = ((j & signMask).nonzeroBitCount & 1) == 1
-            let pr = negative ? -phaseBaseReal : phaseBaseReal
-            let pi = negative ? -phaseBaseImag : phaseBaseImag
-
-            let rj = realPointer[j]
-            let ij = imagPointer[j]
-            // phase(j) · a_j
-            let xr = pr * rj - pi * ij
-            let xi = pr * ij + pi * rj
-            // Re[ conj(a_k) · phase(j) · a_j ], accumulated in Double to avoid Float32 cancellation.
-            expectation += Double(realPointer[k] * xr + imagPointer[k] * xi)
-        }
-
-        return QFloat(expectation)
+        // Per-state fold `Σⱼ Re[ conj(a_{j⊕flipMask})·phase(j)·aⱼ ]` runs on the GPU with a compensated
+        // (double-single) reduction, so the host reads a single scalar instead of touching every
+        // amplitude. Bit-for-bit the same arithmetic as the previous O(2ⁿ) CPU loop.
+        return try engine.pauliExpectation(
+            on: state,
+            flipMask: flipMask,
+            signMask: signMask,
+            phaseBaseReal: phaseBaseReal,
+            phaseBaseImag: phaseBaseImag
+        )
     }
 
     /// ⟨ψ|P|ψ⟩ for a Pauli label such as `"XYZ"` or `"IXZ"`.

@@ -119,6 +119,41 @@ extension QuantumKitTests {
         XCTAssertEqual(fromString, -1, accuracy: 1e-5)
     }
 
+    func testPauliExpectationMixedXYZString() throws {
+        let engine = try QuantumEngine()
+
+        guard let device = makeDevice() else {
+            XCTFail("Apple Silicon GPU not found!")
+            return
+        }
+
+        // Prepare a product state with a known expectation for "XYZ" (MSB-first):
+        //   qubit2 = X eigenstate |+⟩  (⟨X⟩ = +1)
+        //   qubit1 = Y eigenstate |+i⟩ = (|0⟩ + i|1⟩)/√2  (⟨Y⟩ = +1)
+        //   qubit0 = Z eigenstate |0⟩  (⟨Z⟩ = +1)
+        // For a product state ⟨X₂Y₁Z₀⟩ = ⟨X⟩·⟨Y⟩·⟨Z⟩ = +1.
+        let state = try StateVector(qubitCount: 3, device: device)
+        var circuit = try QuantumCircuit(qubitCount: 3)
+        try circuit.h(2)          // qubit2 → |+⟩
+        try circuit.h(1)          // qubit1 → |+⟩
+        try circuit.s(1)          // qubit1 → |+i⟩ (H then S)
+        try engine.execute(circuit, on: state)
+
+        let xyz = try QuantumMeasurement.expectation(state: state, engine: engine, pauliString: "XYZ")
+        XCTAssertEqual(xyz, 1, accuracy: 1e-5)
+
+        // Flipping the Y eigenstate to |−i⟩ negates ⟨Y⟩, hence the whole product.
+        let stateMinus = try StateVector(qubitCount: 3, device: device)
+        var circuitMinus = try QuantumCircuit(qubitCount: 3)
+        try circuitMinus.h(2)
+        try circuitMinus.h(1)
+        try circuitMinus.sdg(1)   // qubit1 → |−i⟩
+        try engine.execute(circuitMinus, on: stateMinus)
+
+        let xyzMinus = try QuantumMeasurement.expectation(state: stateMinus, engine: engine, pauliString: "XYZ")
+        XCTAssertEqual(xyzMinus, -1, accuracy: 1e-5)
+    }
+
     func testPauliExpectationRejectsWrongLengthString() throws {
         guard let device = makeDevice() else {
             XCTFail("Apple Silicon GPU not found!")

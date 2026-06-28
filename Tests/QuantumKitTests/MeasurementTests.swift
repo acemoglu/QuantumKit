@@ -258,4 +258,58 @@ extension QuantumKitTests {
         let z1 = try QuantumMeasurement.expectationZ(state: state, engine: engine, qubit: 1)
         XCTAssertEqual(z1, measuredQubit0 == 0 ? 1 : -1, accuracy: 1e-5)
     }
+
+    /// Exercises the GPU multi-qubit marginal path (k ≥ 2) with a deterministic basis state. Prepares
+    /// |bit0=1, bit1=0, bit2=1, bit3=0⟩ and measures a *reordered, non-contiguous* qubit list, so the
+    /// recorded bits must follow the measured-list order — catching any bin bit-ordering bug in the
+    /// `marginal_leaf_histogram` kernel.
+    func testMultiQubitPartialMeasurementBasisStateBitOrdering() throws {
+        let engine = try QuantumEngine()
+        guard let device = makeDevice() else {
+            XCTFail("Apple Silicon GPU not found!")
+            return
+        }
+
+        let state = try StateVector(qubitCount: 4, device: device)
+        var circuit = try QuantumCircuit(qubitCount: 4)
+        try circuit.x(0)
+        try circuit.x(2)
+        try circuit.measure(qubits: [2, 0, 3])
+
+        var rng: QuantumRNG = .seeded(7)
+        let execution = try engine.executeRNG(circuit, on: state, rng: &rng)
+
+        // Bits, in measured-list order [q2, q0, q3] = [1, 1, 0].
+        XCTAssertEqual(execution.measurementOutcomes, [[1, 1, 0]])
+    }
+
+    /// Exercises the GPU marginal path (k = 3) on a GHZ state: measuring all three qubits at once must
+    /// collapse to a fully correlated all-zeros or all-ones outcome, never a mixed bitstring.
+    func testGHZThreeQubitPartialMeasurementIsFullyCorrelated() throws {
+        let engine = try QuantumEngine()
+        guard let device = makeDevice() else {
+            XCTFail("Apple Silicon GPU not found!")
+            return
+        }
+
+        var sawZeros = false
+        var sawOnes = false
+        for seed in UInt64(0)..<24 {
+            let state = try StateVector(qubitCount: 3, device: device)
+            var circuit = try QuantumCircuit(qubitCount: 3)
+            try circuit.h(0)
+            try circuit.cx(0, 1)
+            try circuit.cx(0, 2)
+            try circuit.measure(qubits: [0, 1, 2])
+
+            var rng: QuantumRNG = .seeded(seed)
+            let execution = try engine.executeRNG(circuit, on: state, rng: &rng)
+            let bits = execution.measurementOutcomes[0]
+            XCTAssertTrue(bits == [0, 0, 0] || bits == [1, 1, 1], "GHZ collapse must be correlated, got \(bits)")
+            if bits == [0, 0, 0] { sawZeros = true }
+            if bits == [1, 1, 1] { sawOnes = true }
+        }
+        // Sanity that the sampler isn't pinned to one branch across many seeds.
+        XCTAssertTrue(sawZeros && sawOnes, "expected both GHZ branches across seeds")
+    }
 }

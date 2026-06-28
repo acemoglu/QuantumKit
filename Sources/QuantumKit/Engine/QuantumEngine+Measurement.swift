@@ -163,7 +163,129 @@ extension QuantumEngine {
         }
     }
 
+    /// Largest measured-qubit count routed through the GPU marginal reduction. The leaf stage emits
+    /// `blockCount · 2ᵏ` partials, so capping `k ≤ 8` (`binCount ≤ 256`) keeps that scratch at or
+    /// below one probability buffer (`2ⁿ`). Wider simultaneous measurements (rare) fall back to the
+    /// host fold, which is `O(2ⁿ)` either way — no regression versus the previous behavior.
+    static let maxGPUMarginalQubits = 8
+
     func samplePartialOutcome(on state: StateVector, qubits: [Int], diceRoll: Double) throws -> Int {
+        if qubits.count <= Self.maxGPUMarginalQubits {
+            return try samplePartialOutcomeOnGPU(on: state, qubits: qubits, diceRoll: diceRoll)
+        }
+        return try samplePartialOutcomeOnHost(on: state, qubits: qubits, diceRoll: diceRoll)
+    }
+
+    /// GPU marginal sampler: buckets per-state Born probabilities into the `2ᵏ` outcome bins with a
+    /// single leaf histogram pass and a compensated (double-single) cross-block reduction, replacing
+    /// the former `O(2ⁿ)` host fold over every amplitude with a `2ᵏ`-element host CDF search.
+    private func samplePartialOutcomeOnGPU(on state: StateVector, qubits: [Int], diceRoll: Double) throws -> Int {
+        let blockSize = Self.scanBlockSize
+        let stateCount = state.stateCount
+        let binCount = 1 << qubits.count
+        var blockCount = max((stateCount + blockSize - 1) / blockSize, 1)
+
+        let qubitIndices = qubits.map { UInt32($0) }
+        let qubitBuffer = try makeSharedBuffer(length: qubitIndices.count * MemoryLayout<UInt32>.stride)
+        qubitBuffer.contents().copyMemory(
+            from: qubitIndices,
+            byteCount: qubitIndices.count * MemoryLayout<UInt32>.stride
+        )
+
+        // hiA holds the (largest) leaf histogram; the reduction outputs shrink by 256× each pass, so
+        // the lo/ping-pong buffers only need the first-reduce footprint.
+        let firstReduceBlocks = max((blockCount + blockSize - 1) / blockSize, 1)
+        let leafBytes = blockCount * binCount * MemoryLayout<QFloat>.stride
+        let reduceBytes = firstReduceBlocks * binCount * MemoryLayout<QFloat>.stride
+        let hiA = try bufferPool.acquire(length: leafBytes)
+        let loA = try bufferPool.acquire(length: reduceBytes)
+        let hiB = try bufferPool.acquire(length: reduceBytes)
+        let loB = try bufferPool.acquire(length: reduceBytes)
+        // Safe to recycle at scope exit: the command buffer below is awaited synchronously.
+        defer {
+            bufferPool.release(hiA)
+            bufferPool.release(loA)
+            bufferPool.release(hiB)
+            bufferPool.release(loB)
+        }
+
+        guard let commandBuffer = commandQueue.makeCommandBuffer(),
+              let encoder = commandBuffer.makeComputeCommandEncoder() else {
+            throw QuantumEngineError.commandBufferCreationFailed
+        }
+
+        var measuredCount = UInt32(qubits.count)
+        var binCountValue = UInt32(binCount)
+        var elementCount = UInt32(stateCount)
+        encoder.setComputePipelineState(pipelines.marginalLeafHistogram)
+        encoder.setBuffer(state.realBuffer, offset: 0, index: 0)
+        encoder.setBuffer(state.imagBuffer, offset: 0, index: 1)
+        encoder.setBuffer(qubitBuffer, offset: 0, index: 2)
+        encoder.setBytes(&measuredCount, length: MemoryLayout<UInt32>.stride, index: 3)
+        encoder.setBytes(&binCountValue, length: MemoryLayout<UInt32>.stride, index: 4)
+        encoder.setBytes(&elementCount, length: MemoryLayout<UInt32>.stride, index: 5)
+        encoder.setBuffer(hiA, offset: 0, index: 6)
+        encoder.setThreadgroupMemoryLength(binCount * MemoryLayout<Float>.stride, index: 0)
+        encoder.dispatchThreadgroups(
+            MTLSize(width: blockCount, height: 1, depth: 1),
+            threadsPerThreadgroup: MTLSize(width: blockSize, height: 1, depth: 1)
+        )
+
+        var readHi = hiA
+        var readLo = loA
+        var writeHi = hiB
+        var writeLo = loB
+        var producedLo = false
+
+        while blockCount > 1 {
+            let nextBlockCount = (blockCount + blockSize - 1) / blockSize
+            var inBlockCountValue = UInt32(blockCount)
+            var binCountReduce = UInt32(binCount)
+            var readLoFlag: UInt32 = producedLo ? 1 : 0
+            encoder.setComputePipelineState(pipelines.marginalPartialsReduce)
+            encoder.setBuffer(readHi, offset: 0, index: 0)
+            encoder.setBuffer(readLo, offset: 0, index: 1)
+            encoder.setBytes(&inBlockCountValue, length: MemoryLayout<UInt32>.stride, index: 2)
+            encoder.setBytes(&binCountReduce, length: MemoryLayout<UInt32>.stride, index: 3)
+            encoder.setBytes(&readLoFlag, length: MemoryLayout<UInt32>.stride, index: 4)
+            encoder.setBuffer(writeHi, offset: 0, index: 5)
+            encoder.setBuffer(writeLo, offset: 0, index: 6)
+            let outElements = nextBlockCount * binCount
+            encoder.dispatchThreads(
+                MTLSize(width: outElements, height: 1, depth: 1),
+                threadsPerThreadgroup: MTLSize(width: min(blockSize, outElements), height: 1, depth: 1)
+            )
+
+            swap(&readHi, &writeHi)
+            swap(&readLo, &writeLo)
+            producedLo = true
+            blockCount = nextBlockCount
+        }
+
+        encoder.endEncoding()
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+        if let error = commandBuffer.error {
+            throw QuantumEngineError.commandBufferExecutionFailed(underlying: error)
+        }
+
+        let hiPointer = readHi.contents().assumingMemoryBound(to: QFloat.self)
+        let loPointer = readLo.contents().assumingMemoryBound(to: QFloat.self)
+        var cumulative = 0.0
+        for bin in 0..<binCount {
+            let probability = Double(hiPointer[bin]) + (producedLo ? Double(loPointer[bin]) : 0.0)
+            cumulative += probability
+            if diceRoll < cumulative {
+                return bin
+            }
+        }
+        return binCount - 1
+    }
+
+    /// Host-side marginal fold for measurements too wide for the GPU path (`k > maxGPUMarginalQubits`).
+    /// Accumulates in `Double` so the `O(2ⁿ)` sum over per-state float probabilities does not lose
+    /// sub-ulp contributions to Float32 cancellation.
+    private func samplePartialOutcomeOnHost(on state: StateVector, qubits: [Int], diceRoll: Double) throws -> Int {
         let byteCount = state.stateCount * MemoryLayout<QFloat>.stride
         let buffer = try bufferPool.acquire(length: byteCount)
         defer { bufferPool.release(buffer) }
@@ -171,8 +293,6 @@ extension QuantumEngine {
         try executeProbabilityKernel(on: state, outputBuffer: buffer)
         let pointer = buffer.contents().assumingMemoryBound(to: QFloat.self)
 
-        // Accumulate the marginal in Double: the O(2ⁿ) host fold over per-state float probabilities
-        // is exactly where Float32 cancellation would otherwise erase sub-ulp contributions.
         var marginal = [Double](repeating: 0, count: 1 << qubits.count)
         for stateIndex in 0..<state.stateCount {
             let outcome = partialOutcomeIndex(stateIndex: stateIndex, qubits: qubits)
@@ -289,6 +409,101 @@ extension QuantumEngine {
         }
 
         return Int(collapsedIndex)
+    }
+
+    /// Compensated GPU evaluation of ⟨ψ|P|ψ⟩ for a general Pauli tensor product `P`.
+    ///
+    /// `P|j⟩ = phase(j)·|j ⊕ flipMask⟩`, where `phase(j) = (−1)^popcount(j & signMask)·phaseBase`
+    /// and `phaseBase = phaseBaseReal + i·phaseBaseImag = i^{#Y}` is the global complex factor.
+    /// Each basis state's real contribution `Re[ conj(a_{j⊕flipMask})·phase(j)·a_j ]` is summed by a
+    /// double-single leaf pass plus the ping-pong compensated reduction, so the host reads a single
+    /// `(hi, lo)` pair instead of folding `O(2ⁿ)` amplitudes. Mirrors ``trajectoryJumpProbability``.
+    func pauliExpectation(
+        on state: StateVector,
+        flipMask: Int,
+        signMask: Int,
+        phaseBaseReal: QFloat,
+        phaseBaseImag: QFloat
+    ) throws -> QFloat {
+        let blockSize = Self.scanBlockSize
+        let stateCount = state.stateCount
+        var partialCount = max((stateCount + blockSize - 1) / blockSize, 1)
+
+        let maxPartials = partialCount
+        let bytes = maxPartials * MemoryLayout<QFloat>.stride
+        let hiA = try bufferPool.acquire(length: bytes)
+        let loA = try bufferPool.acquire(length: bytes)
+        let hiB = try bufferPool.acquire(length: bytes)
+        let loB = try bufferPool.acquire(length: bytes)
+        // Safe to recycle at scope exit: the command buffer below is awaited synchronously.
+        defer {
+            bufferPool.release(hiA)
+            bufferPool.release(loA)
+            bufferPool.release(hiB)
+            bufferPool.release(loB)
+        }
+
+        guard let commandBuffer = commandQueue.makeCommandBuffer(),
+              let computeEncoder = commandBuffer.makeComputeCommandEncoder() else {
+            throw QuantumEngineError.commandBufferCreationFailed
+        }
+
+        var flipMaskValue = UInt32(flipMask)
+        var signMaskValue = UInt32(signMask)
+        var phaseReal = phaseBaseReal
+        var phaseImag = phaseBaseImag
+        var elementCount = UInt32(stateCount)
+        computeEncoder.setComputePipelineState(pipelines.pauliExpectationPartial)
+        computeEncoder.setBuffer(state.realBuffer, offset: 0, index: 0)
+        computeEncoder.setBuffer(state.imagBuffer, offset: 0, index: 1)
+        computeEncoder.setBytes(&flipMaskValue, length: MemoryLayout<UInt32>.stride, index: 2)
+        computeEncoder.setBytes(&signMaskValue, length: MemoryLayout<UInt32>.stride, index: 3)
+        computeEncoder.setBytes(&phaseReal, length: MemoryLayout<QFloat>.stride, index: 4)
+        computeEncoder.setBytes(&phaseImag, length: MemoryLayout<QFloat>.stride, index: 5)
+        computeEncoder.setBytes(&elementCount, length: MemoryLayout<UInt32>.stride, index: 6)
+        computeEncoder.setBuffer(hiA, offset: 0, index: 7)
+        computeEncoder.setBuffer(loA, offset: 0, index: 8)
+        computeEncoder.dispatchThreadgroups(
+            MTLSize(width: partialCount, height: 1, depth: 1),
+            threadsPerThreadgroup: MTLSize(width: blockSize, height: 1, depth: 1)
+        )
+
+        var readHi = hiA
+        var readLo = loA
+        var writeHi = hiB
+        var writeLo = loB
+
+        while partialCount > 1 {
+            let nextCount = max((partialCount + blockSize - 1) / blockSize, 1)
+            var partialElementCount = UInt32(partialCount)
+            computeEncoder.setComputePipelineState(pipelines.renormCompensatedPartial)
+            computeEncoder.setBuffer(readHi, offset: 0, index: 0)
+            computeEncoder.setBuffer(readLo, offset: 0, index: 1)
+            computeEncoder.setBytes(&partialElementCount, length: MemoryLayout<UInt32>.stride, index: 2)
+            computeEncoder.setBuffer(writeHi, offset: 0, index: 3)
+            computeEncoder.setBuffer(writeLo, offset: 0, index: 4)
+            computeEncoder.dispatchThreadgroups(
+                MTLSize(width: nextCount, height: 1, depth: 1),
+                threadsPerThreadgroup: MTLSize(width: blockSize, height: 1, depth: 1)
+            )
+
+            swap(&readHi, &writeHi)
+            swap(&readLo, &writeLo)
+            partialCount = nextCount
+        }
+
+        computeEncoder.endEncoding()
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+        if let error = commandBuffer.error {
+            throw QuantumEngineError.commandBufferExecutionFailed(underlying: error)
+        }
+
+        // Combine the surviving (hi, lo) pair in Double so the compensated GPU sum is not
+        // re-truncated to Float before being returned.
+        let hiPtr = readHi.contents().assumingMemoryBound(to: QFloat.self)
+        let loPtr = readLo.contents().assumingMemoryBound(to: QFloat.self)
+        return QFloat(Double(hiPtr[0]) + Double(loPtr[0]))
     }
 
     public func executeProbabilityKernel(on state: StateVector, outputBuffer: MTLBuffer) throws {

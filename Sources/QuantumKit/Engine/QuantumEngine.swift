@@ -66,6 +66,9 @@ public struct Pipelines: @unchecked Sendable {
     let phaseDampingJump: MTLComputePipelineState
     let phaseDampingNoJump: MTLComputePipelineState
     let trajectoryWeightedPopulationPartial: MTLComputePipelineState
+    let pauliExpectationPartial: MTLComputePipelineState
+    let marginalLeafHistogram: MTLComputePipelineState
+    let marginalPartialsReduce: MTLComputePipelineState
     let normalize: MTLComputePipelineState
     let renormStateNormPartial: MTLComputePipelineState
     let renormCompensatedPartial: MTLComputePipelineState
@@ -187,6 +190,21 @@ public struct Pipelines: @unchecked Sendable {
 
         guard let trajectoryWeightedPopFunc = preciseLibrary.makeFunction(name: "trajectory_weighted_population_partial") else { throw QuantumEngineError.functionNotFound("trajectory_weighted_population_partial") }
         self.trajectoryWeightedPopulationPartial = try device.makeComputePipelineState(function: trajectoryWeightedPopFunc)
+
+        // Compensated leaf for general Pauli expectation: its in-block (hi, lo) tree reduction uses
+        // the tj_two_sum/tj_add helpers, so it is taken from the precise library to keep the error
+        // terms from collapsing under fast-math reassociation (same rationale as the trajectory leaf).
+        guard let pauliExpectationPartialFunc = preciseLibrary.makeFunction(name: "pauli_expectation_partial") else { throw QuantumEngineError.functionNotFound("pauli_expectation_partial") }
+        self.pauliExpectationPartial = try device.makeComputePipelineState(function: pauliExpectationPartialFunc)
+
+        // Leaf bucketing runs from the fast default library (a per-block float histogram of <=256
+        // terms needs no compensation); the cross-block reduction is taken from the precise library
+        // so its double-single two-sum survives fast-math reassociation.
+        guard let marginalLeafFunc = library.makeFunction(name: "marginal_leaf_histogram") else { throw QuantumEngineError.functionNotFound("marginal_leaf_histogram") }
+        self.marginalLeafHistogram = try device.makeComputePipelineState(function: marginalLeafFunc)
+
+        guard let marginalReduceFunc = preciseLibrary.makeFunction(name: "marginal_partials_reduce") else { throw QuantumEngineError.functionNotFound("marginal_partials_reduce") }
+        self.marginalPartialsReduce = try device.makeComputePipelineState(function: marginalReduceFunc)
 
         guard let normalizeFunc = library.makeFunction(name: "normalize_state_vector") else { throw QuantumEngineError.functionNotFound("normalize_state_vector") }
         self.normalize = try device.makeComputePipelineState(function: normalizeFunc)

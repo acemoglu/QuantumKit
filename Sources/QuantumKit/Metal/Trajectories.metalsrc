@@ -66,6 +66,145 @@ kernel void trajectory_weighted_population_partial(device const float* realBuffe
     }
 }
 
+// Pauli expectation leaf: per-threadgroup compensated (double-single) partial sums of each basis
+// state's contribution to <psi|P|psi> for a general Pauli tensor product P:
+//   Re[ conj(a_{j ^ flipMask}) * phase(j) * a_j ]
+// where phase(j) = (-1)^popcount(j & signMask) * (phaseBaseReal + i*phaseBaseImag) and
+// phaseBase = i^{#Y} is the global complex factor shared by every term. Mirrors
+// trajectory_weighted_population_partial: a 256-wide (hi, lo) tree reduction whose per-block result
+// is later combined across blocks by renorm_compensated_partial. Compiled from the precise library
+// so the tj_two_sum/tj_add error terms survive fast-math reassociation.
+kernel void pauli_expectation_partial(device const float* realBuffer [[buffer(0)]],
+                                      device const float* imagBuffer [[buffer(1)]],
+                                      constant uint& flipMask [[buffer(2)]],
+                                      constant uint& signMask [[buffer(3)]],
+                                      constant float& phaseBaseReal [[buffer(4)]],
+                                      constant float& phaseBaseImag [[buffer(5)]],
+                                      constant uint& elementCount [[buffer(6)]],
+                                      device float* partialHi [[buffer(7)]],
+                                      device float* partialLo [[buffer(8)]],
+                                      uint globalID [[thread_position_in_grid]],
+                                      uint localID [[thread_index_in_threadgroup]],
+                                      uint groupID [[threadgroup_position_in_grid]],
+                                      uint groupSize [[threads_per_threadgroup]]) {
+    threadgroup float sharedHi[256];
+    threadgroup float sharedLo[256];
+
+    float2 local = float2(0.0f, 0.0f);
+    if (globalID < elementCount) {
+        const uint j = globalID;
+        const uint k = j ^ flipMask;
+        const bool negative = (popcount(j & signMask) & 1u) != 0u;
+        const float pr = negative ? -phaseBaseReal : phaseBaseReal;
+        const float pi = negative ? -phaseBaseImag : phaseBaseImag;
+        const float rj = realBuffer[j];
+        const float ij = imagBuffer[j];
+        // phase(j) * a_j
+        const float xr = (pr * rj) - (pi * ij);
+        const float xi = (pr * ij) + (pi * rj);
+        // Re[ conj(a_k) * (phase(j) * a_j) ]
+        const float contribution = (realBuffer[k] * xr) + (imagBuffer[k] * xi);
+        local = tj_two_sum(contribution, 0.0f);
+    }
+    sharedHi[localID] = local.x;
+    sharedLo[localID] = local.y;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    for (uint stride = groupSize >> 1; stride > 0; stride >>= 1) {
+        if (localID < stride) {
+            const float2 sum = tj_add(
+                float2(sharedHi[localID], sharedLo[localID]),
+                float2(sharedHi[localID + stride], sharedLo[localID + stride])
+            );
+            sharedHi[localID] = sum.x;
+            sharedLo[localID] = sum.y;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    if (localID == 0) {
+        partialHi[groupID] = sharedHi[0];
+        partialLo[groupID] = sharedLo[0];
+    }
+}
+
+// Leaf stage of the partial-measurement marginal: buckets each basis state's Born probability into
+// one of `binCount = 2^measuredCount` bins, keyed by the measured qubits' bits (qubit q -> bit q of
+// the bin index). Each threadgroup owns `groupSize` consecutive states and writes `binCount` partial
+// sums to `partials[groupID * binCount + bin]`. Thread 0 accumulates its block serially into the
+// threadgroup histogram, which keeps the per-bin scatter race-free without float atomics; the small
+// per-block float sum (<=256 terms) is later combined across blocks by `marginal_partials_reduce`
+// with double-single compensation.
+kernel void marginal_leaf_histogram(device const float* realBuffer [[buffer(0)]],
+                                    device const float* imagBuffer [[buffer(1)]],
+                                    device const uint* measuredQubits [[buffer(2)]],
+                                    constant uint& measuredCount [[buffer(3)]],
+                                    constant uint& binCount [[buffer(4)]],
+                                    constant uint& elementCount [[buffer(5)]],
+                                    device float* partials [[buffer(6)]],
+                                    threadgroup float* hist [[threadgroup(0)]],
+                                    uint groupID [[threadgroup_position_in_grid]],
+                                    uint localID [[thread_index_in_threadgroup]],
+                                    uint groupSize [[threads_per_threadgroup]]) {
+    for (uint b = localID; b < binCount; b += groupSize) {
+        hist[b] = 0.0f;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    if (localID == 0u) {
+        const uint start = groupID * groupSize;
+        const uint end = min(start + groupSize, elementCount);
+        for (uint s = start; s < end; s++) {
+            const float r = realBuffer[s];
+            const float i = imagBuffer[s];
+            uint bin = 0u;
+            for (uint q = 0u; q < measuredCount; q++) {
+                bin |= (((s >> measuredQubits[q]) & 1u) << q);
+            }
+            hist[bin] += (r * r) + (i * i);
+        }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    for (uint b = localID; b < binCount; b += groupSize) {
+        partials[groupID * binCount + b] = hist[b];
+    }
+}
+
+// Recursive stage: compensated per-bin reduction of `inBlockCount` partial histograms down to
+// `ceil(inBlockCount / 256)` histograms. Each thread owns one (outBlock, bin) output and sums the
+// up-to-256 input blocks feeding it. `readLo == 0` on the first pass (the leaf partials carry no lo
+// term), `1` thereafter. Repeating until one block remains leaves `binCount` (hi, lo) marginals.
+kernel void marginal_partials_reduce(device const float* inHi [[buffer(0)]],
+                                     device const float* inLo [[buffer(1)]],
+                                     constant uint& inBlockCount [[buffer(2)]],
+                                     constant uint& binCount [[buffer(3)]],
+                                     constant uint& readLo [[buffer(4)]],
+                                     device float* outHi [[buffer(5)]],
+                                     device float* outLo [[buffer(6)]],
+                                     uint gid [[thread_position_in_grid]]) {
+    const uint outBlockCount = (inBlockCount + 255u) / 256u;
+    const uint outElements = outBlockCount * binCount;
+    if (gid >= outElements) {
+        return;
+    }
+
+    const uint outBlock = gid / binCount;
+    const uint bin = gid - outBlock * binCount;
+    const uint start = outBlock * 256u;
+    const uint end = min(start + 256u, inBlockCount);
+
+    float2 acc = float2(0.0f, 0.0f);
+    for (uint blk = start; blk < end; blk++) {
+        const uint idx = blk * binCount + bin;
+        const float hi = inHi[idx];
+        const float lo = (readLo != 0u) ? inLo[idx] : 0.0f;
+        acc = tj_add(acc, float2(hi, lo));
+    }
+    outHi[outBlock * binCount + bin] = acc.x;
+    outLo[outBlock * binCount + bin] = acc.y;
+}
+
 // Phase-damping jump branch (E1 = sqrt(lambda) |1><1| up to normalization):
 // zero |0> amplitude of each pair, keep |1> amplitude.
 kernel void phase_damping_jump(device float* realBuffer [[buffer(0)]],

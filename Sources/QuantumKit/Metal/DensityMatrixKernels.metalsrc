@@ -134,6 +134,82 @@ kernel void dm_right_multiply_single_qubit_dagger(device const float* inReal [[b
     outImag[id] = result.y;
 }
 
+// Maps a full matrix index to the 2-bit code of its (qubitA, qubitB) subspace bits, with qubitA
+// as the high bit. Inverse of `dm2_set_pair`.
+inline uint dm2_pair_index(uint index, uint qubitA, uint qubitB) {
+    const uint bitA = (index >> qubitA) & 1u;
+    const uint bitB = (index >> qubitB) & 1u;
+    return (bitA << 1) | bitB;
+}
+
+// Returns `base` with its (qubitA, qubitB) bits overwritten by the 2-bit `pair` code
+// (qubitA = high bit). Inverse of `dm2_pair_index`.
+inline uint dm2_set_pair(uint base, uint qubitA, uint qubitB, uint pair) {
+    const uint bitA = (pair >> 1) & 1u;
+    const uint bitB = pair & 1u;
+    const uint cleared = base & ~((1u << qubitA) | (1u << qubitB));
+    return cleared | (bitA << qubitA) | (bitB << qubitB);
+}
+
+// Applies a two-qubit Kraus channel rho -> sum_k E_k rho E_k^dagger in a single pass. Each E_k is a
+// 4x4 complex matrix (row-major, qubitA = high bit of the 2-bit subspace code) laid out contiguously
+// in `krausData` (16 float2 per operator). Every output element rho_{row,col} depends only on the
+// 4x4 block rho_{row(r'),col(c')} over the subspace, so the whole correlated channel (e.g. the
+// 16-operator two-qubit depolarizing channel) collapses to one GPU dispatch instead of a host-side
+// weighted accumulation over the full 4^n matrix.
+kernel void dm_apply_two_qubit_kraus(device const float* inReal [[buffer(0)]],
+                                     device const float* inImag [[buffer(1)]],
+                                     device float* outReal [[buffer(2)]],
+                                     device float* outImag [[buffer(3)]],
+                                     constant uint& stateCount [[buffer(4)]],
+                                     constant uint& qubitA [[buffer(5)]],
+                                     constant uint& qubitB [[buffer(6)]],
+                                     constant uint& krausCount [[buffer(7)]],
+                                     constant float2* krausData [[buffer(8)]],
+                                     uint id [[thread_position_in_grid]]) {
+    const uint elementCount = stateCount * stateCount;
+    if (id >= elementCount) {
+        return;
+    }
+
+    const uint row = id / stateCount;
+    const uint col = id - row * stateCount;
+    const uint rIdx = dm2_pair_index(row, qubitA, qubitB);
+    const uint cIdx = dm2_pair_index(col, qubitA, qubitB);
+
+    // Cache the 4x4 subspace block of rho this element draws from (16 reads).
+    float2 block[4][4];
+    for (uint rp = 0u; rp < 4u; rp++) {
+        const uint rowP = dm2_set_pair(row, qubitA, qubitB, rp);
+        for (uint cp = 0u; cp < 4u; cp++) {
+            const uint colP = dm2_set_pair(col, qubitA, qubitB, cp);
+            const uint idx = rowP * stateCount + colP;
+            block[rp][cp] = float2(inReal[idx], inImag[idx]);
+        }
+    }
+
+    float2 accum = float2(0.0f, 0.0f);
+    for (uint k = 0u; k < krausCount; k++) {
+        const uint base = k * 16u;
+        for (uint rp = 0u; rp < 4u; rp++) {
+            const float2 e_r = krausData[base + rIdx * 4u + rp];
+            if (e_r.x == 0.0f && e_r.y == 0.0f) {
+                continue;
+            }
+            // (E_k rho E_k^dagger)_{rIdx,cIdx} term: E_{rIdx,rp} * rho * conj(E_{cIdx,cp}).
+            float2 inner = float2(0.0f, 0.0f);
+            for (uint cp = 0u; cp < 4u; cp++) {
+                const float2 e_c = dm_complex_conj(krausData[base + cIdx * 4u + cp]);
+                inner = dm_complex_add(inner, dm_complex_mul(block[rp][cp], e_c));
+            }
+            accum = dm_complex_add(accum, dm_complex_mul(e_r, inner));
+        }
+    }
+
+    outReal[id] = accum.x;
+    outImag[id] = accum.y;
+}
+
 kernel void dm_apply_kraus_single_qubit(device const float* inReal [[buffer(0)]],
                                         device const float* inImag [[buffer(1)]],
                                         device float* outReal [[buffer(2)]],
