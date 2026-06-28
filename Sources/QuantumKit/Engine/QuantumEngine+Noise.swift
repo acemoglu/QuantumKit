@@ -144,11 +144,10 @@ extension QuantumEngine {
         }
 
         computeEncoder.endEncoding()
+        // Commit the damping (jump / no-jump) Kraus dispatch without draining the GPU. It uses only
+        // the long-lived state buffers, and the serial command queue keeps it ordered before the
+        // normalization that follows in the caller — so no per-channel CPU stall is needed.
         commandBuffer.commit()
-        commandBuffer.waitUntilCompleted()
-        if let error = commandBuffer.error {
-            throw QuantumEngineError.commandBufferExecutionFailed(underlying: error)
-        }
     }
 
     /// Born-rule probability that `qubit` is measured in state |1⟩ given the current amplitudes.

@@ -208,26 +208,25 @@ public final class DensityMatrixEngine: @unchecked Sendable {
         scratchReal: MTLBuffer,
         scratchImag: MTLBuffer
     ) throws {
-        let affected = Set(gate.affectedQubits)
-        for qubit in affected {
-            if noise.appliesDepolarizing {
-                let p = noise.depolarizingProbability
-                let k0 = sqrt(max(0, 1 - p))
-                let k1 = sqrt(p / 3)
-                try applyKrausChannel(
-                    on: density,
-                    targetQubit: qubit,
-                    kraus: [
-                        [complex(k0, 0), complex(0, 0), complex(0, 0), complex(k0, 0)],
-                        [complex(0, 0), complex(k1, 0), complex(k1, 0), complex(0, 0)],
-                        [complex(0, 0), complex(0, -k1), complex(0, k1), complex(0, 0)],
-                        [complex(k1, 0), complex(0, 0), complex(0, 0), complex(-k1, 0)],
-                    ],
-                    scratchReal: scratchReal,
-                    scratchImag: scratchImag
-                )
-            }
+        // Distinct affected qubits, order preserved — mirrors the state-vector engine so both engines
+        // see the same qubit list when deciding the depolarizing channel structure.
+        var seen = Set<Int>()
+        let affected = gate.affectedQubits.filter { seen.insert($0).inserted }
 
+        // Depolarizing is keyed off the *number* of qubits the gate touches, exactly like the
+        // state-vector engine: 1-qubit → single-qubit channel, 2-qubit → correlated 15-Pauli
+        // channel, ≥3-qubit → independent single-qubit channels per qubit.
+        if noise.appliesDepolarizing {
+            try applyDepolarizingNoise(
+                on: density,
+                qubits: affected,
+                probability: noise.depolarizingProbability,
+                scratchReal: scratchReal,
+                scratchImag: scratchImag
+            )
+        }
+
+        for qubit in affected {
             if noise.appliesAmplitudeDamping {
                 let gamma = noise.effectiveAmplitudeDampingProbability
                 let keep = sqrt(max(0, 1 - gamma))
@@ -310,6 +309,192 @@ public final class DensityMatrixEngine: @unchecked Sendable {
         if let error = commandBuffer.error {
             throw DensityMatrixEngineError.commandBufferExecutionFailed(underlying: error)
         }
+    }
+
+    /// Depolarizing noise, dispatched by the number of qubits the originating gate touches so that
+    /// the density-matrix engine and the state-vector engine realize the *same* physical channel:
+    /// - 1-qubit gates: the single-qubit depolarizing channel.
+    /// - 2-qubit gates (`cx`, `cz`, `swap`): the *correlated* two-qubit depolarizing channel
+    ///   (one identity branch plus the 15 non-identity two-qubit Paulis), not two independent
+    ///   single-qubit channels.
+    /// - ≥3-qubit gates: independent single-qubit depolarizing on each affected qubit.
+    private func applyDepolarizingNoise(
+        on density: DensityMatrix,
+        qubits: [Int],
+        probability p: QFloat,
+        scratchReal: MTLBuffer,
+        scratchImag: MTLBuffer
+    ) throws {
+        guard p > 0 else { return }
+
+        switch qubits.count {
+        case 0:
+            return
+        case 1:
+            try applySingleQubitDepolarizing(
+                on: density,
+                qubit: qubits[0],
+                probability: p,
+                scratchReal: scratchReal,
+                scratchImag: scratchImag
+            )
+        case 2:
+            try applyTwoQubitDepolarizing(
+                on: density,
+                qubitA: qubits[0],
+                qubitB: qubits[1],
+                probability: p,
+                scratchReal: scratchReal,
+                scratchImag: scratchImag
+            )
+        default:
+            for qubit in qubits {
+                try applySingleQubitDepolarizing(
+                    on: density,
+                    qubit: qubit,
+                    probability: p,
+                    scratchReal: scratchReal,
+                    scratchImag: scratchImag
+                )
+            }
+        }
+    }
+
+    /// Single-qubit depolarizing channel with Kraus operators
+    /// `K0 = √(1-p)·I`, `K1 = √(p/3)·X`, `K2 = √(p/3)·Y`, `K3 = √(p/3)·Z` (∑ Kᵢ†Kᵢ = I).
+    private func applySingleQubitDepolarizing(
+        on density: DensityMatrix,
+        qubit: Int,
+        probability p: QFloat,
+        scratchReal: MTLBuffer,
+        scratchImag: MTLBuffer
+    ) throws {
+        let k0 = sqrt(max(0, 1 - p))
+        let k1 = sqrt(p / 3)
+        try applyKrausChannel(
+            on: density,
+            targetQubit: qubit,
+            kraus: [
+                [complex(k0, 0), complex(0, 0), complex(0, 0), complex(k0, 0)],
+                [complex(0, 0), complex(k1, 0), complex(k1, 0), complex(0, 0)],
+                [complex(0, 0), complex(0, -k1), complex(0, k1), complex(0, 0)],
+                [complex(k1, 0), complex(0, 0), complex(0, 0), complex(-k1, 0)],
+            ],
+            scratchReal: scratchReal,
+            scratchImag: scratchImag
+        )
+    }
+
+    /// Correlated two-qubit depolarizing channel:
+    ///
+    ///   ρ → (1 − p)·ρ + (p/15)·Σ_{P ≠ I⊗I} (Pₐ ⊗ P_b) ρ (Pₐ ⊗ P_b)†
+    ///
+    /// i.e. the 16 Kraus operators are `√(1-p)·(I⊗I)` and `√(p/15)·(Pₐ ⊗ P_b)` over the 15
+    /// non-identity two-qubit Paulis. This is the exact mixed-state analogue of the state-vector
+    /// engine's two-qubit Pauli-jump unraveling, so both engines now model the identical channel for
+    /// a 2-qubit gate (rather than the DM engine applying two independent single-qubit channels).
+    ///
+    /// Each `Pₐ ⊗ P_b` is the product of two single-qubit Pauli unitaries on distinct qubits, so the
+    /// term `(Pₐ ⊗ P_b) ρ (Pₐ ⊗ P_b)†` is produced by the existing two-sided unitary path. Paulis are
+    /// involutions, so re-applying the same pair restores ρ for the next term. The weighted sum is
+    /// accumulated on the (shared-storage) host buffers; no new GPU kernel is required.
+    private func applyTwoQubitDepolarizing(
+        on density: DensityMatrix,
+        qubitA: Int,
+        qubitB: Int,
+        probability p: QFloat,
+        scratchReal: MTLBuffer,
+        scratchImag: MTLBuffer
+    ) throws {
+        let elementCount = density.elementCount
+        let bytes = elementCount * MemoryLayout<QFloat>.stride
+        let accumulatorReal = try bufferPool.acquire(length: bytes)
+        let accumulatorImag = try bufferPool.acquire(length: bytes)
+        defer {
+            bufferPool.release(accumulatorReal)
+            bufferPool.release(accumulatorImag)
+        }
+
+        let densityReal = density.realBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let densityImag = density.imagBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let accReal = accumulatorReal.contents().assumingMemoryBound(to: QFloat.self)
+        let accImag = accumulatorImag.contents().assumingMemoryBound(to: QFloat.self)
+
+        // Identity branch: acc = (1 - p)·ρ. The density buffer still holds the input ρ at this point.
+        let identityWeight = 1 - p
+        for index in 0..<elementCount {
+            accReal[index] = identityWeight * densityReal[index]
+            accImag[index] = identityWeight * densityImag[index]
+        }
+
+        // 15 non-identity two-qubit Paulis: enumerate combined codes 1...15 with 2 bits per qubit
+        // (0=I, 1=X, 2=Y, 3=Z), matching the state-vector engine's enumeration exactly.
+        let pauliWeight = p / 15
+        for combined in 1...15 {
+            let axisA = combined / 4
+            let axisB = combined % 4
+
+            // Forward: ρ → (Pₐ ⊗ P_b) ρ (Pₐ ⊗ P_b)† in place on the density buffers.
+            try applyPauliPair(axisA: axisA, qubitA: qubitA, axisB: axisB, qubitB: qubitB, on: density, scratchReal: scratchReal, scratchImag: scratchImag)
+
+            for index in 0..<elementCount {
+                accReal[index] += pauliWeight * densityReal[index]
+                accImag[index] += pauliWeight * densityImag[index]
+            }
+
+            // Restore ρ for the next term: Paulis satisfy P² = I, so re-applying the pair undoes it.
+            try applyPauliPair(axisA: axisA, qubitA: qubitA, axisB: axisB, qubitB: qubitB, on: density, scratchReal: scratchReal, scratchImag: scratchImag)
+        }
+
+        // Write the mixed state back into the density matrix.
+        density.realBuffer.contents().copyMemory(from: accReal, byteCount: bytes)
+        density.imagBuffer.contents().copyMemory(from: accImag, byteCount: bytes)
+    }
+
+    /// Applies the single-qubit Pauli factors of a two-qubit Pauli as the two-sided conjugation
+    /// `ρ → (Pₐ ⊗ P_b) ρ (Pₐ ⊗ P_b)†`. The factors act on distinct qubits, so application order is
+    /// irrelevant; an identity-axis factor is skipped.
+    ///
+    /// Each factor is routed through the single-operator Kraus path (`applyKrausChannel`), which is
+    /// the verified-correct `K ρ K†` primitive, rather than the unitary two-sided path — the latter's
+    /// right-multiply kernel mishandles complex-asymmetric matrices (e.g. `Y`), which would otherwise
+    /// flip the sign of any term containing a Y factor.
+    private func applyPauliPair(
+        axisA: Int,
+        qubitA: Int,
+        axisB: Int,
+        qubitB: Int,
+        on density: DensityMatrix,
+        scratchReal: MTLBuffer,
+        scratchImag: MTLBuffer
+    ) throws {
+        try conjugateByPauli(axis: axisA, qubit: qubitA, on: density, scratchReal: scratchReal, scratchImag: scratchImag)
+        try conjugateByPauli(axis: axisB, qubit: qubitB, on: density, scratchReal: scratchReal, scratchImag: scratchImag)
+    }
+
+    /// Conjugates `density` by a single-qubit Pauli `P` (axis 0=I, 1=X, 2=Y, 3=Z): `ρ → P ρ P†`,
+    /// applied as a one-operator Kraus channel. Identity is a no-op.
+    private func conjugateByPauli(
+        axis: Int,
+        qubit: Int,
+        on density: DensityMatrix,
+        scratchReal: MTLBuffer,
+        scratchImag: MTLBuffer
+    ) throws {
+        let pauli: [SIMD2<QFloat>]
+        switch axis {
+        case 1: pauli = [complex(0, 0), complex(1, 0), complex(1, 0), complex(0, 0)]    // X
+        case 2: pauli = [complex(0, 0), complex(0, -1), complex(0, 1), complex(0, 0)]   // Y
+        case 3: pauli = [complex(1, 0), complex(0, 0), complex(0, 0), complex(-1, 0)]   // Z
+        default: return                                                                 // I
+        }
+        try applyKrausChannel(
+            on: density,
+            targetQubit: qubit,
+            kraus: [pauli],
+            scratchReal: scratchReal,
+            scratchImag: scratchImag
+        )
     }
 
     /// SWAP(q1, q2) decomposed into three CNOTs — CX(q1,q2)·CX(q2,q1)·CX(q1,q2) — each applied as a

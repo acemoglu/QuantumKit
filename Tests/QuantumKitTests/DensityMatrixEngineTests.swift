@@ -35,6 +35,68 @@ extension QuantumKitTests {
         XCTAssertEqual(trace(of: density, engine: engine), 1.0, accuracy: 1e-5)
     }
 
+    func testDensityMatrixBareYGatePreservesTraceAndState() throws {
+        // Regression for dm_right_multiply_single_qubit_dagger: applying Y to |0⟩ must yield
+        // YρY† = |1⟩⟨1|. The Pauli-Y matrix is complex-asymmetric (Y = [[0,-i],[i,0]]), so a
+        // right-multiply that conjugates without transposing computes ρȲ = -ρY instead of ρY†,
+        // collapsing the state into a negative-trace, non-physical density matrix.
+        guard let (engine, density) = try makeDensitySetup(qubitCount: 1) else { return }
+
+        var circuit = try QuantumCircuit(qubitCount: 1)
+        try circuit.y(0)
+
+        try engine.execute(circuit, on: density)
+
+        let p = engine.probabilities(of: density)
+        // Population must be entirely in |1⟩.
+        XCTAssertEqual(p[0], 0.0, accuracy: 1e-6)
+        XCTAssertEqual(p[1], 1.0, accuracy: 1e-6)
+        // Trace must remain exactly 1.0 (the pre-fix bug produced trace = -1.0).
+        XCTAssertEqual(trace(of: density, engine: engine), 1.0, accuracy: 1e-6)
+    }
+
+    // MARK: - Depolarizing noise (Risk #1: cross-engine channel parity)
+
+    func testDensityMatrixSingleQubitDepolarizingChannel() throws {
+        // 1-qubit gate ⇒ single-qubit depolarizing: D(|1⟩⟨1|) = (1-2p/3)|1⟩⟨1| + (2p/3)|0⟩⟨0|.
+        guard let (engine, density) = try makeDensitySetup(qubitCount: 1) else { return }
+
+        var circuit = try QuantumCircuit(qubitCount: 1)
+        try circuit.x(0)
+
+        let p: QFloat = 0.15
+        var rng: QuantumRNG = .seeded(1)
+        _ = try engine.executeRNG(circuit, on: density, rng: &rng, noise: NoiseModel(depolarizingProbability: p))
+
+        let result = engine.probabilities(of: density)
+        XCTAssertEqual(result[0], 2 * p / 3, accuracy: 1e-6)       // 0.10
+        XCTAssertEqual(result[1], 1 - 2 * p / 3, accuracy: 1e-6)   // 0.90
+        XCTAssertEqual(trace(of: density, engine: engine), 1.0, accuracy: 1e-6)
+    }
+
+    func testDensityMatrixTwoQubitDepolarizingIsCorrelated() throws {
+        // 2-qubit gate ⇒ correlated 15-Pauli channel, NOT two independent single-qubit channels.
+        // Starting from |00⟩, CX(0,1) leaves the state at |00⟩, so the channel acts on |00⟩⟨00|:
+        //   ρ' = (1 - 4p/5)|00⟩⟨00| + (4p/15)(|01⟩⟨01| + |10⟩⟨10| + |11⟩⟨11|).
+        // (Two *independent* single-qubit channels would instead give 0.81/0.09/0.09/0.01 at p=0.15,
+        //  so this test fails under the old per-qubit behavior.)
+        guard let (engine, density) = try makeDensitySetup(qubitCount: 2) else { return }
+
+        var circuit = try QuantumCircuit(qubitCount: 2)
+        try circuit.cx(0, 1)
+
+        let p: QFloat = 0.15
+        var rng: QuantumRNG = .seeded(1)
+        _ = try engine.executeRNG(circuit, on: density, rng: &rng, noise: NoiseModel(depolarizingProbability: p))
+
+        let result = engine.probabilities(of: density)
+        XCTAssertEqual(result[0], 1 - 4 * p / 5, accuracy: 1e-6)  // 0.88
+        XCTAssertEqual(result[1], 4 * p / 15, accuracy: 1e-6)     // 0.04
+        XCTAssertEqual(result[2], 4 * p / 15, accuracy: 1e-6)     // 0.04
+        XCTAssertEqual(result[3], 4 * p / 15, accuracy: 1e-6)     // 0.04
+        XCTAssertEqual(trace(of: density, engine: engine), 1.0, accuracy: 1e-6)
+    }
+
     func testDensityMatrixDeepCircuitDoesNotLeakOrCrash() throws {
         // Exercises the pooled matrix-buffer path across many gates (Bug 3): a long run must stay
         // unitary (trace 1) and produce the analytic single-qubit-rotation populations.

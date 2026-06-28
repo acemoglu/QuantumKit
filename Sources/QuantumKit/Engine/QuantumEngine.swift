@@ -208,12 +208,19 @@ public struct Pipelines: @unchecked Sendable {
 /// Measurement and normalization need large (2ⁿ-sized) scratch buffers on every call; re-allocating
 /// them per shot or per mid-circuit measurement is expensive (~1 GB at 28 qubits). The pool hands
 /// out a buffer of the requested size — reused if one is free, freshly allocated otherwise — and
-/// takes it back when the caller is done. Because every GPU dispatch here is synchronous
-/// (`waitUntilCompleted`), a released buffer is guaranteed idle.
+/// takes it back when the caller is done.
+///
+/// - Important: The execution pipelines no longer block on `waitUntilCompleted` after every
+///   dispatch, so a buffer handed back on the CPU thread may still be referenced by an in-flight
+///   GPU command buffer. Recycling it synchronously would be a use-after-free. Callers that release
+///   a buffer tied to GPU work must use ``release(_:after:)``, which defers the (lock-guarded)
+///   return to the buffer's `addCompletedHandler` so it only re-enters the free list once the GPU
+///   has genuinely finished. The synchronous ``release(_:)`` is reserved for buffers whose owning
+///   command buffer has already been awaited.
 ///
 /// An acquired buffer holds arbitrary stale contents, so callers must fully overwrite (or clear) it
 /// before reading. The free list is lock-guarded so the owning engine stays safe to share across
-/// threads.
+/// threads, including from the completion handlers that run on Metal's private queues.
 final class BufferPool: @unchecked Sendable {
     let device: MTLDevice
     let lock = NSLock()
@@ -239,10 +246,21 @@ final class BufferPool: @unchecked Sendable {
         return buffer
     }
 
+    /// Synchronously returns `buffer` to the free list. Only safe once the GPU work that used the
+    /// buffer has been awaited (e.g. behind a `waitUntilCompleted` at a host-readback site).
     func release(_ buffer: MTLBuffer) {
         lock.lock()
         freeBuffersByLength[buffer.length, default: []].append(buffer)
         lock.unlock()
+    }
+
+    /// Async-safe release: returns `buffer` to the free list only after `commandBuffer` has
+    /// completed on the GPU. The completion handler hops onto the same `NSLock`, so concurrent
+    /// completions and `acquire`/`release` calls stay serialized.
+    func release(_ buffer: MTLBuffer, after commandBuffer: MTLCommandBuffer) {
+        commandBuffer.addCompletedHandler { [self] _ in
+            self.release(buffer)
+        }
     }
 }
 
@@ -341,6 +359,25 @@ public final class QuantumEngine: @unchecked Sendable {
     public func execute(_ circuit: QuantumCircuit, on state: StateVector) throws {
         var rng: QuantumRNG = .hardware
         _ = try executeRNG(circuit, on: state, rng: &rng, noise: nil)
+    }
+
+    /// Blocks the CPU until every command buffer previously committed to ``commandQueue`` has
+    /// finished on the GPU.
+    ///
+    /// With the per-gate/per-channel `waitUntilCompleted` calls removed, gate and noise dispatches
+    /// are committed without draining the queue. Because the queue is serial and in-order, committing
+    /// one trailing command buffer and awaiting it guarantees all earlier work has completed — the
+    /// single synchronization point needed before classical state (amplitudes / probabilities) is
+    /// read back directly from the shared buffers on the host.
+    func drainPipeline() throws {
+        guard let commandBuffer = commandQueue.makeCommandBuffer() else {
+            throw QuantumEngineError.commandBufferCreationFailed
+        }
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+        if let error = commandBuffer.error {
+            throw QuantumEngineError.commandBufferExecutionFailed(underlying: error)
+        }
     }
 
     /// Applies a unitary-only circuit to many states in one GPU command buffer.
@@ -496,6 +533,10 @@ public final class QuantumEngine: @unchecked Sendable {
         }
 
         try flushUnitaryGates(pendingUnitaryGates, on: state, gateCounter: &unitaryGateCounter)
+        // Gate/noise dispatches above are now committed asynchronously, so drain the queue once
+        // here — at the end of the circuit run — before the caller reads classical state back from
+        // the shared buffers on the host.
+        try drainPipeline()
         return CircuitExecutionResult(measurementOutcomes: measurementOutcomes)
     }
 }

@@ -113,15 +113,19 @@ kernel void dm_right_multiply_single_qubit_dagger(device const float* inReal [[b
     const float2 u10 = gateMatrix[2];
     const float2 u11 = gateMatrix[3];
 
+    // Right multiply by U-dagger: out_{r,c} = sum_k rho_{r,k} * (U^dagger)_{k,c},
+    // where (U^dagger)_{k,c} = conj(U_{c,k}). This requires both conjugating U and
+    // transposing its indices; conjugating alone (rho * conj(U)) is wrong for
+    // complex-asymmetric gates like Pauli-Y and yields a negative-trace state.
     float2 result = float2(0.0f, 0.0f);
     if (colBit == 0u) {
         result = dm_complex_add(
             dm_complex_mul(rho0, dm_complex_conj(u00)),
-            dm_complex_mul(rho1, dm_complex_conj(u10))
+            dm_complex_mul(rho1, dm_complex_conj(u01))
         );
     } else {
         result = dm_complex_add(
-            dm_complex_mul(rho0, dm_complex_conj(u01)),
+            dm_complex_mul(rho0, dm_complex_conj(u10)),
             dm_complex_mul(rho1, dm_complex_conj(u11))
         );
     }

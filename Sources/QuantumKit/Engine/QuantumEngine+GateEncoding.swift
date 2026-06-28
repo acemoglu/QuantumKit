@@ -76,6 +76,18 @@ extension QuantumEngine {
         bufferPool.release(scratch.loB)
     }
 
+    /// Async-safe scratch release: each buffer re-enters the pool only after `commandBuffer`
+    /// finishes on the GPU, so the renormalization scratch is never recycled while still in flight.
+    func releaseRenormalizationScratch(
+        _ scratch: RenormalizationScratch,
+        after commandBuffer: MTLCommandBuffer
+    ) {
+        bufferPool.release(scratch.hiA, after: commandBuffer)
+        bufferPool.release(scratch.loA, after: commandBuffer)
+        bufferPool.release(scratch.hiB, after: commandBuffer)
+        bufferPool.release(scratch.loB, after: commandBuffer)
+    }
+
     func encodeStateRenormalization(
         encoder: MTLComputeCommandEncoder,
         state: StateVector,
@@ -163,11 +175,6 @@ extension QuantumEngine {
             throw QuantumEngineError.commandBufferCreationFailed
         }
         var scratch: RenormalizationScratch?
-        defer {
-            if let scratch {
-                releaseRenormalizationScratch(scratch)
-            }
-        }
 
         encodeUnitaryGate(gate, encoder: computeEncoder, state: state)
         gateCounter += 1
@@ -178,11 +185,12 @@ extension QuantumEngine {
         }
 
         computeEncoder.endEncoding()
-        commandBuffer.commit()
-        commandBuffer.waitUntilCompleted()
-        if let error = commandBuffer.error {
-            throw QuantumEngineError.commandBufferExecutionFailed(underlying: error)
+        // Commit without blocking the CPU; recycle the scratch only once the GPU signals completion
+        // so the pool never hands an in-flight buffer to the next dispatch.
+        if let scratch {
+            releaseRenormalizationScratch(scratch, after: commandBuffer)
         }
+        commandBuffer.commit()
     }
 
     func flushUnitaryGates(_ gates: [Gate], on state: StateVector) throws {
@@ -198,11 +206,6 @@ extension QuantumEngine {
             throw QuantumEngineError.commandBufferCreationFailed
         }
         var scratch: RenormalizationScratch?
-        defer {
-            if let scratch {
-                releaseRenormalizationScratch(scratch)
-            }
-        }
 
         for gate in gates {
             encodeUnitaryGate(gate, encoder: computeEncoder, state: state)
@@ -218,11 +221,12 @@ extension QuantumEngine {
         }
 
         computeEncoder.endEncoding()
-        commandBuffer.commit()
-        commandBuffer.waitUntilCompleted()
-        if let error = commandBuffer.error {
-            throw QuantumEngineError.commandBufferExecutionFailed(underlying: error)
+        // Commit without blocking the CPU; recycle the scratch only once the GPU signals completion
+        // so the pool never hands an in-flight buffer to the next dispatch.
+        if let scratch {
+            releaseRenormalizationScratch(scratch, after: commandBuffer)
         }
+        commandBuffer.commit()
     }
 
     /// Packs a list of control qubit indices into a bitmask (bit `q` set ⟺ qubit `q` is a control).

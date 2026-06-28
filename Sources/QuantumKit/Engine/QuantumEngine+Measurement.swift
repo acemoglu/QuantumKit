@@ -72,6 +72,9 @@ extension QuantumEngine {
     public func executeResetQubit(on state: StateVector, qubit: Int) throws {
         var rng: QuantumRNG = .hardware
         try executeResetQubit(on: state, qubit: qubit, rng: &rng)
+        // The reset can finish with an asynchronously-committed X gate; drain once so a direct host
+        // read of the state buffers after this standalone call sees the settled amplitudes.
+        try drainPipeline()
     }
 
     /// Resets `qubit` to |0⟩ by measuring it in the computational basis and flipping it back to

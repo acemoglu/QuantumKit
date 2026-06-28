@@ -161,9 +161,7 @@ extension AlgebraicPreCompiler {
             guard qubits.contains(single.qubit) else { return true }
             return single.isZAxis
         case .ccx(let control1, let control2, let target):
-            let qubits = Set([control1, control2, target])
-            guard qubits.contains(single.qubit) else { return true }
-            return single.isZAxis && qubits.contains(single.qubit)
+            return singleQubitCommutesWithCCX(single, control1: control1, control2: control2, target: target)
         default:
             if let otherSingle = other.asSingleQubitGate {
                 return commutesSingleQubitPair(single, otherSingle)
@@ -206,6 +204,32 @@ extension AlgebraicPreCompiler {
 
         // X commutes through the *target* (X·X = X·X under the controlled flip), but X on the
         // control flips which branch fires, so X(control) and CX do NOT commute.
+        if case .x = single.kind, q == target {
+            return true
+        }
+
+        return false
+    }
+
+    static func singleQubitCommutesWithCCX(
+        _ single: SingleQubitGate,
+        control1: Int,
+        control2: Int,
+        target: Int
+    ) -> Bool {
+        let q = single.qubit
+        guard q == control1 || q == control2 || q == target else { return true }
+
+        // CCX = (I − |11⟩⟨11|)⊗I + |11⟩⟨11|⊗X on (control1, control2, target). Exactly as for CX,
+        // diagonal (Z-axis) gates commute through either *control* (they share the controls'
+        // |0⟩/|1⟩ eigenbasis), but on the *target* a Z-axis phase sees the bit get flipped by the
+        // CCX, so Z(target) and CCX do NOT commute.
+        if single.isZAxis && (q == control1 || q == control2) {
+            return true
+        }
+
+        // X commutes through the *target* (X·X under the doubly-controlled flip), but X on either
+        // control flips which branch fires, so X(control) and CCX do NOT commute.
         if case .x = single.kind, q == target {
             return true
         }

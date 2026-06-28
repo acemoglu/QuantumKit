@@ -3,8 +3,15 @@ import Foundation
 /// Stochastic noise applied after each unitary gate during execution.
 public struct NoiseModel: Sendable, Equatable {
 
-    /// Per-qubit depolarizing probability `p` in `[0, 1]`.
-    /// After a gate, each affected qubit independently gets a random Pauli (X/Y/Z) with probability `p`.
+    /// Depolarizing probability `p` in `[0, 1]`, applied after each gate. The channel structure is
+    /// keyed off the number of qubits the gate acts on, and both the state-vector and density-matrix
+    /// engines realize the *same* physical channel:
+    /// - 1-qubit gates: the single-qubit depolarizing channel — with probability `p` a uniformly
+    ///   random non-identity Pauli (X/Y/Z) is applied.
+    /// - 2-qubit gates (`cx`, `cz`, `swap`): the *correlated* two-qubit depolarizing channel — with
+    ///   probability `p` a single uniformly random non-identity two-qubit Pauli (one of the 15
+    ///   `Pₐ ⊗ P_b`) is applied. This is **not** two independent single-qubit channels.
+    /// - ≥3-qubit gates: independent single-qubit depolarizing on each affected qubit.
     public var depolarizingProbability: QFloat
 
     /// Fixed per-gate amplitude damping strength `γ` in `[0, 1]` (probability that an excited

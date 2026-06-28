@@ -207,6 +207,86 @@ extension QuantumKitTests {
         XCTAssertEqual(result.gates, [.x(target: 0), .cx(control: 0, target: 1), .x(target: 0)])
     }
 
+    func testCommutationDoesNotSlideZThroughCCXTarget() throws {
+        // Z on the *target* of a CCX does NOT commute: Z anticommutes with the doubly-controlled X
+        // on the active subspace. The two Z(2) gates must not slide together and cancel, so all
+        // three gates survive.
+        var circuit = try QuantumCircuit(qubitCount: 3)
+        try circuit.z(2)
+        try circuit.ccx(0, 1, 2)
+        try circuit.z(2)
+
+        let result = AlgebraicPreCompiler.optimize(gates: circuit.gates)
+        XCTAssertEqual(result.optimizedGateCount, 3)
+        XCTAssertEqual(result.gates, [.z(target: 2), .ccx(control1: 0, control2: 1, target: 2), .z(target: 2)])
+    }
+
+    func testCommutationSlidesZThroughCCXControl() throws {
+        // Z on a *control* of a CCX commutes (diagonal in the control's basis), so the two Z(0)
+        // gates slide together through CCX and fold into identity.
+        var circuit = try QuantumCircuit(qubitCount: 3)
+        try circuit.z(0)
+        try circuit.ccx(0, 1, 2)
+        try circuit.z(0)
+
+        let result = AlgebraicPreCompiler.optimize(gates: circuit.gates)
+        XCTAssertEqual(result.optimizedGateCount, 1)
+        XCTAssertEqual(result.gates, [.ccx(control1: 0, control2: 1, target: 2)])
+    }
+
+    func testCommutationSlidesZThroughCCXSecondControl() throws {
+        // The same holds for the *second* control: Z(1) is diagonal in control 1's basis, so the
+        // two Z(1) gates slide together through CCX and fold into identity.
+        var circuit = try QuantumCircuit(qubitCount: 3)
+        try circuit.z(1)
+        try circuit.ccx(0, 1, 2)
+        try circuit.z(1)
+
+        let result = AlgebraicPreCompiler.optimize(gates: circuit.gates)
+        XCTAssertEqual(result.optimizedGateCount, 1)
+        XCTAssertEqual(result.gates, [.ccx(control1: 0, control2: 1, target: 2)])
+    }
+
+    func testCommutationSlidesXThroughCCXTarget() throws {
+        // X on the *target* of a CCX commutes (X·X under the doubly-controlled flip), so the two
+        // X(2) gates fold into identity.
+        var circuit = try QuantumCircuit(qubitCount: 3)
+        try circuit.x(2)
+        try circuit.ccx(0, 1, 2)
+        try circuit.x(2)
+
+        let result = AlgebraicPreCompiler.optimize(gates: circuit.gates)
+        XCTAssertEqual(result.optimizedGateCount, 1)
+        XCTAssertEqual(result.gates, [.ccx(control1: 0, control2: 1, target: 2)])
+    }
+
+    func testCommutationDoesNotSlideXThroughCCXControl() throws {
+        // X on a *control* of a CCX does NOT commute (it flips which branch fires), so no
+        // cancellation occurs and all three gates survive.
+        var circuit = try QuantumCircuit(qubitCount: 3)
+        try circuit.x(0)
+        try circuit.ccx(0, 1, 2)
+        try circuit.x(0)
+
+        let result = AlgebraicPreCompiler.optimize(gates: circuit.gates)
+        XCTAssertEqual(result.optimizedGateCount, 3)
+        XCTAssertEqual(result.gates, [.x(target: 0), .ccx(control1: 0, control2: 1, target: 2), .x(target: 0)])
+    }
+
+    func testCommutationDoesNotSlideSThroughCCXTarget() throws {
+        // A Z-axis phase gate (S) on the target must also be blocked, not just Z. The two S(2)
+        // gates must not slide together across the CCX (where they would fold into Z), so all
+        // three gates survive in order.
+        var circuit = try QuantumCircuit(qubitCount: 3)
+        try circuit.s(2)
+        try circuit.ccx(0, 1, 2)
+        try circuit.s(2)
+
+        let result = AlgebraicPreCompiler.optimize(gates: circuit.gates)
+        XCTAssertEqual(result.optimizedGateCount, 3)
+        XCTAssertEqual(result.gates, [.s(target: 2), .ccx(control1: 0, control2: 1, target: 2), .s(target: 2)])
+    }
+
     func testAlgebraicPreCompilerPreservesBellStateProbabilities() throws {
         let engine = try QuantumEngine()
 
