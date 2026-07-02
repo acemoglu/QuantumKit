@@ -33,11 +33,10 @@ extension QuantumEngine {
         noise: NoiseModel? = nil,
         options: SampleCountOptions = SampleCountOptions()
     ) throws -> ShotCounts {
-        let resolvedDevice = device ?? self.device
+        _ = device
         return try BatchSampleExecutor.runSampleCountsRNG(
             circuit: circuit,
             engine: self,
-            device: resolvedDevice,
             shots: shots,
             rng: &rng,
             noise: noise,

@@ -128,7 +128,6 @@ public struct QuantumMeasurement {
     public static func runSampleCounts(
         circuit: QuantumCircuit,
         engine: QuantumEngine,
-        device: MTLDevice,
         shots: Int,
         noise: NoiseModel? = nil,
         options: SampleCountOptions = SampleCountOptions()
@@ -137,7 +136,6 @@ public struct QuantumMeasurement {
         return try runSampleCountsRNG(
             circuit: circuit,
             engine: engine,
-            device: device,
             shots: shots,
             rng: &rng,
             noise: noise,
@@ -148,7 +146,6 @@ public struct QuantumMeasurement {
     public static func runSampleCountsRNG(
         circuit: QuantumCircuit,
         engine: QuantumEngine,
-        device: MTLDevice,
         shots: Int,
         rng: inout QuantumRNG,
         noise: NoiseModel? = nil,
@@ -157,7 +154,46 @@ public struct QuantumMeasurement {
         try BatchSampleExecutor.runSampleCountsRNG(
             circuit: circuit,
             engine: engine,
-            device: device,
+            shots: shots,
+            rng: &rng,
+            noise: noise,
+            options: options
+        )
+    }
+
+    @available(*, deprecated, message: "Pass shots only; the default Metal device is resolved internally.")
+    public static func runSampleCounts(
+        circuit: QuantumCircuit,
+        engine: QuantumEngine,
+        device: MTLDevice,
+        shots: Int,
+        noise: NoiseModel? = nil,
+        options: SampleCountOptions = SampleCountOptions()
+    ) throws -> ShotCounts {
+        _ = device
+        return try runSampleCounts(
+            circuit: circuit,
+            engine: engine,
+            shots: shots,
+            noise: noise,
+            options: options
+        )
+    }
+
+    @available(*, deprecated, message: "Pass shots only; the default Metal device is resolved internally.")
+    public static func runSampleCountsRNG(
+        circuit: QuantumCircuit,
+        engine: QuantumEngine,
+        device: MTLDevice,
+        shots: Int,
+        rng: inout QuantumRNG,
+        noise: NoiseModel? = nil,
+        options: SampleCountOptions = SampleCountOptions()
+    ) throws -> ShotCounts {
+        _ = device
+        return try runSampleCountsRNG(
+            circuit: circuit,
+            engine: engine,
             shots: shots,
             rng: &rng,
             noise: noise,

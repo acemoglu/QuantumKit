@@ -154,3 +154,24 @@ public struct QuantumCircuit {
         return inverted
     }
 }
+
+extension QuantumCircuit: Codable {
+
+    private enum CodingKeys: String, CodingKey {
+        case qubitCount
+        case gates
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let qubitCount = try container.decode(Int.self, forKey: .qubitCount)
+        try self.init(qubitCount: qubitCount)
+        gates = try container.decode([Gate].self, forKey: .gates)
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(qubitCount, forKey: .qubitCount)
+        try container.encode(gates, forKey: .gates)
+    }
+}

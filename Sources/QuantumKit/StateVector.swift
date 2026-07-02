@@ -33,6 +33,11 @@ public final class StateVector {
     public let realBuffer: MTLBuffer
     public let imagBuffer: MTLBuffer
 
+    /// Creates a GPU state vector on the default system Metal device.
+    public convenience init(qubitCount: Int) throws {
+        try self.init(qubitCount: qubitCount, device: MetalRuntime.sharedDevice())
+    }
+
     public init(qubitCount: Int, device: MTLDevice) throws {
         guard qubitCount > 0 else {
             throw StateVectorError.invalidQubitCount(qubitCount)

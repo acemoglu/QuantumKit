@@ -20,6 +20,14 @@ public final class StateVectorBatch: @unchecked Sendable {
     public let capacity: Int
     public let states: [StateVector]
 
+    public convenience init(qubitCount: Int, capacity: Int) throws {
+        try self.init(
+            qubitCount: qubitCount,
+            device: MetalRuntime.sharedDevice(),
+            capacity: capacity
+        )
+    }
+
     public init(qubitCount: Int, device: MTLDevice, capacity: Int) throws {
         guard capacity > 0 else {
             throw BatchExecutionError.invalidBatchSize(capacity)
@@ -57,12 +65,12 @@ enum BatchSampleExecutor {
     static func runSampleCountsRNG(
         circuit: QuantumCircuit,
         engine: QuantumEngine,
-        device: MTLDevice,
         shots: Int,
         rng: inout QuantumRNG,
         noise: NoiseModel?,
         options: SampleCountOptions
     ) throws -> ShotCounts {
+        let device = engine.device
         guard shots > 0 else {
             throw QuantumMeasurementError.invalidShotCount(shots)
         }

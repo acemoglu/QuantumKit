@@ -1,7 +1,7 @@
 import Foundation
 
 /// Stochastic noise applied after each unitary gate during execution.
-public struct NoiseModel: Sendable, Equatable {
+public struct NoiseModel: Sendable, Equatable, Codable {
 
     /// Depolarizing probability `p` in `[0, 1]`, applied after each gate. The channel structure is
     /// keyed off the number of qubits the gate acts on, and both the state-vector and density-matrix
