@@ -123,7 +123,7 @@ extension AlgebraicPreCompiler {
 
     static func isBarrier(_ gate: Gate) -> Bool {
         switch gate {
-        case .measure, .reset, .c_if:
+        case .measure, .reset, .c_if, .initialize:
             // `c_if` depends on classical state produced by an earlier measurement, so gates must
             // never slide across it: the optimizer treats it as an ordering barrier.
             return true

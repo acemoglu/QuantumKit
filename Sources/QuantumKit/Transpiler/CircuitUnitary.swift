@@ -377,7 +377,21 @@ enum CircuitUnitary {
                 controlMask: 0, target: target, qubitCount: qubitCount
             )
 
-        case .measure, .reset, .c_if:
+        case .customUnitary(let matrix, let qubits):
+            guard qubits.count == 1, let target = qubits.first, matrix.count == 4 else {
+                throw QuantumCircuitError.invalidAlgorithmParameter(
+                    reason: "customUnitary circuit unitary builder supports single-qubit matrices only"
+                )
+            }
+            return embed(
+                u00: .init(re: Double(matrix[0].real), im: Double(matrix[0].imaginary)),
+                u01: .init(re: Double(matrix[1].real), im: Double(matrix[1].imaginary)),
+                u10: .init(re: Double(matrix[2].real), im: Double(matrix[2].imaginary)),
+                u11: .init(re: Double(matrix[3].real), im: Double(matrix[3].imaginary)),
+                controlMask: 0, target: target, qubitCount: qubitCount
+            )
+
+        case .initialize, .measure, .reset, .c_if:
             throw QuantumCircuitError.circuitNotUnitary
         }
     }

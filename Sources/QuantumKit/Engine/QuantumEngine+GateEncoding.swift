@@ -176,6 +176,12 @@ extension QuantumEngine {
             return
         }
 
+        if case .customUnitary(let matrix, let qubits) = gate, qubits.count == 1, let target = qubits.first {
+            try applyGPU1QCustomUnitary(matrix, target: target, on: state)
+            gateCounter += 1
+            return
+        }
+
         guard let commandBuffer = commandQueue.makeCommandBuffer(),
               let computeEncoder = commandBuffer.makeComputeCommandEncoder() else {
             throw QuantumEngineError.commandBufferCreationFailed
@@ -216,6 +222,11 @@ extension QuantumEngine {
         for gate in gates {
             if case .unitary1(let matrix, let target) = gate {
                 try applyHost1QUnitary(matrix, target: target, on: state)
+                gateCounter += 1
+                continue
+            }
+            if case .customUnitary(let matrix, let qubits) = gate, qubits.count > 1 {
+                try applyHostCustomUnitary(matrix, qubits: qubits, on: state)
                 gateCounter += 1
                 continue
             }
@@ -444,6 +455,20 @@ extension QuantumEngine {
             break
 
         case .unitary1:
+            break
+
+        case .customUnitary(let matrix, let qubits):
+            guard qubits.count == 1, let target = qubits.first else { break }
+            var matrixReal = matrix.map { Float($0.real) }
+            var matrixImag = matrix.map { Float($0.imaginary) }
+            dispatchPairwiseGate(encoder: encoder, pipeline: pipelines.customUnitary1Q, state: state) { encoder in
+                var targetQubit = UInt32(target)
+                encoder.setBytes(&targetQubit, length: MemoryLayout<UInt32>.stride, index: 2)
+                encoder.setBytes(&matrixReal, length: matrixReal.count * MemoryLayout<Float>.stride, index: 3)
+                encoder.setBytes(&matrixImag, length: matrixImag.count * MemoryLayout<Float>.stride, index: 4)
+            }
+
+        case .initialize:
             break
 
         case .c_if:

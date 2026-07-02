@@ -157,6 +157,19 @@ public final class DensityMatrixEngine: @unchecked Sendable {
                     try executeRuntimeGate(conditionedGate)
                 }
 
+            case .initialize(let qubits, let amplitudes):
+                try density.initialize(qubits: qubits, amplitudes: amplitudes)
+
+            case .customUnitary(let matrix, let qubits) where qubits.count > 1:
+                try applyHostCustomUnitary(
+                    matrix: matrix,
+                    qubits: qubits,
+                    on: density
+                )
+                if let noise {
+                    try applyNoiseChannels(after: gate, on: density, noise: noise, scratchReal: scratchReal, scratchImag: scratchImag)
+                }
+
             default:
                 try applyUnitaryGate(gate, on: density, scratchReal: scratchReal, scratchImag: scratchImag)
                 if let noise {
@@ -911,7 +924,16 @@ public final class DensityMatrixEngine: @unchecked Sendable {
                 controlMask: 0,
                 matrix: matrix.map { complex($0.real, $0.imaginary) }
             )
-        case .swap, .measure, .reset, .c_if:
+        case .customUnitary(let matrix, let qubits):
+            guard qubits.count == 1, let target = qubits.first else {
+                throw DensityMatrixEngineError.unsupportedGate(gate)
+            }
+            return .init(
+                target: target,
+                controlMask: 0,
+                matrix: matrix.map { complex($0.real, $0.imaginary) }
+            )
+        case .initialize, .swap, .measure, .reset, .c_if:
             throw DensityMatrixEngineError.unsupportedGate(gate)
         }
     }
@@ -1118,5 +1140,91 @@ extension DensityMatrixEngine {
             scratchReal: scratchReal,
             scratchImag: scratchImag
         )
+    }
+
+    private func applyHostCustomUnitary(
+        matrix: [ComplexAmplitude],
+        qubits: [Int],
+        on density: DensityMatrix
+    ) throws {
+        let subDimension = 1 << qubits.count
+        guard matrix.count == subDimension * subDimension else { return }
+
+        let dimension = density.stateCount
+        let targetMask = qubits.reduce(0) { $0 | (1 << $1) }
+        let passiveMask = ((1 << density.qubitCount) - 1) & ~targetMask
+
+        var unitary = [ComplexAmplitude](
+            repeating: ComplexAmplitude(real: 0, imaginary: 0),
+            count: dimension * dimension
+        )
+        for row in 0..<dimension {
+            for column in 0..<dimension {
+                guard (row & passiveMask) == (column & passiveMask) else { continue }
+                let subRow = QubitIndexing.partialOutcomeIndex(stateIndex: row, qubits: qubits)
+                let subColumn = QubitIndexing.partialOutcomeIndex(stateIndex: column, qubits: qubits)
+                unitary[row * dimension + column] = matrix[subRow * subDimension + subColumn]
+            }
+        }
+
+        let real = density.realBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let imag = density.imagBuffer.contents().assumingMemoryBound(to: QFloat.self)
+
+        var rho = [[(re: Double, im: Double)]](
+            repeating: Array(repeating: (0.0, 0.0), count: dimension),
+            count: dimension
+        )
+        for row in 0..<dimension {
+            for column in 0..<dimension {
+                let index = row * dimension + column
+                rho[row][column] = (Double(real[index]), Double(imag[index]))
+            }
+        }
+
+        func complexMul(_ a: (re: Double, im: Double), _ b: (re: Double, im: Double)) -> (re: Double, im: Double) {
+            (a.re * b.re - a.im * b.im, a.re * b.im + a.im * b.re)
+        }
+
+        func dagger(_ value: ComplexAmplitude) -> (re: Double, im: Double) {
+            (Double(value.real), -Double(value.imaginary))
+        }
+
+        var temp = rho
+        for row in 0..<dimension {
+            for column in 0..<dimension {
+                var sum = (0.0, 0.0)
+                for k in 0..<dimension {
+                    let u = (Double(unitary[row * dimension + k].real), Double(unitary[row * dimension + k].imaginary))
+                    sum = (
+                        sum.0 + complexMul(u, rho[k][column]).0,
+                        sum.1 + complexMul(u, rho[k][column]).1
+                    )
+                }
+                temp[row][column] = sum
+            }
+        }
+
+        var updated = temp
+        for row in 0..<dimension {
+            for column in 0..<dimension {
+                var sum = (0.0, 0.0)
+                for k in 0..<dimension {
+                    let uDagger = dagger(unitary[column * dimension + k])
+                    sum = (
+                        sum.0 + complexMul(temp[row][k], uDagger).0,
+                        sum.1 + complexMul(temp[row][k], uDagger).1
+                    )
+                }
+                updated[row][column] = sum
+            }
+        }
+
+        for row in 0..<dimension {
+            for column in 0..<dimension {
+                let index = row * dimension + column
+                real[index] = QFloat(updated[row][column].0)
+                imag[index] = QFloat(updated[row][column].1)
+            }
+        }
     }
 }

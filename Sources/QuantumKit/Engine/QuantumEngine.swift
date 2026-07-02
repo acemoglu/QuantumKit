@@ -53,6 +53,7 @@ public struct Pipelines: @unchecked Sendable {
     let cPhase: MTLComputePipelineState
     let mcx: MTLComputePipelineState
     let mcz: MTLComputePipelineState
+    let customUnitary1Q: MTLComputePipelineState
 
     let probabilities: MTLComputePipelineState
     let maskedPopulationReduce: MTLComputePipelineState
@@ -150,6 +151,11 @@ public struct Pipelines: @unchecked Sendable {
 
         guard let mczFunc = library.makeFunction(name: "mcz_gate") else { throw QuantumEngineError.functionNotFound("mcz_gate") }
         self.mcz = try device.makeComputePipelineState(function: mczFunc)
+
+        guard let customUnitary1QFunc = library.makeFunction(name: "custom_unitary_1q_gate") else {
+            throw QuantumEngineError.functionNotFound("custom_unitary_1q_gate")
+        }
+        self.customUnitary1Q = try device.makeComputePipelineState(function: customUnitary1QFunc)
 
         guard let probFunc = library.makeFunction(name: "compute_probabilities") else { throw QuantumEngineError.functionNotFound("compute_probabilities") }
         self.probabilities = try device.makeComputePipelineState(function: probFunc)
@@ -577,6 +583,15 @@ public final class QuantumEngine: @unchecked Sendable {
             case .unitary1:
                 try flushPendingUnitaryGates()
                 try executeUnitaryGate(gate, on: state, gateCounter: &unitaryGateCounter)
+
+            case .initialize(let qubits, let amplitudes):
+                try flushPendingUnitaryGates()
+                try state.initialize(qubits: qubits, amplitudes: amplitudes)
+
+            case .customUnitary(let matrix, let qubits) where qubits.count > 1:
+                try flushPendingUnitaryGates()
+                try applyHostCustomUnitary(matrix, qubits: qubits, on: state)
+                unitaryGateCounter += 1
 
             default:
                 if noiseEnabled, let noise {

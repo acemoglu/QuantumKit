@@ -48,4 +48,81 @@ extension QuantumEngine {
             imagPointer[index] = updatedImag[index]
         }
     }
+
+    func applyGPU1QCustomUnitary(_ matrix: [ComplexAmplitude], target: Int, on state: StateVector) throws {
+        guard matrix.count == 4 else {
+            throw QuantumEngineError.functionNotFound("customUnitary matrix must contain 4 elements for a single qubit")
+        }
+
+        guard let commandBuffer = commandQueue.makeCommandBuffer(),
+              let computeEncoder = commandBuffer.makeComputeCommandEncoder() else {
+            throw QuantumEngineError.commandBufferCreationFailed
+        }
+
+        try encodeUnitaryGate(
+            .customUnitary(matrix: matrix, qubits: [target]),
+            encoder: computeEncoder,
+            state: state
+        )
+        computeEncoder.endEncoding()
+        commandBuffer.commit()
+    }
+
+    func applyHostCustomUnitary(
+        _ matrix: [ComplexAmplitude],
+        qubits: [Int],
+        on state: StateVector
+    ) throws {
+        let dimension = 1 << qubits.count
+        guard matrix.count == dimension * dimension else {
+            throw QuantumEngineError.functionNotFound(
+                "customUnitary matrix must contain \(dimension * dimension) elements for \(qubits.count) qubits"
+            )
+        }
+
+        let realPointer = state.realBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let imagPointer = state.imagBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let outerCount = 1 << (state.qubitCount - qubits.count)
+
+        var updatedReal = Array(repeating: QFloat(0), count: state.stateCount)
+        var updatedImag = Array(repeating: QFloat(0), count: state.stateCount)
+
+        for outer in 0..<outerCount {
+            var sourceReal = [QFloat](repeating: 0, count: dimension)
+            var sourceImag = [QFloat](repeating: 0, count: dimension)
+            var globalIndices = [Int](repeating: 0, count: dimension)
+
+            for sub in 0..<dimension {
+                let global = QubitIndexing.subspaceGlobalIndex(
+                    outerIndex: outer,
+                    subIndex: sub,
+                    targetQubits: qubits,
+                    qubitCount: state.qubitCount
+                )
+                globalIndices[sub] = global
+                sourceReal[sub] = realPointer[global]
+                sourceImag[sub] = imagPointer[global]
+            }
+
+            for row in 0..<dimension {
+                var outReal = QFloat(0)
+                var outImag = QFloat(0)
+                for column in 0..<dimension {
+                    let element = matrix[row * dimension + column]
+                    let inReal = sourceReal[column]
+                    let inImag = sourceImag[column]
+                    outReal += (element.real * inReal) - (element.imaginary * inImag)
+                    outImag += (element.real * inImag) + (element.imaginary * inReal)
+                }
+                let global = globalIndices[row]
+                updatedReal[global] = outReal
+                updatedImag[global] = outImag
+            }
+        }
+
+        for index in 0..<state.stateCount {
+            realPointer[index] = updatedReal[index]
+            imagPointer[index] = updatedImag[index]
+        }
+    }
 }

@@ -236,6 +236,24 @@ extension QuantumCircuit {
     }
 
     @discardableResult
+    public mutating func initialize(
+        qubits: [Int],
+        amplitudes: [ComplexAmplitude]
+    ) throws -> QuantumCircuit {
+        try applyValidated(.initialize(qubits: qubits, amplitudes: amplitudes))
+        return self
+    }
+
+    @discardableResult
+    public mutating func customUnitary(
+        matrix: [ComplexAmplitude],
+        qubits: [Int]
+    ) throws -> QuantumCircuit {
+        try applyValidated(.customUnitary(matrix: matrix, qubits: qubits))
+        return self
+    }
+
+    @discardableResult
     public mutating func c_if(
         classicalRegister: Int,
         equals expectedValue: Int,

@@ -146,7 +146,7 @@ enum GateDecomposition {
                 .crz(theta: theta, control: control, target: target),
             ]
 
-        case .measure, .reset, .c_if, .unitary1:
+        case .measure, .reset, .c_if, .unitary1, .initialize, .customUnitary:
             throw TranspilerError.unsupportedGate(gate)
         }
     }

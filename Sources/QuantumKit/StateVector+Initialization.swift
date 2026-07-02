@@ -4,6 +4,7 @@ public enum StateVectorInitializationError: Error, Equatable {
     case invalidBasisIndex(index: Int, stateCount: Int)
     case amplitudeCountMismatch(expected: Int, actual: Int)
     case nonUnitNorm(squaredNorm: Double)
+    case invalidQubitSubset(reason: String)
 }
 
 extension StateVector {
@@ -31,13 +32,7 @@ extension StateVector {
             )
         }
 
-        var squaredNorm = 0.0
-        for amplitude in amplitudes {
-            squaredNorm += Double(amplitude.real * amplitude.real + amplitude.imaginary * amplitude.imaginary)
-        }
-        guard abs(squaredNorm - 1.0) <= 1e-5 else {
-            throw StateVectorInitializationError.nonUnitNorm(squaredNorm: squaredNorm)
-        }
+        try UnitaryValidation.validateUnitNorm(amplitudes)
 
         let realPointer = realBuffer.contents().assumingMemoryBound(to: QFloat.self)
         let imagPointer = imagBuffer.contents().assumingMemoryBound(to: QFloat.self)
@@ -46,5 +41,45 @@ extension StateVector {
             realPointer[index] = amplitudes[index].real
             imagPointer[index] = amplitudes[index].imaginary
         }
+    }
+
+    /// Initializes a normalized state on the listed qubits, tensoring with |0…0⟩ on passive qubits.
+    public func initialize(qubits: [Int], amplitudes: [ComplexAmplitude]) throws {
+        guard !qubits.isEmpty else {
+            throw StateVectorInitializationError.invalidQubitSubset(
+                reason: "initialize requires at least one qubit"
+            )
+        }
+        guard Set(qubits).count == qubits.count else {
+            throw StateVectorInitializationError.invalidQubitSubset(
+                reason: "initialize requires distinct qubit indices"
+            )
+        }
+        for qubit in qubits where qubit < 0 || qubit >= qubitCount {
+            throw StateVectorInitializationError.invalidQubitSubset(
+                reason: "qubit index \(qubit) is out of bounds for \(qubitCount) qubits"
+            )
+        }
+
+        let expectedCount = 1 << qubits.count
+        guard amplitudes.count == expectedCount else {
+            throw StateVectorInitializationError.amplitudeCountMismatch(
+                expected: expectedCount,
+                actual: amplitudes.count
+            )
+        }
+        try UnitaryValidation.validateUnitNorm(amplitudes)
+
+        if qubits.count == qubitCount {
+            try initialize(amplitudes: amplitudes)
+            return
+        }
+
+        let embedded = QubitIndexing.embeddedAmplitudes(
+            qubits: qubits,
+            amplitudes: amplitudes,
+            qubitCount: qubitCount
+        )
+        try initialize(amplitudes: embedded)
     }
 }

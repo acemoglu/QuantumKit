@@ -94,6 +94,12 @@ public enum Gate: Equatable, Sendable {
 
     /// Arbitrary single-qubit unitary specified as a row-major 2×2 matrix.
     case unitary1(matrix: [ComplexAmplitude], target: Int)
+
+    /// Sets the quantum state on the listed qubits from explicit, normalized amplitudes.
+    case initialize(qubits: [Int], amplitudes: [ComplexAmplitude])
+
+    /// Arbitrary unitary on the listed qubits, specified as a row-major 2^k×2^k matrix.
+    case customUnitary(matrix: [ComplexAmplitude], qubits: [Int])
 }
 
 extension Gate {
@@ -121,6 +127,10 @@ extension Gate {
             return spec.qubits
         case .c_if(_, _, let gate):
             return gate.affectedQubits
+        case .initialize(let qubits, _):
+            return qubits
+        case .customUnitary(_, let qubits):
+            return qubits
         }
     }
 
@@ -164,11 +174,15 @@ extension Gate {
             return .cp(theta: -theta, control: control, target: target)
         case .u(let theta, let phi, let lambda, let target):
             return .u(theta: -theta, phi: -lambda, lambda: -phi, target: target)
-        case .measure, .reset:
+        case .measure, .reset, .initialize:
             return self
         case .unitary1(let matrix, let target):
             let dagger = Self.adjoint1QMatrix(matrix)
             return .unitary1(matrix: dagger, target: target)
+        case .customUnitary(let matrix, let qubits):
+            let dimension = 1 << qubits.count
+            let dagger = UnitaryValidation.adjoint(matrix: matrix, dimension: dimension)
+            return .customUnitary(matrix: dagger, qubits: qubits)
         case .c_if(let classicalRegister, let expectedValue, let gate):
             return .c_if(classicalRegister: classicalRegister, expectedValue: expectedValue, gate: gate.adjoint)
         }

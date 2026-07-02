@@ -147,6 +147,52 @@ public struct QuantumCircuit {
                 )
             }
             try validateQubitIndex(target)
+            try UnitaryValidation.validateUnitary(matrix: matrix, dimension: 2)
+        case .initialize(let qubits, let amplitudes):
+            guard !qubits.isEmpty else {
+                throw QuantumCircuitError.invalidAlgorithmParameter(
+                    reason: "initialize requires at least one qubit"
+                )
+            }
+            guard Set(qubits).count == qubits.count else {
+                throw QuantumCircuitError.invalidAlgorithmParameter(
+                    reason: "initialize requires distinct qubit indices"
+                )
+            }
+            for qubit in qubits {
+                try validateQubitIndex(qubit)
+            }
+            let expectedCount = 1 << qubits.count
+            guard amplitudes.count == expectedCount else {
+                throw QuantumCircuitError.invalidAlgorithmParameter(
+                    reason: "initialize requires \(expectedCount) amplitudes for \(qubits.count) qubits"
+                )
+            }
+            do {
+                try UnitaryValidation.validateUnitNorm(amplitudes)
+            } catch let error as StateVectorInitializationError {
+                if case .nonUnitNorm(let squaredNorm) = error {
+                    throw QuantumCircuitError.invalidAlgorithmParameter(
+                        reason: "initialize amplitudes are not normalized (squared norm \(squaredNorm))"
+                    )
+                }
+                throw error
+            }
+        case .customUnitary(let matrix, let qubits):
+            guard !qubits.isEmpty else {
+                throw QuantumCircuitError.invalidAlgorithmParameter(
+                    reason: "customUnitary requires at least one qubit"
+                )
+            }
+            guard Set(qubits).count == qubits.count else {
+                throw QuantumCircuitError.invalidAlgorithmParameter(
+                    reason: "customUnitary requires distinct qubit indices"
+                )
+            }
+            for qubit in qubits {
+                try validateQubitIndex(qubit)
+            }
+            try UnitaryValidation.validateUnitary(matrix: matrix, dimension: 1 << qubits.count)
         }
 
         gates.append(gate)

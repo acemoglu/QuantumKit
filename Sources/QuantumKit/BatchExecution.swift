@@ -53,6 +53,8 @@ extension QuantumCircuit {
             switch gate {
             case .measure, .reset, .c_if:
                 return false
+            case .initialize:
+                return false
             default:
                 return true
             }
@@ -61,8 +63,14 @@ extension QuantumCircuit {
 
     var containsHostAppliedUnitaryGates: Bool {
         gates.contains { gate in
-            if case .unitary1 = gate { return true }
-            return false
+            switch gate {
+            case .unitary1:
+                return true
+            case .customUnitary(_, let qubits) where qubits.count > 1:
+                return true
+            default:
+                return false
+            }
         }
     }
 }

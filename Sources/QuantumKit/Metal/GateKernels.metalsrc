@@ -908,3 +908,47 @@ kernel void swap_gate(device float* realBuffer [[buffer(0)]],
         imagBuffer[partner] = ti;
     }
 }
+
+inline float2 complex_mul(float2 a, float2 b) {
+    return float2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
+}
+
+// Arbitrary single-qubit unitary supplied as row-major 2×2 matrix buffers.
+kernel void custom_unitary_1q_gate(device float* realBuffer [[buffer(0)]],
+                                   device float* imagBuffer [[buffer(1)]],
+                                   constant uint& targetQubit [[buffer(2)]],
+                                   constant uint& pairCount [[buffer(kPairCountBufferIndex)]],
+                                   constant float* matrixReal [[buffer(3)]],
+                                   constant float* matrixImag [[buffer(4)]],
+                                   uint gid [[thread_position_in_grid]],
+                                   uint lid [[thread_position_in_threadgroup]],
+                                   threadgroup float4* pairCache [[threadgroup(0)]]) {
+    const bool active = gid < pairCount;
+    uint2 indices = uint2(0u);
+    float4 pair = float4(0.0f);
+    if (active) {
+        indices = pair_indices(gid, targetQubit);
+        pair = load_pair(realBuffer, imagBuffer, indices);
+    }
+    pairCache[lid] = pair;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    pair = pairCache[lid];
+    if (active) {
+        const float2 m00 = float2(matrixReal[0], matrixImag[0]);
+        const float2 m01 = float2(matrixReal[1], matrixImag[1]);
+        const float2 m10 = float2(matrixReal[2], matrixImag[2]);
+        const float2 m11 = float2(matrixReal[3], matrixImag[3]);
+        const float2 a = float2(pair.x, pair.y);
+        const float2 b = float2(pair.z, pair.w);
+        const float2 outA = complex_mul(m00, a) + complex_mul(m01, b);
+        const float2 outB = complex_mul(m10, a) + complex_mul(m11, b);
+        pair = float4(outA.x, outA.y, outB.x, outB.y);
+    }
+    pairCache[lid] = pair;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    if (active) {
+        store_pair(realBuffer, imagBuffer, indices, pairCache[lid]);
+    }
+}

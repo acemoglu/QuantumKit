@@ -27,7 +27,7 @@ extension Gate: Codable {
         case h, x, y, z, s, t, sdg, tdg, sx, sxdg, p, u
         case cx, cz, swap, ccx, mcx, mcz
         case rx, ry, rz, crx, cry, crz, cp
-        case measure, reset, c_if, unitary1
+        case measure, reset, c_if, unitary1, initialize, customUnitary
     }
 
     public init(from decoder: any Decoder) throws {
@@ -161,6 +161,16 @@ extension Gate: Codable {
                 matrix: try container.decode([ComplexAmplitude].self, forKey: .matrix),
                 target: try container.decode(Int.self, forKey: .target)
             )
+        case .initialize:
+            self = .initialize(
+                qubits: try container.decode([Int].self, forKey: .qubits),
+                amplitudes: try container.decode([ComplexAmplitude].self, forKey: .matrix)
+            )
+        case .customUnitary:
+            self = .customUnitary(
+                matrix: try container.decode([ComplexAmplitude].self, forKey: .matrix),
+                qubits: try container.decode([Int].self, forKey: .qubits)
+            )
         }
     }
 
@@ -286,6 +296,14 @@ extension Gate: Codable {
             try container.encode(GateType.unitary1, forKey: .type)
             try container.encode(matrix, forKey: .matrix)
             try container.encode(target, forKey: .target)
+        case .initialize(let qubits, let amplitudes):
+            try container.encode(GateType.initialize, forKey: .type)
+            try container.encode(qubits, forKey: .qubits)
+            try container.encode(amplitudes, forKey: .matrix)
+        case .customUnitary(let matrix, let qubits):
+            try container.encode(GateType.customUnitary, forKey: .type)
+            try container.encode(matrix, forKey: .matrix)
+            try container.encode(qubits, forKey: .qubits)
         }
     }
 }
