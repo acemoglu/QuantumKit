@@ -19,21 +19,36 @@ extension QuantumCircuit {
     }
 
     @discardableResult
-    public mutating func rx(theta: QFloat, _ target: Int) throws -> QuantumCircuit {
+    public mutating func rx(theta: QFloatExpr, _ target: Int) throws -> QuantumCircuit {
         try applyValidated(.rx(theta: theta, target: target))
         return self
     }
 
     @discardableResult
-    public mutating func rz(theta: QFloat, _ target: Int) throws -> QuantumCircuit {
+    public mutating func rx(theta: QFloat, _ target: Int) throws -> QuantumCircuit {
+        try rx(theta: QFloatExpr(theta), target)
+    }
+
+    @discardableResult
+    public mutating func rz(theta: QFloatExpr, _ target: Int) throws -> QuantumCircuit {
         try applyValidated(.rz(theta: theta, target: target))
         return self
     }
 
     @discardableResult
-    public mutating func ry(theta: QFloat, _ target: Int) throws -> QuantumCircuit {
+    public mutating func rz(theta: QFloat, _ target: Int) throws -> QuantumCircuit {
+        try rz(theta: QFloatExpr(theta), target)
+    }
+
+    @discardableResult
+    public mutating func ry(theta: QFloatExpr, _ target: Int) throws -> QuantumCircuit {
         try applyValidated(.ry(theta: theta, target: target))
         return self
+    }
+
+    @discardableResult
+    public mutating func ry(theta: QFloat, _ target: Int) throws -> QuantumCircuit {
+        try ry(theta: QFloatExpr(theta), target)
     }
 
     @discardableResult
@@ -73,15 +88,30 @@ extension QuantumCircuit {
     }
 
     @discardableResult
-    public mutating func p(theta: QFloat, _ target: Int) throws -> QuantumCircuit {
+    public mutating func p(theta: QFloatExpr, _ target: Int) throws -> QuantumCircuit {
         try applyValidated(.p(theta: theta, target: target))
         return self
     }
 
     @discardableResult
-    public mutating func u(theta: QFloat, phi: QFloat, lambda: QFloat, _ target: Int) throws -> QuantumCircuit {
+    public mutating func p(theta: QFloat, _ target: Int) throws -> QuantumCircuit {
+        try p(theta: QFloatExpr(theta), target)
+    }
+
+    @discardableResult
+    public mutating func u(
+        theta: QFloatExpr,
+        phi: QFloatExpr,
+        lambda: QFloatExpr,
+        _ target: Int
+    ) throws -> QuantumCircuit {
         try applyValidated(.u(theta: theta, phi: phi, lambda: lambda, target: target))
         return self
+    }
+
+    @discardableResult
+    public mutating func u(theta: QFloat, phi: QFloat, lambda: QFloat, _ target: Int) throws -> QuantumCircuit {
+        try u(theta: QFloatExpr(theta), phi: QFloatExpr(phi), lambda: QFloatExpr(lambda), target)
     }
 
     @discardableResult
@@ -97,27 +127,47 @@ extension QuantumCircuit {
     }
 
     @discardableResult
-    public mutating func crx(theta: QFloat, control: Int, target: Int) throws -> QuantumCircuit {
+    public mutating func crx(theta: QFloatExpr, control: Int, target: Int) throws -> QuantumCircuit {
         try applyValidated(.crx(theta: theta, control: control, target: target))
         return self
     }
 
     @discardableResult
-    public mutating func cry(theta: QFloat, control: Int, target: Int) throws -> QuantumCircuit {
+    public mutating func crx(theta: QFloat, control: Int, target: Int) throws -> QuantumCircuit {
+        try crx(theta: QFloatExpr(theta), control: control, target: target)
+    }
+
+    @discardableResult
+    public mutating func cry(theta: QFloatExpr, control: Int, target: Int) throws -> QuantumCircuit {
         try applyValidated(.cry(theta: theta, control: control, target: target))
         return self
     }
 
     @discardableResult
-    public mutating func crz(theta: QFloat, control: Int, target: Int) throws -> QuantumCircuit {
+    public mutating func cry(theta: QFloat, control: Int, target: Int) throws -> QuantumCircuit {
+        try cry(theta: QFloatExpr(theta), control: control, target: target)
+    }
+
+    @discardableResult
+    public mutating func crz(theta: QFloatExpr, control: Int, target: Int) throws -> QuantumCircuit {
         try applyValidated(.crz(theta: theta, control: control, target: target))
         return self
     }
 
     @discardableResult
-    public mutating func cp(theta: QFloat, control: Int, target: Int) throws -> QuantumCircuit {
+    public mutating func crz(theta: QFloat, control: Int, target: Int) throws -> QuantumCircuit {
+        try crz(theta: QFloatExpr(theta), control: control, target: target)
+    }
+
+    @discardableResult
+    public mutating func cp(theta: QFloatExpr, control: Int, target: Int) throws -> QuantumCircuit {
         try applyValidated(.cp(theta: theta, control: control, target: target))
         return self
+    }
+
+    @discardableResult
+    public mutating func cp(theta: QFloat, control: Int, target: Int) throws -> QuantumCircuit {
+        try cp(theta: QFloatExpr(theta), control: control, target: target)
     }
 
     @discardableResult

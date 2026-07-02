@@ -182,7 +182,7 @@ extension QuantumEngine {
         }
         var scratch: RenormalizationScratch?
 
-        encodeUnitaryGate(gate, encoder: computeEncoder, state: state)
+        try encodeUnitaryGate(gate, encoder: computeEncoder, state: state)
         gateCounter += 1
         if shouldRenormalize(afterAppliedGateCount: gateCounter) {
             let localScratch = try makeRenormalizationScratch(stateCount: state.stateCount)
@@ -219,7 +219,7 @@ extension QuantumEngine {
                 gateCounter += 1
                 continue
             }
-            encodeUnitaryGate(gate, encoder: computeEncoder, state: state)
+            try encodeUnitaryGate(gate, encoder: computeEncoder, state: state)
             gateCounter += 1
             if shouldRenormalize(afterAppliedGateCount: gateCounter) {
                 if scratch == nil {
@@ -253,7 +253,7 @@ extension QuantumEngine {
         _ gate: Gate,
         encoder: MTLComputeCommandEncoder,
         state: StateVector
-    ) {
+    ) throws {
         // Reduce unbounded rotation/phase angles into [-π, π] (in Double) before they are cast to
         // Float32 for the GPU, preventing Float32 trig loss of significance on huge inputs.
         let gate = gate.angleWrapped
@@ -319,18 +319,24 @@ extension QuantumEngine {
             }
 
         case .p(let theta, let target):
+            let resolvedTheta = Float(try theta.gpuAngle())
             dispatchPairwiseGate(encoder: encoder, pipeline: pipelines.phase, state: state) { encoder in
                 var targetQubit = UInt32(target)
                 encoder.setBytes(&targetQubit, length: MemoryLayout<UInt32>.stride, index: 2)
-                var thetaValue = Float(theta)
+                var thetaValue = resolvedTheta
                 encoder.setBytes(&thetaValue, length: MemoryLayout<Float>.stride, index: 3)
             }
 
         case .u(let theta, let phi, let lambda, let target):
+            let resolvedAngles = SIMD3<Float>(
+                x: Float(try theta.gpuAngle()),
+                y: Float(try phi.gpuAngle()),
+                z: Float(try lambda.gpuAngle())
+            )
             dispatchPairwiseGate(encoder: encoder, pipeline: pipelines.universal, state: state) { encoder in
                 var targetQubit = UInt32(target)
                 encoder.setBytes(&targetQubit, length: MemoryLayout<UInt32>.stride, index: 2)
-                var angles = SIMD3<Float>(x: Float(theta), y: Float(phi), z: Float(lambda))
+                var angles = resolvedAngles
                 encoder.setBytes(&angles, length: MemoryLayout<SIMD3<Float>>.stride, index: 3)
             }
 
@@ -360,34 +366,38 @@ extension QuantumEngine {
             }
 
         case .crx(let theta, let control, let target):
+            let resolvedTheta = Float(try theta.gpuAngle())
             dispatchPairwiseGate(encoder: encoder, pipeline: pipelines.cRotX, state: state) { encoder in
                 var packed = SIMD2<UInt32>(x: UInt32(1) << UInt32(control), y: UInt32(target))
                 encoder.setBytes(&packed, length: MemoryLayout<SIMD2<UInt32>>.stride, index: 2)
-                var thetaValue = Float(theta)
+                var thetaValue = resolvedTheta
                 encoder.setBytes(&thetaValue, length: MemoryLayout<Float>.stride, index: 3)
             }
 
         case .cry(let theta, let control, let target):
+            let resolvedTheta = Float(try theta.gpuAngle())
             dispatchPairwiseGate(encoder: encoder, pipeline: pipelines.cRotY, state: state) { encoder in
                 var packed = SIMD2<UInt32>(x: UInt32(1) << UInt32(control), y: UInt32(target))
                 encoder.setBytes(&packed, length: MemoryLayout<SIMD2<UInt32>>.stride, index: 2)
-                var thetaValue = Float(theta)
+                var thetaValue = resolvedTheta
                 encoder.setBytes(&thetaValue, length: MemoryLayout<Float>.stride, index: 3)
             }
 
         case .crz(let theta, let control, let target):
+            let resolvedTheta = Float(try theta.gpuAngle())
             dispatchPairwiseGate(encoder: encoder, pipeline: pipelines.cRotZ, state: state) { encoder in
                 var packed = SIMD2<UInt32>(x: UInt32(1) << UInt32(control), y: UInt32(target))
                 encoder.setBytes(&packed, length: MemoryLayout<SIMD2<UInt32>>.stride, index: 2)
-                var thetaValue = Float(theta)
+                var thetaValue = resolvedTheta
                 encoder.setBytes(&thetaValue, length: MemoryLayout<Float>.stride, index: 3)
             }
 
         case .cp(let theta, let control, let target):
+            let resolvedTheta = Float(try theta.gpuAngle())
             dispatchPairwiseGate(encoder: encoder, pipeline: pipelines.cPhase, state: state) { encoder in
                 var packed = SIMD2<UInt32>(x: UInt32(1) << UInt32(control), y: UInt32(target))
                 encoder.setBytes(&packed, length: MemoryLayout<SIMD2<UInt32>>.stride, index: 2)
-                var thetaValue = Float(theta)
+                var thetaValue = resolvedTheta
                 encoder.setBytes(&thetaValue, length: MemoryLayout<Float>.stride, index: 3)
             }
 
@@ -404,26 +414,29 @@ extension QuantumEngine {
             }
 
         case .rz(let theta, let target):
+            let resolvedTheta = Float(try theta.gpuAngle())
             dispatchPairwiseGate(encoder: encoder, pipeline: pipelines.rotZ, state: state) { encoder in
                 var targetQubit = UInt32(target)
                 encoder.setBytes(&targetQubit, length: MemoryLayout<UInt32>.stride, index: 2)
-                var thetaValue = Float(theta)
+                var thetaValue = resolvedTheta
                 encoder.setBytes(&thetaValue, length: MemoryLayout<Float>.stride, index: 3)
             }
 
         case .rx(let theta, let target):
+            let resolvedTheta = Float(try theta.gpuAngle())
             dispatchPairwiseGate(encoder: encoder, pipeline: pipelines.rotX, state: state) { encoder in
                 var targetQubit = UInt32(target)
                 encoder.setBytes(&targetQubit, length: MemoryLayout<UInt32>.stride, index: 2)
-                var thetaValue = Float(theta)
+                var thetaValue = resolvedTheta
                 encoder.setBytes(&thetaValue, length: MemoryLayout<Float>.stride, index: 3)
             }
 
         case .ry(let theta, let target):
+            let resolvedTheta = Float(try theta.gpuAngle())
             dispatchPairwiseGate(encoder: encoder, pipeline: pipelines.rotY, state: state) { encoder in
                 var targetQubit = UInt32(target)
                 encoder.setBytes(&targetQubit, length: MemoryLayout<UInt32>.stride, index: 2)
-                var thetaValue = Float(theta)
+                var thetaValue = resolvedTheta
                 encoder.setBytes(&thetaValue, length: MemoryLayout<Float>.stride, index: 3)
             }
 

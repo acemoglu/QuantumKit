@@ -88,11 +88,14 @@ extension AlgebraicPreCompiler {
     static func mergeRotationPair(_ lhs: Gate, _ rhs: Gate) -> Gate?? {
         switch (lhs, rhs) {
         case (.rx(let t1, let q1), .rx(let t2, let q2)) where q1 == q2:
-            return .some(canonicalRotation(axis: .x, angle: t1 + t2, target: q1))
+            guard let a1 = t1.literalValue, let a2 = t2.literalValue else { return nil }
+            return .some(canonicalRotation(axis: .x, angle: a1 + a2, target: q1))
         case (.ry(let t1, let q1), .ry(let t2, let q2)) where q1 == q2:
-            return .some(canonicalRotation(axis: .y, angle: t1 + t2, target: q1))
+            guard let a1 = t1.literalValue, let a2 = t2.literalValue else { return nil }
+            return .some(canonicalRotation(axis: .y, angle: a1 + a2, target: q1))
         case (.rz(let t1, let q1), .rz(let t2, let q2)) where q1 == q2:
-            return .some(canonicalZRotation(angle: t1 + t2, target: q1))
+            guard let a1 = t1.literalValue, let a2 = t2.literalValue else { return nil }
+            return .some(canonicalZRotation(angle: a1 + a2, target: q1))
         default:
             return nil
         }
@@ -102,25 +105,28 @@ extension AlgebraicPreCompiler {
         guard let left = zAxisAngle(lhs), let right = zAxisAngle(rhs), left.qubit == right.qubit else {
             return nil
         }
-        return .some(canonicalZRotation(angle: left.angle + right.angle, target: left.qubit))
+        guard let leftAngle = left.angle.literalValue, let rightAngle = right.angle.literalValue else {
+            return nil
+        }
+        return .some(canonicalZRotation(angle: leftAngle + rightAngle, target: left.qubit))
     }
 
     enum RotationAxis {
         case x, y
     }
 
-    static func zAxisAngle(_ gate: Gate) -> (qubit: Int, angle: QFloat)? {
+    static func zAxisAngle(_ gate: Gate) -> (qubit: Int, angle: QFloatExpr)? {
         switch gate {
         case .z(let target):
-            return (target, QFloat(Double.pi))
+            return (target, QFloatExpr(QFloat(Double.pi)))
         case .s(let target):
-            return (target, QFloat(Double.pi / 2.0))
+            return (target, QFloatExpr(QFloat(Double.pi / 2.0)))
         case .t(let target):
-            return (target, QFloat(Double.pi / 4.0))
+            return (target, QFloatExpr(QFloat(Double.pi / 4.0)))
         case .sdg(let target):
-            return (target, QFloat(-Double.pi / 2.0))
+            return (target, QFloatExpr(QFloat(-Double.pi / 2.0)))
         case .tdg(let target):
-            return (target, QFloat(-Double.pi / 4.0))
+            return (target, QFloatExpr(QFloat(-Double.pi / 4.0)))
         case .p(let theta, let target):
             return (target, theta)
         case .rz(let theta, let target):
@@ -130,15 +136,25 @@ extension AlgebraicPreCompiler {
         }
     }
 
+    static func canonicalRotation(axis: RotationAxis, angle: QFloatExpr, target: Int) -> Gate? {
+        guard let literal = angle.literalValue else { return nil }
+        return canonicalRotation(axis: axis, angle: literal, target: target)
+    }
+
+    static func canonicalZRotation(angle: QFloatExpr, target: Int) -> Gate? {
+        guard let literal = angle.literalValue else { return nil }
+        return canonicalZRotation(angle: literal, target: target)
+    }
+
     static func canonicalRotation(axis: RotationAxis, angle: QFloat, target: Int) -> Gate? {
         let normalized = normalizeAngle(angle)
         guard abs(normalized) > angleTolerance else { return nil }
 
         switch axis {
         case .x:
-            return .rx(theta: normalized, target: target)
+            return .rx(theta: QFloatExpr(normalized), target: target)
         case .y:
-            return .ry(theta: normalized, target: target)
+            return .ry(theta: QFloatExpr(normalized), target: target)
         }
     }
 
@@ -162,7 +178,7 @@ extension AlgebraicPreCompiler {
             return .z(target: target)
         }
 
-        return .rz(theta: normalized, target: target)
+        return .rz(theta: QFloatExpr(normalized), target: target)
     }
 
     static func normalizeAngle(_ angle: QFloat) -> QFloat {

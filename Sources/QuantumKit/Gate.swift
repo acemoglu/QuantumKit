@@ -36,10 +36,10 @@ public enum Gate: Equatable, Sendable {
     case sxdg(target: Int)
 
     /// General phase gate P(θ) = diag(1, e^{iθ}).
-    case p(theta: QFloat, target: Int)
+    case p(theta: QFloatExpr, target: Int)
 
     /// Universal single-qubit gate U(θ, φ, λ) (Qiskit convention).
-    case u(theta: QFloat, phi: QFloat, lambda: QFloat, target: Int)
+    case u(theta: QFloatExpr, phi: QFloatExpr, lambda: QFloatExpr, target: Int)
 
     /// Entangles two qubits. Controlled-NOT gate
     case cx(control:Int, target:Int)
@@ -60,25 +60,25 @@ public enum Gate: Equatable, Sendable {
     case mcz(controls: [Int], target: Int)
     
     /// Parametrized rotation around the X-axis
-    case rx(theta:QFloat, target:Int)
+    case rx(theta: QFloatExpr, target: Int)
 
     /// Parametrized rotation around the Y-axis
-    case ry(theta: QFloat, target: Int)
+    case ry(theta: QFloatExpr, target: Int)
 
     /// Parametrized rotation around the Z-axis
-    case rz(theta:QFloat, target:Int)
+    case rz(theta: QFloatExpr, target: Int)
 
     /// Controlled rotation around the X-axis (applied when control is |1⟩).
-    case crx(theta: QFloat, control: Int, target: Int)
+    case crx(theta: QFloatExpr, control: Int, target: Int)
 
     /// Controlled rotation around the Y-axis (applied when control is |1⟩).
-    case cry(theta: QFloat, control: Int, target: Int)
+    case cry(theta: QFloatExpr, control: Int, target: Int)
 
     /// Controlled rotation around the Z-axis (applied when control is |1⟩).
-    case crz(theta: QFloat, control: Int, target: Int)
+    case crz(theta: QFloatExpr, control: Int, target: Int)
 
     /// Controlled phase CP(θ): e^{iθ} phase on |11⟩.
-    case cp(theta: QFloat, control: Int, target: Int)
+    case cp(theta: QFloatExpr, control: Int, target: Int)
 
     /// Mid-circuit computational-basis measurement on the listed qubits.
     case measure(MeasureSpec)
@@ -218,6 +218,11 @@ extension Gate {
     /// remainder, whose result already lies in `[-π, π]` for a divisor of `2π`.
     static func wrapAngle(_ angle: QFloat) -> QFloat {
         QFloat(Double(angle).remainder(dividingBy: 2.0 * Double.pi))
+    }
+
+    static func wrapAngle(_ angle: QFloatExpr) -> QFloatExpr {
+        guard let literal = angle.literalValue else { return angle }
+        return .literal(wrapAngle(literal))
     }
 
     static func adjoint1QMatrix(_ matrix: [ComplexAmplitude]) -> [ComplexAmplitude] {

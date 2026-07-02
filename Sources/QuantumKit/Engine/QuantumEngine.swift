@@ -462,7 +462,7 @@ public final class QuantumEngine: @unchecked Sendable {
 
         for gate in circuit.gates {
             for (index, state) in states.enumerated() {
-                encodeUnitaryGate(gate, encoder: computeEncoder, state: state)
+                try encodeUnitaryGate(gate, encoder: computeEncoder, state: state)
                 encodedDispatches += 1
                 gateCounters[index] += 1
                 if shouldRenormalize(afterAppliedGateCount: gateCounters[index]) {
@@ -497,6 +497,7 @@ public final class QuantumEngine: @unchecked Sendable {
         guard circuit.qubitCount == state.qubitCount else {
             throw QuantumEngineError.qubitCountMismatch(circuit: circuit.qubitCount, state: state.qubitCount)
         }
+        try circuit.requireFullyBound()
 
         let noiseEnabled = noise?.hasGateNoise == true
         var measurementOutcomes: [[Int]] = []

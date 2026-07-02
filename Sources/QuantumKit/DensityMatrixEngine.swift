@@ -83,6 +83,7 @@ public final class DensityMatrixEngine: @unchecked Sendable {
         guard circuit.qubitCount == density.qubitCount else {
             throw DensityMatrixEngineError.qubitCountMismatch(circuit: circuit.qubitCount, matrix: density.qubitCount)
         }
+        try circuit.requireFullyBound()
 
         let scratchBytes = density.elementCount * MemoryLayout<QFloat>.stride
         let scratchReal = try bufferPool.acquire(length: scratchBytes)
@@ -810,15 +811,19 @@ public final class DensityMatrixEngine: @unchecked Sendable {
                 ]
             )
         case .p(let theta, let target):
-            let c = cos(theta)
-            let s = sin(theta)
+            let angle = try theta.gpuAngle()
+            let c = cos(angle)
+            let s = sin(angle)
             return .init(target: target, controlMask: 0, matrix: [complex(1, 0), complex(0, 0), complex(0, 0), complex(c, s)])
         case .u(let theta, let phi, let lambda, let target):
-            let c = cos(theta * 0.5)
-            let s = sin(theta * 0.5)
-            let eLambda = complex(cos(lambda), sin(lambda))
-            let ePhi = complex(cos(phi), sin(phi))
-            let ePhiLambda = complex(cos(phi + lambda), sin(phi + lambda))
+            let thetaValue = try theta.gpuAngle()
+            let phiValue = try phi.gpuAngle()
+            let lambdaValue = try lambda.gpuAngle()
+            let c = cos(thetaValue * 0.5)
+            let s = sin(thetaValue * 0.5)
+            let eLambda = complex(cos(lambdaValue), sin(lambdaValue))
+            let ePhi = complex(cos(phiValue), sin(phiValue))
+            let ePhiLambda = complex(cos(phiValue + lambdaValue), sin(phiValue + lambdaValue))
             return .init(
                 target: target,
                 controlMask: 0,
@@ -830,15 +835,17 @@ public final class DensityMatrixEngine: @unchecked Sendable {
                 ]
             )
         case .rx(let theta, let target):
-            let c = cos(theta * 0.5)
-            let s = sin(theta * 0.5)
+            let angle = try theta.gpuAngle()
+            let c = cos(angle * 0.5)
+            let s = sin(angle * 0.5)
             return .init(target: target, controlMask: 0, matrix: [complex(c, 0), complex(0, -s), complex(0, -s), complex(c, 0)])
         case .ry(let theta, let target):
-            let c = cos(theta * 0.5)
-            let s = sin(theta * 0.5)
+            let angle = try theta.gpuAngle()
+            let c = cos(angle * 0.5)
+            let s = sin(angle * 0.5)
             return .init(target: target, controlMask: 0, matrix: [complex(c, 0), complex(-s, 0), complex(s, 0), complex(c, 0)])
         case .rz(let theta, let target):
-            let half = theta * 0.5
+            let half = try theta.gpuAngle() * 0.5
             return .init(
                 target: target,
                 controlMask: 0,
@@ -860,15 +867,17 @@ public final class DensityMatrixEngine: @unchecked Sendable {
         case .mcz(let controls, let target):
             return .init(target: target, controlMask: controls.reduce(0) { $0 | bitMask(of: $1) }, matrix: [complex(1, 0), complex(0, 0), complex(0, 0), complex(-1, 0)])
         case .crx(let theta, let control, let target):
-            let c = cos(theta * 0.5)
-            let s = sin(theta * 0.5)
+            let angle = try theta.gpuAngle()
+            let c = cos(angle * 0.5)
+            let s = sin(angle * 0.5)
             return .init(target: target, controlMask: bitMask(of: control), matrix: [complex(c, 0), complex(0, -s), complex(0, -s), complex(c, 0)])
         case .cry(let theta, let control, let target):
-            let c = cos(theta * 0.5)
-            let s = sin(theta * 0.5)
+            let angle = try theta.gpuAngle()
+            let c = cos(angle * 0.5)
+            let s = sin(angle * 0.5)
             return .init(target: target, controlMask: bitMask(of: control), matrix: [complex(c, 0), complex(-s, 0), complex(s, 0), complex(c, 0)])
         case .crz(let theta, let control, let target):
-            let half = theta * 0.5
+            let half = try theta.gpuAngle() * 0.5
             return .init(
                 target: target,
                 controlMask: bitMask(of: control),
@@ -880,10 +889,11 @@ public final class DensityMatrixEngine: @unchecked Sendable {
                 ]
             )
         case .cp(let theta, let control, let target):
+            let angle = try theta.gpuAngle()
             return .init(
                 target: target,
                 controlMask: bitMask(of: control),
-                matrix: [complex(1, 0), complex(0, 0), complex(0, 0), complex(cos(theta), sin(theta))]
+                matrix: [complex(1, 0), complex(0, 0), complex(0, 0), complex(cos(angle), sin(angle))]
             )
         case .unitary1(let matrix, let target):
             return .init(

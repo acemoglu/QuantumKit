@@ -57,14 +57,14 @@ extension Gate: Codable {
             self = .sxdg(target: try container.decode(Int.self, forKey: .target))
         case .p:
             self = .p(
-                theta: try container.decode(QFloat.self, forKey: .theta),
+                theta: try container.decode(QFloatExpr.self, forKey: .theta),
                 target: try container.decode(Int.self, forKey: .target)
             )
         case .u:
             self = .u(
-                theta: try container.decode(QFloat.self, forKey: .theta),
-                phi: try container.decode(QFloat.self, forKey: .phi),
-                lambda: try container.decode(QFloat.self, forKey: .lambda),
+                theta: try container.decode(QFloatExpr.self, forKey: .theta),
+                phi: try container.decode(QFloatExpr.self, forKey: .phi),
+                lambda: try container.decode(QFloatExpr.self, forKey: .lambda),
                 target: try container.decode(Int.self, forKey: .target)
             )
         case .cx:
@@ -100,40 +100,40 @@ extension Gate: Codable {
             )
         case .rx:
             self = .rx(
-                theta: try container.decode(QFloat.self, forKey: .theta),
+                theta: try container.decode(QFloatExpr.self, forKey: .theta),
                 target: try container.decode(Int.self, forKey: .target)
             )
         case .ry:
             self = .ry(
-                theta: try container.decode(QFloat.self, forKey: .theta),
+                theta: try container.decode(QFloatExpr.self, forKey: .theta),
                 target: try container.decode(Int.self, forKey: .target)
             )
         case .rz:
             self = .rz(
-                theta: try container.decode(QFloat.self, forKey: .theta),
+                theta: try container.decode(QFloatExpr.self, forKey: .theta),
                 target: try container.decode(Int.self, forKey: .target)
             )
         case .crx:
             self = .crx(
-                theta: try container.decode(QFloat.self, forKey: .theta),
+                theta: try container.decode(QFloatExpr.self, forKey: .theta),
                 control: try container.decode(Int.self, forKey: .control),
                 target: try container.decode(Int.self, forKey: .target)
             )
         case .cry:
             self = .cry(
-                theta: try container.decode(QFloat.self, forKey: .theta),
+                theta: try container.decode(QFloatExpr.self, forKey: .theta),
                 control: try container.decode(Int.self, forKey: .control),
                 target: try container.decode(Int.self, forKey: .target)
             )
         case .crz:
             self = .crz(
-                theta: try container.decode(QFloat.self, forKey: .theta),
+                theta: try container.decode(QFloatExpr.self, forKey: .theta),
                 control: try container.decode(Int.self, forKey: .control),
                 target: try container.decode(Int.self, forKey: .target)
             )
         case .cp:
             self = .cp(
-                theta: try container.decode(QFloat.self, forKey: .theta),
+                theta: try container.decode(QFloatExpr.self, forKey: .theta),
                 control: try container.decode(Int.self, forKey: .control),
                 target: try container.decode(Int.self, forKey: .target)
             )

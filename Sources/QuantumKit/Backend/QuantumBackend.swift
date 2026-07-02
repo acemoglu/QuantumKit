@@ -108,6 +108,7 @@ public final class StatevectorBackend: QuantumBackend, @unchecked Sendable {
 
     public func run(circuit: QuantumCircuit, options: QuantumRunOptions = QuantumRunOptions()) throws -> QuantumResult {
         let started = DispatchTime.now()
+        try circuit.requireFullyBound()
 
         if let shots = options.shots {
             var rng = makeRNG(seed: options.seed)
@@ -165,6 +166,7 @@ public final class DensityMatrixBackend: QuantumBackend, @unchecked Sendable {
 
     public func run(circuit: QuantumCircuit, options: QuantumRunOptions = QuantumRunOptions()) throws -> QuantumResult {
         let started = DispatchTime.now()
+        try circuit.requireFullyBound()
         let density = try DensityMatrix(qubitCount: circuit.qubitCount)
         var rng = makeRNG(seed: options.seed)
         let execution = try engine.executeRNG(

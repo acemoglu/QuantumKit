@@ -45,7 +45,7 @@ extension QuantumKitTests {
 
         let result = AlgebraicPreCompiler.optimize(gates: circuit.gates)
         XCTAssertEqual(result.optimizedGateCount, 1)
-        XCTAssertEqual(result.gates, [.rx(theta: QFloat(Double.pi / 2.0), target: 0)])
+        XCTAssertEqual(result.gates, [.rx(theta: QFloatExpr(QFloat(Double.pi / 2.0)), target: 0)])
     }
 
     func testAlgebraicPreCompilerCancelsSWithSDagger() throws {
