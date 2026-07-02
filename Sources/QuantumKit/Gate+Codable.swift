@@ -17,15 +17,17 @@ extension Gate: Codable {
         case phi
         case lambda
         case classicalRegister
+        case classicalBitOffset
         case expectedValue
         case gate
+        case matrix
     }
 
     private enum GateType: String, Codable {
         case h, x, y, z, s, t, sdg, tdg, sx, sxdg, p, u
         case cx, cz, swap, ccx, mcx, mcz
         case rx, ry, rz, crx, cry, crz, cp
-        case measure, reset, c_if
+        case measure, reset, c_if, unitary1
     }
 
     public init(from decoder: any Decoder) throws {
@@ -136,7 +138,16 @@ extension Gate: Codable {
                 target: try container.decode(Int.self, forKey: .target)
             )
         case .measure:
-            self = .measure(qubits: try container.decode([Int].self, forKey: .qubits))
+            let qubits = try container.decode([Int].self, forKey: .qubits)
+            let classicalRegister = try container.decodeIfPresent(Int.self, forKey: .classicalRegister) ?? 0
+            let classicalBitOffset = try container.decodeIfPresent(Int.self, forKey: .classicalBitOffset) ?? 0
+            self = .measure(
+                MeasureSpec(
+                    qubits: qubits,
+                    classicalRegister: classicalRegister,
+                    classicalBitOffset: classicalBitOffset
+                )
+            )
         case .reset:
             self = .reset(qubit: try container.decode(Int.self, forKey: .qubit))
         case .c_if:
@@ -144,6 +155,11 @@ extension Gate: Codable {
                 classicalRegister: try container.decode(Int.self, forKey: .classicalRegister),
                 expectedValue: try container.decode(Int.self, forKey: .expectedValue),
                 gate: try container.decode(Gate.self, forKey: .gate)
+            )
+        case .unitary1:
+            self = .unitary1(
+                matrix: try container.decode([ComplexAmplitude].self, forKey: .matrix),
+                target: try container.decode(Int.self, forKey: .target)
             )
         }
     }
@@ -249,9 +265,15 @@ extension Gate: Codable {
             try container.encode(theta, forKey: .theta)
             try container.encode(control, forKey: .control)
             try container.encode(target, forKey: .target)
-        case .measure(let qubits):
+        case .measure(let spec):
             try container.encode(GateType.measure, forKey: .type)
-            try container.encode(qubits, forKey: .qubits)
+            try container.encode(spec.qubits, forKey: .qubits)
+            if spec.classicalRegister != 0 {
+                try container.encode(spec.classicalRegister, forKey: .classicalRegister)
+            }
+            if spec.classicalBitOffset != 0 {
+                try container.encode(spec.classicalBitOffset, forKey: .classicalBitOffset)
+            }
         case .reset(let qubit):
             try container.encode(GateType.reset, forKey: .type)
             try container.encode(qubit, forKey: .qubit)
@@ -260,6 +282,10 @@ extension Gate: Codable {
             try container.encode(classicalRegister, forKey: .classicalRegister)
             try container.encode(expectedValue, forKey: .expectedValue)
             try container.encode(gate, forKey: .gate)
+        case .unitary1(let matrix, let target):
+            try container.encode(GateType.unitary1, forKey: .type)
+            try container.encode(matrix, forKey: .matrix)
+            try container.encode(target, forKey: .target)
         }
     }
 }

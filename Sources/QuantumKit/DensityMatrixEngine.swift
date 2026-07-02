@@ -106,18 +106,30 @@ public final class DensityMatrixEngine: @unchecked Sendable {
 
         var measurementOutcomes: [[Int]] = []
         var appliedGateCount = 0
+        var classicalMemory = ClassicalMemory(
+            registerWidths: circuit.classicalRegisters.map(\.bitCount)
+        )
 
-        for gate in circuit.gates {
+        func executeRuntimeGate(_ gate: Gate) throws {
             switch gate {
-            case .measure(let qubits):
+            case .measure(let spec):
                 let bits = try applyMeasurement(
-                    qubits: qubits,
+                    qubits: spec.qubits,
                     on: density,
                     rng: &rng,
                     scratchReal: scratchReal,
                     scratchImag: scratchImag
                 )
                 measurementOutcomes.append(bits)
+                let outcome = bits.enumerated().reduce(0) { partial, entry in
+                    partial | (entry.element << entry.offset)
+                }
+                try classicalMemory.writeOutcome(
+                    outcome,
+                    measuredQubitCount: spec.qubits.count,
+                    register: spec.classicalRegister,
+                    bitOffset: spec.classicalBitOffset
+                )
 
             case .reset(let qubit):
                 try applyReset(
@@ -139,6 +151,11 @@ public final class DensityMatrixEngine: @unchecked Sendable {
                     try applyNoiseChannels(after: gate, on: density, noise: noise, scratchReal: scratchReal, scratchImag: scratchImag)
                 }
 
+            case .c_if(let classicalRegister, let expectedValue, let conditionedGate):
+                if classicalMemory.value(ofRegister: classicalRegister) == expectedValue {
+                    try executeRuntimeGate(conditionedGate)
+                }
+
             default:
                 try applyUnitaryGate(gate, on: density, scratchReal: scratchReal, scratchImag: scratchImag)
                 if let noise {
@@ -152,11 +169,18 @@ public final class DensityMatrixEngine: @unchecked Sendable {
             }
         }
 
+        for gate in circuit.gates {
+            try executeRuntimeGate(gate)
+        }
+
         // Every gate/channel above is committed without blocking the CPU. Drain the serial queue
         // once here so all GPU writes to the density buffers are complete and visible to the host
         // before the caller inspects them (e.g. via `probabilities`) after `executeRNG` returns.
         try drainPipeline()
-        return CircuitExecutionResult(measurementOutcomes: measurementOutcomes)
+        return CircuitExecutionResult(
+            measurementOutcomes: measurementOutcomes,
+            classicalMemory: classicalMemory
+        )
     }
 
     func shouldRenormalize(afterAppliedGateCount gateCount: Int) -> Bool {
@@ -860,6 +884,12 @@ public final class DensityMatrixEngine: @unchecked Sendable {
                 target: target,
                 controlMask: bitMask(of: control),
                 matrix: [complex(1, 0), complex(0, 0), complex(0, 0), complex(cos(theta), sin(theta))]
+            )
+        case .unitary1(let matrix, let target):
+            return .init(
+                target: target,
+                controlMask: 0,
+                matrix: matrix.map { complex($0.real, $0.imaginary) }
             )
         case .swap, .measure, .reset, .c_if:
             throw DensityMatrixEngineError.unsupportedGate(gate)

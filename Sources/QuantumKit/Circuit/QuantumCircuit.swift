@@ -15,14 +15,16 @@ public enum QuantumCircuitError: Error {
 public struct QuantumCircuit {
 
     public let qubitCount: Int
+    public let classicalRegisters: [ClassicalRegisterSpec]
     public private(set) var gates: [Gate] = []
 
-    public init(qubitCount: Int) throws {
+    public init(qubitCount: Int, classicalRegisters: [ClassicalRegisterSpec] = []) throws {
         guard qubitCount > 0 else {
             throw QuantumCircuitError.invalidQubitCount(qubitCount)
         }
 
         self.qubitCount = qubitCount
+        self.classicalRegisters = classicalRegisters
     }
 
     private func validateQubitIndex(_ index: Int) throws {
@@ -103,14 +105,24 @@ public struct QuantumCircuit {
                     reason: "CCX requires three distinct qubits (control1, control2, target)"
                 )
             }
-        case .measure(let qubits):
-            guard !qubits.isEmpty else {
+        case .measure(let spec):
+            guard !spec.qubits.isEmpty else {
                 throw QuantumCircuitError.invalidAlgorithmParameter(
                     reason: "Measure requires at least one qubit"
                 )
             }
-            for index in qubits {
+            for index in spec.qubits {
                 try validateQubitIndex(index)
+            }
+            guard spec.classicalRegister >= 0 else {
+                throw QuantumCircuitError.invalidAlgorithmParameter(
+                    reason: "Measurement requires a non-negative classical register index"
+                )
+            }
+            guard spec.classicalBitOffset >= 0 else {
+                throw QuantumCircuitError.invalidAlgorithmParameter(
+                    reason: "Measurement requires a non-negative classical bit offset"
+                )
             }
         case .reset(let qubit):
             try validateQubitIndex(qubit)
@@ -128,6 +140,13 @@ public struct QuantumCircuit {
             for qubit in conditionedGate.affectedQubits {
                 try validateQubitIndex(qubit)
             }
+        case .unitary1(let matrix, let target):
+            guard matrix.count == 4 else {
+                throw QuantumCircuitError.invalidAlgorithmParameter(
+                    reason: "unitary1 requires exactly four complex amplitudes"
+                )
+            }
+            try validateQubitIndex(target)
         }
 
         gates.append(gate)
@@ -147,7 +166,7 @@ public struct QuantumCircuit {
             throw QuantumCircuitError.circuitNotUnitary
         }
 
-        var inverted = try QuantumCircuit(qubitCount: qubitCount)
+        var inverted = try QuantumCircuit(qubitCount: qubitCount, classicalRegisters: classicalRegisters)
         for gate in gates.reversed() {
             try inverted.apply(gate.adjoint)
         }
@@ -159,19 +178,27 @@ extension QuantumCircuit: Codable {
 
     private enum CodingKeys: String, CodingKey {
         case qubitCount
+        case classicalRegisters
         case gates
     }
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let qubitCount = try container.decode(Int.self, forKey: .qubitCount)
-        try self.init(qubitCount: qubitCount)
+        let classicalRegisters = try container.decodeIfPresent(
+            [ClassicalRegisterSpec].self,
+            forKey: .classicalRegisters
+        ) ?? []
+        try self.init(qubitCount: qubitCount, classicalRegisters: classicalRegisters)
         gates = try container.decode([Gate].self, forKey: .gates)
     }
 
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(qubitCount, forKey: .qubitCount)
+        if !classicalRegisters.isEmpty {
+            try container.encode(classicalRegisters, forKey: .classicalRegisters)
+        }
         try container.encode(gates, forKey: .gates)
     }
 }

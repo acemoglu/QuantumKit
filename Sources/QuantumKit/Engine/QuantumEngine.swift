@@ -502,66 +502,99 @@ public final class QuantumEngine: @unchecked Sendable {
         var measurementOutcomes: [[Int]] = []
         var pendingUnitaryGates: [Gate] = []
         var unitaryGateCounter = 0
+        var classicalMemory = ClassicalMemory(
+            registerWidths: circuit.classicalRegisters.map(\.bitCount)
+        )
 
-        for gate in circuit.gates {
+        func flushPendingUnitaryGates() throws {
+            try flushUnitaryGates(pendingUnitaryGates, on: state, gateCounter: &unitaryGateCounter)
+            pendingUnitaryGates.removeAll(keepingCapacity: true)
+        }
+
+        func applyNoise(after gate: Gate) throws {
+            guard noiseEnabled, let noise else { return }
+            if noise.appliesDepolarizing {
+                try applyDepolarizingNoise(
+                    after: gate,
+                    on: state,
+                    probability: noise.depolarizingProbability,
+                    rng: &rng
+                )
+            }
+            if noise.appliesAmplitudeDamping {
+                try applyAmplitudeDamping(
+                    after: gate,
+                    on: state,
+                    probability: noise.effectiveAmplitudeDampingProbability,
+                    rng: &rng
+                )
+            }
+            if noise.appliesPhaseDamping {
+                try applyPhaseDamping(
+                    after: gate,
+                    on: state,
+                    flipProbability: noise.effectivePhaseDampingProbability,
+                    rng: &rng
+                )
+            }
+        }
+
+        func executeRuntimeGate(_ gate: Gate) throws {
             switch gate {
-            case .measure(let qubits):
-                try flushUnitaryGates(pendingUnitaryGates, on: state, gateCounter: &unitaryGateCounter)
-                pendingUnitaryGates.removeAll(keepingCapacity: true)
+            case .measure(let spec):
+                try flushPendingUnitaryGates()
 
                 let outcome = try executePartialMeasurementCollapse(
                     on: state,
-                    qubits: qubits,
+                    qubits: spec.qubits,
                     rng: &rng,
                     noise: noise
                 )
-                measurementOutcomes.append(measuredBits(outcome: outcome, qubits: qubits))
+                measurementOutcomes.append(measuredBits(outcome: outcome, qubits: spec.qubits))
+                try classicalMemory.writeOutcome(
+                    outcome,
+                    measuredQubitCount: spec.qubits.count,
+                    register: spec.classicalRegister,
+                    bitOffset: spec.classicalBitOffset
+                )
 
             case .reset(let qubit):
-                try flushUnitaryGates(pendingUnitaryGates, on: state, gateCounter: &unitaryGateCounter)
-                pendingUnitaryGates.removeAll(keepingCapacity: true)
+                try flushPendingUnitaryGates()
                 try executeResetQubit(on: state, qubit: qubit, rng: &rng)
+
+            case .c_if(let classicalRegister, let expectedValue, let conditionedGate):
+                try flushPendingUnitaryGates()
+                if classicalMemory.value(ofRegister: classicalRegister) == expectedValue {
+                    try executeRuntimeGate(conditionedGate)
+                }
+
+            case .unitary1:
+                try flushPendingUnitaryGates()
+                try executeUnitaryGate(gate, on: state, gateCounter: &unitaryGateCounter)
 
             default:
                 if noiseEnabled, let noise {
-                    try flushUnitaryGates(pendingUnitaryGates, on: state, gateCounter: &unitaryGateCounter)
-                    pendingUnitaryGates.removeAll(keepingCapacity: true)
+                    try flushPendingUnitaryGates()
                     try executeUnitaryGate(gate, on: state, gateCounter: &unitaryGateCounter)
-                    if noise.appliesDepolarizing {
-                        try applyDepolarizingNoise(
-                            after: gate,
-                            on: state,
-                            probability: noise.depolarizingProbability,
-                            rng: &rng
-                        )
-                    }
-                    if noise.appliesAmplitudeDamping {
-                        try applyAmplitudeDamping(
-                            after: gate,
-                            on: state,
-                            probability: noise.effectiveAmplitudeDampingProbability,
-                            rng: &rng
-                        )
-                    }
-                    if noise.appliesPhaseDamping {
-                        try applyPhaseDamping(
-                            after: gate,
-                            on: state,
-                            flipProbability: noise.effectivePhaseDampingProbability,
-                            rng: &rng
-                        )
-                    }
+                    try applyNoise(after: gate)
                 } else {
                     pendingUnitaryGates.append(gate)
                 }
             }
         }
 
-        try flushUnitaryGates(pendingUnitaryGates, on: state, gateCounter: &unitaryGateCounter)
+        for gate in circuit.gates {
+            try executeRuntimeGate(gate)
+        }
+
+        try flushPendingUnitaryGates()
         // Gate/noise dispatches above are now committed asynchronously, so drain the queue once
         // here — at the end of the circuit run — before the caller reads classical state back from
         // the shared buffers on the host.
         try drainPipeline()
-        return CircuitExecutionResult(measurementOutcomes: measurementOutcomes)
+        return CircuitExecutionResult(
+            measurementOutcomes: measurementOutcomes,
+            classicalMemory: classicalMemory
+        )
     }
 }

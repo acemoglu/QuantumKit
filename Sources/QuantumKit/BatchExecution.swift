@@ -51,11 +51,18 @@ extension QuantumCircuit {
     public var isUnitaryOnly: Bool {
         gates.allSatisfy { gate in
             switch gate {
-            case .measure, .reset:
+            case .measure, .reset, .c_if:
                 return false
             default:
                 return true
             }
+        }
+    }
+
+    var containsHostAppliedUnitaryGates: Bool {
+        gates.contains { gate in
+            if case .unitary1 = gate { return true }
+            return false
         }
     }
 }
@@ -79,7 +86,7 @@ enum BatchSampleExecutor {
         histogram.reserveCapacity(min(shots, circuit.qubitCount > 0 ? 1 << circuit.qubitCount : 1))
 
         let gateNoise = noise?.hasGateNoise == true
-        let canBatch = circuit.isUnitaryOnly && !gateNoise
+        let canBatch = circuit.isUnitaryOnly && !gateNoise && !circuit.containsHostAppliedUnitaryGates
         let batchSize = canBatch ? min(options.batchSize, shots) : 1
 
         let pool = try StateVectorBatch(qubitCount: circuit.qubitCount, device: device, capacity: batchSize)

@@ -13,7 +13,7 @@ public enum Pauli: Equatable, Sendable {
 }
 
 /// A single complex amplitude of a state vector.
-public struct ComplexAmplitude: Equatable, Sendable {
+public struct ComplexAmplitude: Equatable, Sendable, Codable {
     public let real: QFloat
     public let imaginary: QFloat
 

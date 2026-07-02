@@ -152,13 +152,62 @@ extension QuantumCircuit {
 
     @discardableResult
     public mutating func measure(qubits: [Int]) throws -> QuantumCircuit {
-        try applyValidated(.measure(qubits: qubits))
+        try applyValidated(.measure(MeasureSpec(qubits: qubits)))
+        return self
+    }
+
+    @discardableResult
+    public mutating func measure(
+        qubits: [Int],
+        classicalRegister: Int,
+        classicalBitOffset: Int = 0
+    ) throws -> QuantumCircuit {
+        try applyValidated(
+            .measure(
+                MeasureSpec(
+                    qubits: qubits,
+                    classicalRegister: classicalRegister,
+                    classicalBitOffset: classicalBitOffset
+                )
+            )
+        )
         return self
     }
 
     @discardableResult
     public mutating func measure(_ qubit: Int) throws -> QuantumCircuit {
         try measure(qubits: [qubit])
+    }
+
+    @discardableResult
+    public mutating func unitary1(matrix: [ComplexAmplitude], target: Int) throws -> QuantumCircuit {
+        try applyValidated(.unitary1(matrix: matrix, target: target))
+        return self
+    }
+
+    @discardableResult
+    public mutating func c_if(
+        classicalRegister: Int,
+        equals expectedValue: Int,
+        apply gate: Gate
+    ) throws -> QuantumCircuit {
+        try applyValidated(
+            .c_if(
+                classicalRegister: classicalRegister,
+                expectedValue: expectedValue,
+                gate: gate
+            )
+        )
+        return self
+    }
+
+    @discardableResult
+    public mutating func c_if(
+        classicalRegister: Int,
+        equals expectedValue: Int,
+        x target: Int
+    ) throws -> QuantumCircuit {
+        try c_if(classicalRegister: classicalRegister, equals: expectedValue, apply: .x(target: target))
     }
 
     @discardableResult

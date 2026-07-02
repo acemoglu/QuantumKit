@@ -81,7 +81,7 @@ public enum Gate: Equatable, Sendable {
     case cp(theta: QFloat, control: Int, target: Int)
 
     /// Mid-circuit computational-basis measurement on the listed qubits.
-    case measure(qubits: [Int])
+    case measure(MeasureSpec)
 
     /// Project a qubit onto |0⟩ and renormalize (non-unitary).
     case reset(qubit: Int)
@@ -92,6 +92,8 @@ public enum Gate: Equatable, Sendable {
     /// deferred-measurement principle.
     indirect case c_if(classicalRegister: Int, expectedValue: Int, gate: Gate)
 
+    /// Arbitrary single-qubit unitary specified as a row-major 2×2 matrix.
+    case unitary1(matrix: [ComplexAmplitude], target: Int)
 }
 
 extension Gate {
@@ -102,7 +104,8 @@ extension Gate {
         case .h(let target), .x(let target), .y(let target), .z(let target),
              .s(let target), .t(let target), .sdg(let target), .tdg(let target),
              .sx(let target), .sxdg(let target), .p(_, let target), .u(_, _, _, let target),
-             .rx(_, let target), .ry(_, let target), .rz(_, let target), .reset(let target):
+             .rx(_, let target), .ry(_, let target), .rz(_, let target), .reset(let target),
+             .unitary1(_, let target):
             return [target]
         case .cx(let control, let target), .cz(let control, let target),
              .crx(_, let control, let target), .cry(_, let control, let target),
@@ -114,8 +117,8 @@ extension Gate {
             return [control1, control2, target]
         case .mcx(let controls, let target), .mcz(let controls, let target):
             return controls + [target]
-        case .measure(let qubits):
-            return qubits
+        case .measure(let spec):
+            return spec.qubits
         case .c_if(_, _, let gate):
             return gate.affectedQubits
         }
@@ -163,6 +166,9 @@ extension Gate {
             return .u(theta: -theta, phi: -lambda, lambda: -phi, target: target)
         case .measure, .reset:
             return self
+        case .unitary1(let matrix, let target):
+            let dagger = Self.adjoint1QMatrix(matrix)
+            return .unitary1(matrix: dagger, target: target)
         case .c_if(let classicalRegister, let expectedValue, let gate):
             return .c_if(classicalRegister: classicalRegister, expectedValue: expectedValue, gate: gate.adjoint)
         }
@@ -212,5 +218,15 @@ extension Gate {
     /// remainder, whose result already lies in `[-π, π]` for a divisor of `2π`.
     static func wrapAngle(_ angle: QFloat) -> QFloat {
         QFloat(Double(angle).remainder(dividingBy: 2.0 * Double.pi))
+    }
+
+    static func adjoint1QMatrix(_ matrix: [ComplexAmplitude]) -> [ComplexAmplitude] {
+        precondition(matrix.count == 4)
+        return [
+            ComplexAmplitude(real: matrix[0].real, imaginary: -matrix[0].imaginary),
+            ComplexAmplitude(real: matrix[2].real, imaginary: -matrix[2].imaginary),
+            ComplexAmplitude(real: matrix[1].real, imaginary: -matrix[1].imaginary),
+            ComplexAmplitude(real: matrix[3].real, imaginary: -matrix[3].imaginary),
+        ]
     }
 }

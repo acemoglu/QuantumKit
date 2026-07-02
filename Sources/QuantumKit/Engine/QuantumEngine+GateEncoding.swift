@@ -170,6 +170,12 @@ extension QuantumEngine {
     }
 
     func executeUnitaryGate(_ gate: Gate, on state: StateVector, gateCounter: inout Int) throws {
+        if case .unitary1(let matrix, let target) = gate {
+            try applyHost1QUnitary(matrix, target: target, on: state)
+            gateCounter += 1
+            return
+        }
+
         guard let commandBuffer = commandQueue.makeCommandBuffer(),
               let computeEncoder = commandBuffer.makeComputeCommandEncoder() else {
             throw QuantumEngineError.commandBufferCreationFailed
@@ -208,6 +214,11 @@ extension QuantumEngine {
         var scratch: RenormalizationScratch?
 
         for gate in gates {
+            if case .unitary1(let matrix, let target) = gate {
+                try applyHost1QUnitary(matrix, target: target, on: state)
+                gateCounter += 1
+                continue
+            }
             encodeUnitaryGate(gate, encoder: computeEncoder, state: state)
             gateCounter += 1
             if shouldRenormalize(afterAppliedGateCount: gateCounter) {
@@ -417,6 +428,9 @@ extension QuantumEngine {
             }
 
         case .measure, .reset:
+            break
+
+        case .unitary1:
             break
 
         case .c_if:
