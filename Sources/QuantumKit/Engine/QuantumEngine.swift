@@ -22,6 +22,7 @@ public enum QuantumEngineError: Error {
     case prefixSumBufferLevelMissing(level: Int)
     case zeroStateNorm
     case circuitNotUnitaryOnly
+    case localizedNoiseRequiresDensityMatrixBackend
 
 }
 
@@ -498,6 +499,10 @@ public final class QuantumEngine: @unchecked Sendable {
             throw QuantumEngineError.qubitCountMismatch(circuit: circuit.qubitCount, state: state.qubitCount)
         }
         try circuit.requireFullyBound()
+
+        if let noise, noise.hasLocalizedGateNoise {
+            throw QuantumEngineError.localizedNoiseRequiresDensityMatrixBackend
+        }
 
         let noiseEnabled = noise?.hasGateNoise == true
         var measurementOutcomes: [[Int]] = []

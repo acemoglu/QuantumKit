@@ -370,6 +370,16 @@ public final class DensityMatrixEngine: @unchecked Sendable {
                 )
             }
         }
+
+        if noise.hasLocalizedGateNoise {
+            try applyLocalizedNoiseChannels(
+                after: gate,
+                on: density,
+                noise: noise,
+                scratchReal: scratchReal,
+                scratchImag: scratchImag
+            )
+        }
     }
 
     private func applyKrausChannel(
@@ -949,5 +959,164 @@ public final class DensityMatrixEngine: @unchecked Sendable {
         }
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
         return try device.makeLibrary(source: source, options: nil)
+    }
+}
+
+// MARK: - Localized noise channels
+
+extension DensityMatrixEngine {
+
+    func applyLocalizedNoiseChannels(
+        after gate: Gate,
+        on density: DensityMatrix,
+        noise: NoiseModel,
+        scratchReal: MTLBuffer,
+        scratchImag: MTLBuffer
+    ) throws {
+        var seen = Set<Int>()
+        let affected = gate.affectedQubits.filter { seen.insert($0).inserted }
+
+        for rule in noise.matchingLocalizedRules(for: gate, affectedQubits: affected) {
+            let qubits = rule.target.applicationQubits(gate: gate, affectedQubits: affected)
+            guard !qubits.isEmpty else { continue }
+            try applyLocalized(
+                channel: rule.channel,
+                on: density,
+                qubits: qubits,
+                scratchReal: scratchReal,
+                scratchImag: scratchImag
+            )
+        }
+    }
+
+    private func applyLocalized(
+        channel: QuantumChannel,
+        on density: DensityMatrix,
+        qubits: [Int],
+        scratchReal: MTLBuffer,
+        scratchImag: MTLBuffer
+    ) throws {
+        switch channel {
+        case .depolarizing(let probability):
+            try applyDepolarizingNoise(
+                on: density,
+                qubits: qubits,
+                probability: probability,
+                scratchReal: scratchReal,
+                scratchImag: scratchImag
+            )
+
+        case .amplitudeDamping(let gamma):
+            let keep = sqrt(max(0, 1 - gamma))
+            let relax = sqrt(max(0, gamma))
+            for qubit in qubits {
+                try applyKrausChannel(
+                    on: density,
+                    targetQubit: qubit,
+                    kraus: [
+                        [complex(1, 0), complex(0, 0), complex(0, 0), complex(keep, 0)],
+                        [complex(0, 0), complex(relax, 0), complex(0, 0), complex(0, 0)],
+                    ],
+                    scratchReal: scratchReal,
+                    scratchImag: scratchImag
+                )
+            }
+
+        case .phaseDamping(let lambda):
+            let keep = sqrt(max(0, 1 - lambda))
+            let dephase = sqrt(max(0, lambda))
+            for qubit in qubits {
+                try applyKrausChannel(
+                    on: density,
+                    targetQubit: qubit,
+                    kraus: [
+                        [complex(1, 0), complex(0, 0), complex(0, 0), complex(keep, 0)],
+                        [complex(0, 0), complex(0, 0), complex(0, 0), complex(dephase, 0)],
+                    ],
+                    scratchReal: scratchReal,
+                    scratchImag: scratchImag
+                )
+            }
+
+        case .pauliXFlip(let probability):
+            for qubit in qubits {
+                try applyPauliFlipChannel(
+                    on: density,
+                    qubit: qubit,
+                    axis: .x,
+                    probability: probability,
+                    scratchReal: scratchReal,
+                    scratchImag: scratchImag
+                )
+            }
+
+        case .pauliYFlip(let probability):
+            for qubit in qubits {
+                try applyPauliFlipChannel(
+                    on: density,
+                    qubit: qubit,
+                    axis: .y,
+                    probability: probability,
+                    scratchReal: scratchReal,
+                    scratchImag: scratchImag
+                )
+            }
+
+        case .pauliZFlip(let probability):
+            for qubit in qubits {
+                try applyPauliFlipChannel(
+                    on: density,
+                    qubit: qubit,
+                    axis: .z,
+                    probability: probability,
+                    scratchReal: scratchReal,
+                    scratchImag: scratchImag
+                )
+            }
+        }
+    }
+
+    private enum PauliFlipAxis {
+        case x, y, z
+    }
+
+    private func applyPauliFlipChannel(
+        on density: DensityMatrix,
+        qubit: Int,
+        axis: PauliFlipAxis,
+        probability p: QFloat,
+        scratchReal: MTLBuffer,
+        scratchImag: MTLBuffer
+    ) throws {
+        guard p > 0 else { return }
+        let k0 = sqrt(max(0, 1 - p))
+        let k1 = sqrt(max(0, p))
+
+        let kraus: [[SIMD2<QFloat>]]
+        switch axis {
+        case .x:
+            kraus = [
+                [complex(k0, 0), complex(0, 0), complex(0, 0), complex(k0, 0)],
+                [complex(0, 0), complex(k1, 0), complex(k1, 0), complex(0, 0)],
+            ]
+        case .y:
+            kraus = [
+                [complex(k0, 0), complex(0, 0), complex(0, 0), complex(k0, 0)],
+                [complex(0, 0), complex(0, -k1), complex(0, k1), complex(0, 0)],
+            ]
+        case .z:
+            kraus = [
+                [complex(k0, 0), complex(0, 0), complex(0, 0), complex(k0, 0)],
+                [complex(k1, 0), complex(0, 0), complex(0, 0), complex(-k1, 0)],
+            ]
+        }
+
+        try applyKrausChannel(
+            on: density,
+            targetQubit: qubit,
+            kraus: kraus,
+            scratchReal: scratchReal,
+            scratchImag: scratchImag
+        )
     }
 }

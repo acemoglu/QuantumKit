@@ -44,6 +44,9 @@ public struct NoiseModel: Sendable, Equatable, Codable {
     /// Readout bit-flip probability 1 → 0.
     public var readoutFlip1To0: QFloat
 
+    /// Per-gate, per-qubit localized noise rules applied after matching gates execute.
+    public var localizedRules: [LocalizedNoiseRule]
+
     public init(
         depolarizingProbability: QFloat = 0,
         amplitudeDampingProbability: QFloat = 0,
@@ -53,7 +56,8 @@ public struct NoiseModel: Sendable, Equatable, Codable {
         phaseDampingProbability: QFloat = 0,
         readoutErrorProbability: QFloat = 0,
         readoutFlip0To1: QFloat = 0,
-        readoutFlip1To0: QFloat = 0
+        readoutFlip1To0: QFloat = 0,
+        localizedRules: [LocalizedNoiseRule] = []
     ) {
         self.depolarizingProbability = Self.clamp(depolarizingProbability)
         self.phaseDampingProbability = Self.clamp(phaseDampingProbability)
@@ -75,6 +79,8 @@ public struct NoiseModel: Sendable, Equatable, Codable {
             self.readoutFlip0To1 = Self.clamp(readoutFlip0To1)
             self.readoutFlip1To0 = Self.clamp(readoutFlip1To0)
         }
+
+        self.localizedRules = localizedRules
     }
 
     public var appliesDepolarizing: Bool {
@@ -146,7 +152,7 @@ public struct NoiseModel: Sendable, Equatable, Codable {
 
     /// Gate-time noise channels that require per-gate execution (disables batching).
     public var hasGateNoise: Bool {
-        appliesDepolarizing || appliesAmplitudeDamping || appliesPhaseDamping
+        appliesDepolarizing || appliesAmplitudeDamping || appliesPhaseDamping || hasLocalizedGateNoise
     }
 
     public var hasAnyChannel: Bool {
