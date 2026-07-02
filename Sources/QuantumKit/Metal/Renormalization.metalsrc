@@ -121,7 +121,9 @@ kernel void renorm_scale_state(device float* realBuffer [[buffer(0)]],
         return;
     }
 
-    const float invNorm = precise::divide(1.0f, precise::sqrt(norm));
+    const float minNormal = 1.1754943e-38f;
+    float safeNorm = max(norm, minNormal);
+    const float invNorm = precise::divide(1.0f, precise::sqrt(safeNorm));
     realBuffer[id] *= invNorm;
     imagBuffer[id] *= invNorm;
 }

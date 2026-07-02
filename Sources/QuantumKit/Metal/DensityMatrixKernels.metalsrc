@@ -12,6 +12,15 @@ inline float2 dm_complex_add(float2 a, float2 b) {
     return float2(a.x + b.x, a.y + b.y);
 }
 
+// Kahan-style compensated addition in complex (float2) form. The compensation term carries the
+// low-order bits lost to rounding so long reduction chains keep significantly more precision.
+inline void dm_kahan_add_complex(thread float2& sum, thread float2& compensation, float2 value) {
+    const float2 corrected = value - compensation;
+    const float2 updated = sum + corrected;
+    compensation = (updated - sum) - corrected;
+    sum = updated;
+}
+
 inline float2 dm_complex_mul(float2 a, float2 b) {
     return float2((a.x * b.x) - (a.y * b.y), (a.x * b.y) + (a.y * b.x));
 }
@@ -189,6 +198,7 @@ kernel void dm_apply_two_qubit_kraus(device const float* inReal [[buffer(0)]],
     }
 
     float2 accum = float2(0.0f, 0.0f);
+    float2 accumComp = float2(0.0f, 0.0f);
     for (uint k = 0u; k < krausCount; k++) {
         const uint base = k * 16u;
         for (uint rp = 0u; rp < 4u; rp++) {
@@ -198,11 +208,12 @@ kernel void dm_apply_two_qubit_kraus(device const float* inReal [[buffer(0)]],
             }
             // (E_k rho E_k^dagger)_{rIdx,cIdx} term: E_{rIdx,rp} * rho * conj(E_{cIdx,cp}).
             float2 inner = float2(0.0f, 0.0f);
+            float2 innerComp = float2(0.0f, 0.0f);
             for (uint cp = 0u; cp < 4u; cp++) {
                 const float2 e_c = dm_complex_conj(krausData[base + cIdx * 4u + cp]);
-                inner = dm_complex_add(inner, dm_complex_mul(block[rp][cp], e_c));
+                dm_kahan_add_complex(inner, innerComp, dm_complex_mul(block[rp][cp], e_c));
             }
-            accum = dm_complex_add(accum, dm_complex_mul(e_r, inner));
+            dm_kahan_add_complex(accum, accumComp, dm_complex_mul(e_r, inner));
         }
     }
 
@@ -242,6 +253,7 @@ kernel void dm_apply_kraus_single_qubit(device const float* inReal [[buffer(0)]]
     const float2 rho11 = float2(inReal[dm_index(row1, col1, stateCount)], inImag[dm_index(row1, col1, stateCount)]);
 
     float2 accum = float2(0.0f, 0.0f);
+    float2 accumComp = float2(0.0f, 0.0f);
     for (uint k = 0u; k < krausCount; k++) {
         const uint offset = k * 4u;
         const float2 e_r0 = krausData[offset + (rowBit * 2u) + 0u];
@@ -251,11 +263,12 @@ kernel void dm_apply_kraus_single_qubit(device const float* inReal [[buffer(0)]]
         const float2 e_c1 = dm_complex_conj(krausData[offset + (colBit * 2u) + 1u]);
 
         float2 term = float2(0.0f, 0.0f);
-        term = dm_complex_add(term, dm_complex_mul(dm_complex_mul(e_r0, rho00), e_c0));
-        term = dm_complex_add(term, dm_complex_mul(dm_complex_mul(e_r0, rho01), e_c1));
-        term = dm_complex_add(term, dm_complex_mul(dm_complex_mul(e_r1, rho10), e_c0));
-        term = dm_complex_add(term, dm_complex_mul(dm_complex_mul(e_r1, rho11), e_c1));
-        accum = dm_complex_add(accum, term);
+        float2 termComp = float2(0.0f, 0.0f);
+        dm_kahan_add_complex(term, termComp, dm_complex_mul(dm_complex_mul(e_r0, rho00), e_c0));
+        dm_kahan_add_complex(term, termComp, dm_complex_mul(dm_complex_mul(e_r0, rho01), e_c1));
+        dm_kahan_add_complex(term, termComp, dm_complex_mul(dm_complex_mul(e_r1, rho10), e_c0));
+        dm_kahan_add_complex(term, termComp, dm_complex_mul(dm_complex_mul(e_r1, rho11), e_c1));
+        dm_kahan_add_complex(accum, accumComp, term);
     }
 
     outReal[id] = accum.x;

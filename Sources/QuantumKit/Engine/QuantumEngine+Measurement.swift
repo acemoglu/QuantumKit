@@ -144,13 +144,15 @@ extension QuantumEngine {
         }
 
         let invNorm = 1 / totalProbability.squareRoot()
+        let maxFloat32 = Double(Float32.greatestFiniteMagnitude)
+        let safeInvNorm = min(invNorm, maxFloat32)
 
         guard let normalizeCommandBuffer = commandQueue.makeCommandBuffer(),
               let normalizeEncoder = normalizeCommandBuffer.makeComputeCommandEncoder() else {
             throw QuantumEngineError.commandBufferCreationFailed
         }
 
-        var invNormValue = QFloat(invNorm)
+        var invNormValue = QFloat(safeInvNorm)
         dispatchFullStateKernel(encoder: normalizeEncoder, pipeline: pipelines.normalize, state: state) { encoder in
             encoder.setBytes(&invNormValue, length: MemoryLayout<QFloat>.stride, index: 2)
         }
@@ -241,6 +243,7 @@ extension QuantumEngine {
             let nextBlockCount = (blockCount + blockSize - 1) / blockSize
             var inBlockCountValue = UInt32(blockCount)
             var binCountReduce = UInt32(binCount)
+            // WARNING: Pooled buffers contain uninitialized memory from prior runs. The readLoFlag MUST be preserved to prevent probability corruption.
             var readLoFlag: UInt32 = producedLo ? 1 : 0
             encoder.setComputePipelineState(pipelines.marginalPartialsReduce)
             encoder.setBuffer(readHi, offset: 0, index: 0)

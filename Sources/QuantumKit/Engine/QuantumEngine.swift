@@ -253,6 +253,7 @@ final class BufferPool: @unchecked Sendable {
         if var bucket = freeBuffersByLength[length], let reused = bucket.popLast() {
             freeBuffersByLength[length] = bucket
             lock.unlock()
+            memset(reused.contents(), 0, length)
             return reused
         }
         lock.unlock()
@@ -261,6 +262,7 @@ final class BufferPool: @unchecked Sendable {
               let buffer = device.makeBuffer(length: length, options: .storageModeShared) else {
             throw QuantumEngineError.bufferAllocationFailed(requiredBytes: max(length, 0))
         }
+        memset(buffer.contents(), 0, length)
         return buffer
     }
 
@@ -361,6 +363,11 @@ public final class QuantumEngine: @unchecked Sendable {
     }
 
     public init(renormalizationInterval: Int = 50) throws {
+        let scanBlockSize = Self.scanBlockSize
+        precondition(scanBlockSize > 0 && (scanBlockSize & (scanBlockSize - 1)) == 0, "Metal threadgroup dimensions MUST be exact powers of two for binary tree reductions to work.")
+        let renormalizationBlockSize = Self.renormalizationBlockSize
+        precondition(renormalizationBlockSize > 0 && (renormalizationBlockSize & (renormalizationBlockSize - 1)) == 0, "Metal threadgroup dimensions MUST be exact powers of two for binary tree reductions to work.")
+
         guard let defaultDevice = MTLCreateSystemDefaultDevice() else { throw QuantumEngineError.deviceNotFound }
         self.device = defaultDevice
         self.renormalizationInterval = max(0, renormalizationInterval)

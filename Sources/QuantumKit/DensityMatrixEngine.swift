@@ -12,6 +12,7 @@ public enum DensityMatrixEngineError: Error {
     case unsupportedGate(Gate)
     case nonUnitaryGateUnsupported(Gate)
     case zeroProbabilityMeasurement(qubit: Int)
+    case invalidTraceForRenormalization(trace: Double)
 }
 
 public final class DensityMatrixEngine: @unchecked Sendable {
@@ -48,12 +49,14 @@ public final class DensityMatrixEngine: @unchecked Sendable {
     let commandQueue: MTLCommandQueue
     let bufferPool: BufferPool
     let pipelines: Pipelines
+    public let renormalizationInterval: Int
 
-    public init() throws {
+    public init(renormalizationInterval: Int = 50) throws {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw DensityMatrixEngineError.deviceNotFound
         }
         self.device = device
+        self.renormalizationInterval = max(0, renormalizationInterval)
         guard let commandQueue = device.makeCommandQueue() else {
             throw DensityMatrixEngineError.commandQueueCreationFailed
         }
@@ -84,12 +87,25 @@ public final class DensityMatrixEngine: @unchecked Sendable {
         let scratchBytes = density.elementCount * MemoryLayout<QFloat>.stride
         let scratchReal = try bufferPool.acquire(length: scratchBytes)
         let scratchImag = try bufferPool.acquire(length: scratchBytes)
+        // The scratch buffers are shared by every gate/channel command buffer dispatched below. With
+        // the per-gate `waitUntilCompleted` calls removed, returning them synchronously here could
+        // hand a buffer still referenced by an in-flight command buffer back to the pool. Reclaim
+        // them through a trailing command buffer on the serial, in-order queue: its completion
+        // handler returns them to the pool only once every earlier dispatch — and therefore every use
+        // of scratch — has finished. This is correct on both the normal and the early-`throw` exits.
         defer {
-            bufferPool.release(scratchReal)
-            bufferPool.release(scratchImag)
+            if let reclaimBuffer = commandQueue.makeCommandBuffer() {
+                bufferPool.release(scratchReal, after: reclaimBuffer)
+                bufferPool.release(scratchImag, after: reclaimBuffer)
+                reclaimBuffer.commit()
+            } else {
+                bufferPool.release(scratchReal)
+                bufferPool.release(scratchImag)
+            }
         }
 
         var measurementOutcomes: [[Int]] = []
+        var appliedGateCount = 0
 
         for gate in circuit.gates {
             switch gate {
@@ -129,12 +145,72 @@ public final class DensityMatrixEngine: @unchecked Sendable {
                     try applyNoiseChannels(after: gate, on: density, noise: noise, scratchReal: scratchReal, scratchImag: scratchImag)
                 }
             }
+
+            appliedGateCount += 1
+            if shouldRenormalize(afterAppliedGateCount: appliedGateCount) {
+                try renormalizeTrace(of: density)
+            }
         }
 
+        // Every gate/channel above is committed without blocking the CPU. Drain the serial queue
+        // once here so all GPU writes to the density buffers are complete and visible to the host
+        // before the caller inspects them (e.g. via `probabilities`) after `executeRNG` returns.
+        try drainPipeline()
         return CircuitExecutionResult(measurementOutcomes: measurementOutcomes)
     }
 
+    func shouldRenormalize(afterAppliedGateCount gateCount: Int) -> Bool {
+        renormalizationInterval > 0 && gateCount % renormalizationInterval == 0
+    }
+
+    /// Commits a single empty command buffer on the serial, in-order ``commandQueue`` and blocks
+    /// until it — and therefore every gate/channel buffer committed before it — has completed.
+    ///
+    /// Because the queue is serial and executes in commit order, awaiting one trailing buffer
+    /// guarantees all earlier work has finished. This is the single synchronization point the host
+    /// needs before reading the shared density buffers, now that individual gate/channel dispatches
+    /// no longer call `waitUntilCompleted`.
+    func drainPipeline() throws {
+        guard let commandBuffer = commandQueue.makeCommandBuffer() else {
+            throw DensityMatrixEngineError.commandBufferCreationFailed
+        }
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+        if let error = commandBuffer.error {
+            throw DensityMatrixEngineError.commandBufferExecutionFailed(underlying: error)
+        }
+    }
+
+    /// Periodically restores unit trace by scaling ρ <- ρ / Tr(ρ). This is a host-side correction
+    /// against accumulated Float32 rounding drift across deep Kraus/noise stacks.
+    func renormalizeTrace(of density: DensityMatrix) throws {
+        try drainPipeline()
+
+        let real = density.realBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let imag = density.imagBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let stateCount = density.stateCount
+
+        var trace = 0.0
+        for i in 0..<stateCount {
+            trace += Double(real[i * stateCount + i])
+        }
+
+        guard trace.isFinite, trace > 0 else {
+            throw DensityMatrixEngineError.invalidTraceForRenormalization(trace: trace)
+        }
+
+        let invTrace = QFloat(1.0 / trace)
+        for i in 0..<density.elementCount {
+            real[i] *= invTrace
+            imag[i] *= invTrace
+        }
+    }
+
     public func probabilities(of density: DensityMatrix) -> [QFloat] {
+        // Synchronize before this host read. The drain only fences the queue (it encodes no kernels
+        // of its own), so its only failure mode is command-buffer creation under extreme memory
+        // pressure; there is no meaningful error to surface from this non-throwing accessor.
+        try? drainPipeline()
         let real = density.realBuffer.contents().assumingMemoryBound(to: QFloat.self)
         return (0..<density.stateCount).map { basis in
             real[basis * density.stateCount + basis]
@@ -149,7 +225,11 @@ public final class DensityMatrixEngine: @unchecked Sendable {
     ) throws {
         let encoded = try encodeSingleQubitUnitary(gate)
         let matrixBuffer = try acquirePooledMatrixBuffer(values: encoded.matrix)
-        defer { bufferPool.release(matrixBuffer) }
+        // Until the buffer is handed to a committed command buffer (via `release(_:after:)` below),
+        // any early `throw` must still return it to the pool. A synchronous release is safe on that
+        // path only because no command buffer has been committed yet, so the buffer is still idle.
+        var unsubmittedMatrixBuffer: MTLBuffer? = matrixBuffer
+        defer { if let buffer = unsubmittedMatrixBuffer { bufferPool.release(buffer) } }
 
         guard let commandBuffer = commandQueue.makeCommandBuffer(),
               let encoder = commandBuffer.makeComputeCommandEncoder() else {
@@ -200,11 +280,11 @@ public final class DensityMatrixEngine: @unchecked Sendable {
         )
 
         encoder.endEncoding()
+        // Hand the gate matrix back to the pool only once this command buffer completes, then commit
+        // without blocking. The serial queue keeps this gate ordered after all earlier gate work.
+        bufferPool.release(matrixBuffer, after: commandBuffer)
+        unsubmittedMatrixBuffer = nil
         commandBuffer.commit()
-        commandBuffer.waitUntilCompleted()
-        if let error = commandBuffer.error {
-            throw DensityMatrixEngineError.commandBufferExecutionFailed(underlying: error)
-        }
     }
 
     private func applyNoiseChannels(
@@ -276,7 +356,11 @@ public final class DensityMatrixEngine: @unchecked Sendable {
     ) throws {
         let flat = kraus.flatMap { $0 }
         let krausBuffer = try acquirePooledMatrixBuffer(values: flat)
-        defer { bufferPool.release(krausBuffer) }
+        // Until the buffer is handed to a committed command buffer (via `release(_:after:)` below),
+        // an early `throw` must still return it to the pool. The synchronous release on that path is
+        // safe only because no command buffer has been committed yet, so the buffer is still idle.
+        var unsubmittedKrausBuffer: MTLBuffer? = krausBuffer
+        defer { if let buffer = unsubmittedKrausBuffer { bufferPool.release(buffer) } }
 
         guard let commandBuffer = commandQueue.makeCommandBuffer(),
               let encoder = commandBuffer.makeComputeCommandEncoder() else {
@@ -310,11 +394,11 @@ public final class DensityMatrixEngine: @unchecked Sendable {
         blit.copy(from: scratchImag, sourceOffset: 0, to: density.imagBuffer, destinationOffset: 0, size: density.imagBuffer.length)
         blit.endEncoding()
 
+        // Reclaim the Kraus matrix only once this command buffer completes, then commit without
+        // blocking; the serial queue keeps the channel ordered after all earlier work.
+        bufferPool.release(krausBuffer, after: commandBuffer)
+        unsubmittedKrausBuffer = nil
         commandBuffer.commit()
-        commandBuffer.waitUntilCompleted()
-        if let error = commandBuffer.error {
-            throw DensityMatrixEngineError.commandBufferExecutionFailed(underlying: error)
-        }
     }
 
     /// Depolarizing noise, dispatched by the number of qubits the originating gate touches so that
@@ -452,7 +536,11 @@ public final class DensityMatrixEngine: @unchecked Sendable {
         scratchImag: MTLBuffer
     ) throws {
         let krausBuffer = try acquirePooledMatrixBuffer(values: krausFlat)
-        defer { bufferPool.release(krausBuffer) }
+        // Until the buffer is handed to a committed command buffer (via `release(_:after:)` below),
+        // an early `throw` must still return it to the pool. The synchronous release on that path is
+        // safe only because no command buffer has been committed yet, so the buffer is still idle.
+        var unsubmittedKrausBuffer: MTLBuffer? = krausBuffer
+        defer { if let buffer = unsubmittedKrausBuffer { bufferPool.release(buffer) } }
 
         guard let commandBuffer = commandQueue.makeCommandBuffer(),
               let encoder = commandBuffer.makeComputeCommandEncoder() else {
@@ -488,11 +576,11 @@ public final class DensityMatrixEngine: @unchecked Sendable {
         blit.copy(from: scratchImag, sourceOffset: 0, to: density.imagBuffer, destinationOffset: 0, size: density.imagBuffer.length)
         blit.endEncoding()
 
+        // Reclaim the Kraus matrix only once this command buffer completes, then commit without
+        // blocking; the serial queue keeps the channel ordered after all earlier work.
+        bufferPool.release(krausBuffer, after: commandBuffer)
+        unsubmittedKrausBuffer = nil
         commandBuffer.commit()
-        commandBuffer.waitUntilCompleted()
-        if let error = commandBuffer.error {
-            throw DensityMatrixEngineError.commandBufferExecutionFailed(underlying: error)
-        }
     }
 
     /// Single-qubit Pauli as a 2×2 row-major matrix (axis 0=I, 1=X, 2=Y, 3=Z).
@@ -508,6 +596,12 @@ public final class DensityMatrixEngine: @unchecked Sendable {
     /// Kronecker product of two 2×2 row-major matrices into a 4×4 row-major matrix, with `a` as the
     /// high-order factor: `out[(iₐ·2+i_b)·4 + (jₐ·2+j_b)] = a[iₐ·2+jₐ] · b[i_b·2+j_b]`.
     private func kron(_ a: [SIMD2<QFloat>], _ b: [SIMD2<QFloat>]) -> [SIMD2<QFloat>] {
+        let enforcesHighOrderBitA = true
+        precondition(
+            enforcesHighOrderBitA,
+            "CRITICAL ARCHITECTURAL CONTRACT: The Metal kernel dm2_pair_index strictly assumes qubitA is the high-order bit. Do NOT modify this Kronecker product ordering without symmetrically updating the Metal shader bit shifts."
+        )
+
         var out = [SIMD2<QFloat>](repeating: complex(0, 0), count: 16)
         for ia in 0..<2 {
             for ja in 0..<2 {
@@ -586,7 +680,7 @@ public final class DensityMatrixEngine: @unchecked Sendable {
         bits.reserveCapacity(qubits.count)
 
         for qubit in qubits {
-            let p0 = diagonalPopulation(of: density, qubit: qubit, bit: 0)
+            let p0 = try diagonalPopulation(of: density, qubit: qubit, bit: 0)
             let dice = rng.nextUnitDouble()
             let outcome = dice < p0 ? 0 : 1
             let probability = outcome == 0 ? p0 : 1 - p0
@@ -594,7 +688,10 @@ public final class DensityMatrixEngine: @unchecked Sendable {
                 throw DensityMatrixEngineError.zeroProbabilityMeasurement(qubit: qubit)
             }
 
-            let scale = QFloat(1 / probability.squareRoot())
+            let scaleFactor = 1 / probability.squareRoot()
+            let maxFloat32 = Double(Float32.greatestFiniteMagnitude)
+            let safeScaleFactor = min(scaleFactor, maxFloat32)
+            let scale = QFloat(safeScaleFactor)
             let projector: [SIMD2<QFloat>] = outcome == 0
                 ? [complex(scale, 0), complex(0, 0), complex(0, 0), complex(0, 0)] // Π0 / √p0
                 : [complex(0, 0), complex(0, 0), complex(0, 0), complex(scale, 0)] // Π1 / √p1
@@ -615,7 +712,11 @@ public final class DensityMatrixEngine: @unchecked Sendable {
     /// Population of outcome `bit` on `qubit`: Σ_i ρ_ii over basis states i whose q-th bit is `bit`.
     /// The diagonal of a valid density matrix is real and non-negative, so the imaginary part is
     /// ignored; the fold is done in `Double` to avoid Float32 cancellation, then clamped to [0, 1].
-    private func diagonalPopulation(of density: DensityMatrix, qubit: Int, bit: Int) -> Double {
+    private func diagonalPopulation(of density: DensityMatrix, qubit: Int, bit: Int) throws -> Double {
+        // This is a mid-circuit host read: the immediately preceding gates/channels (and any prior
+        // collapse in this measurement) were committed without blocking, so drain the serial queue
+        // before touching the shared density buffer to avoid reading stale, pre-dispatch contents.
+        try drainPipeline()
         let real = density.realBuffer.contents().assumingMemoryBound(to: QFloat.self)
         let stateCount = density.stateCount
         var sum = 0.0
@@ -778,9 +879,11 @@ public final class DensityMatrixEngine: @unchecked Sendable {
     }
 
     /// Acquires a shared scratch buffer from the ``BufferPool`` sized to `values` and copies them in.
-    /// The caller must `release` it back to the pool. Because every gate/Kraus dispatch here is
-    /// awaited synchronously (`waitUntilCompleted`), a released buffer is guaranteed idle and is
-    /// reused on the next gate — eliminating the per-gate `makeBuffer` allocation storm.
+    /// The caller must return it to the pool with ``BufferPool/release(_:after:)`` keyed to the
+    /// command buffer that consumes it, so it re-enters the free list only once the GPU has finished
+    /// — gate/Kraus dispatches are no longer awaited synchronously. This still eliminates the
+    /// per-gate `makeBuffer` allocation storm; under pipelining the pool simply grows to the number
+    /// of buffers in flight before stabilizing.
     private func acquirePooledMatrixBuffer<T>(values: [T]) throws -> MTLBuffer {
         let byteCount = values.count * MemoryLayout<T>.stride
         let buffer = try bufferPool.acquire(length: max(byteCount, 1))
