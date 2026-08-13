@@ -82,4 +82,36 @@ public final class StateVector {
         imagPointer.update(repeating: 0, count: stateCount)
         realPointer[0] = 1.0
     }
+
+    /// Copies amplitudes from shared Metal buffers into a host snapshot.
+    ///
+    /// Call only after GPU work on this state has completed (e.g. via ``QuantumEngine/drainPipeline()``
+    /// or after ``QuantumEngine/executeRNG`` returns). Prefer ``QuantumEngine/snapshot(_:)``.
+    public func snapshotHostAmplitudes() -> StateVectorSnapshot {
+        let realPointer = realBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let imagPointer = imagBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        var real = [Float](repeating: 0, count: stateCount)
+        var imag = [Float](repeating: 0, count: stateCount)
+        for index in 0..<stateCount {
+            real[index] = realPointer[index]
+            imag[index] = imagPointer[index]
+        }
+        return StateVectorSnapshot(qubitCount: qubitCount, real: real, imag: imag)
+    }
+
+    /// Writes a prior ``snapshotHostAmplitudes()`` back into the shared buffers (host-side only).
+    public func restoreHostAmplitudes(from snapshot: StateVectorSnapshot) throws {
+        guard snapshot.qubitCount == qubitCount else {
+            throw CheckpointError.qubitCountMismatch(expected: qubitCount, actual: snapshot.qubitCount)
+        }
+        guard snapshot.real.count == stateCount, snapshot.imag.count == stateCount else {
+            throw CheckpointError.elementCountMismatch(expected: stateCount, actual: snapshot.real.count)
+        }
+        let realPointer = realBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let imagPointer = imagBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        for index in 0..<stateCount {
+            realPointer[index] = snapshot.real[index]
+            imagPointer[index] = snapshot.imag[index]
+        }
+    }
 }

@@ -1,6 +1,9 @@
 import Foundation
 
 /// Host-side density matrix used by ``CPUDensityMatrixEngine``.
+///
+/// Thread-safety: one ``CPUDensityMatrix`` must not be mutated concurrently. Distinct instances may
+/// be evolved in parallel on separate engines; do not share one matrix across threads.
 public final class CPUDensityMatrix: @unchecked Sendable {
     public static let maxQubitCount = 8
 
@@ -48,6 +51,27 @@ public final class CPUDensityMatrix: @unchecked Sendable {
         (0..<stateCount).map { index in
             QFloat(max(0, real[index * stateCount + index]))
         }
+    }
+
+    /// Diagonal populations in Double for Float64 / analytic comparisons.
+    public func probabilitiesDouble() -> [Double] {
+        (0..<stateCount).map { index in
+            max(0, real[index * stateCount + index])
+        }
+    }
+
+    public func snapshot() -> CPUDensityMatrixSnapshot {
+        CPUDensityMatrixSnapshot(qubitCount: qubitCount, real: real, imag: imag)
+    }
+
+    public func restore(from snapshot: CPUDensityMatrixSnapshot) throws {
+        guard snapshot.qubitCount == qubitCount else {
+            throw CheckpointError.qubitCountMismatch(expected: qubitCount, actual: snapshot.qubitCount)
+        }
+        guard snapshot.real.count == elementCount, snapshot.imag.count == elementCount else {
+            throw CheckpointError.elementCountMismatch(expected: elementCount, actual: snapshot.real.count)
+        }
+        setMatrix(real: snapshot.real, imag: snapshot.imag)
     }
 
     func setMatrix(real newReal: [Double], imag newImag: [Double]) {

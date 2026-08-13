@@ -27,6 +27,8 @@ public struct SimulationPolicy: Sendable, Equatable {
     public var cpuStatevectorQubitLimit: Int
     /// Soft width cap for CPU density-matrix backends.
     public var cpuDensityMatrixQubitLimit: Int
+    /// Float32 (default / Metal) vs Float64 (CPU Double). See ``SimulationPrecision``.
+    public var precision: SimulationPrecision
 
     public init(
         statevectorQubitLimit: Int = StateVector.maxQubitCount,
@@ -34,7 +36,8 @@ public struct SimulationPolicy: Sendable, Equatable {
         preferDensityMatrixWhenNoisy: Bool = true,
         devicePreference: SimulationDevicePreference = .automatic,
         cpuStatevectorQubitLimit: Int = CPUStateVector.maxQubitCount,
-        cpuDensityMatrixQubitLimit: Int = CPUDensityMatrix.maxQubitCount
+        cpuDensityMatrixQubitLimit: Int = CPUDensityMatrix.maxQubitCount,
+        precision: SimulationPrecision = .float32
     ) {
         self.statevectorQubitLimit = statevectorQubitLimit
         self.densityMatrixQubitLimit = densityMatrixQubitLimit
@@ -42,6 +45,7 @@ public struct SimulationPolicy: Sendable, Equatable {
         self.devicePreference = devicePreference
         self.cpuStatevectorQubitLimit = max(1, min(cpuStatevectorQubitLimit, CPUStateVector.maxQubitCount))
         self.cpuDensityMatrixQubitLimit = max(1, min(cpuDensityMatrixQubitLimit, CPUDensityMatrix.maxQubitCount))
+        self.precision = precision
     }
 
     public static let `default` = SimulationPolicy()

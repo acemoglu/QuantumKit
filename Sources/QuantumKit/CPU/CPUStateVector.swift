@@ -12,6 +12,10 @@ public enum CPUEngineError: Error, Equatable {
 }
 
 /// Host-side statevector used by ``CPUStatevectorEngine``.
+///
+/// Thread-safety: one ``CPUStateVector`` must not be mutated concurrently. Distinct instances may
+/// be evolved in parallel by separate ``CPUStatevectorEngine``s (or the same engine, if callers
+/// never share a state across threads).
 public final class CPUStateVector: @unchecked Sendable {
     public static let maxQubitCount = 16
 
@@ -57,6 +61,29 @@ public final class CPUStateVector: @unchecked Sendable {
         (0..<stateCount).map { index in
             QFloat(real[index] * real[index] + imag[index] * imag[index])
         }
+    }
+
+    /// Born-rule probabilities in Double (Float64 CPU path / analytic comparisons).
+    public func probabilitiesDouble() -> [Double] {
+        (0..<stateCount).map { index in
+            real[index] * real[index] + imag[index] * imag[index]
+        }
+    }
+
+    /// Captures amplitudes without exposing mutable storage aliases.
+    public func snapshot() -> CPUStateVectorSnapshot {
+        CPUStateVectorSnapshot(qubitCount: qubitCount, real: real, imag: imag)
+    }
+
+    /// Restores amplitudes from ``snapshot()``.
+    public func restore(from snapshot: CPUStateVectorSnapshot) throws {
+        guard snapshot.qubitCount == qubitCount else {
+            throw CheckpointError.qubitCountMismatch(expected: qubitCount, actual: snapshot.qubitCount)
+        }
+        guard snapshot.real.count == stateCount, snapshot.imag.count == stateCount else {
+            throw CheckpointError.elementCountMismatch(expected: stateCount, actual: snapshot.real.count)
+        }
+        setAmplitudes(real: snapshot.real, imag: snapshot.imag)
     }
 
     func setAmplitudes(real newReal: [Double], imag newImag: [Double]) {

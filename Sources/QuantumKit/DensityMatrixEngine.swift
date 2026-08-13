@@ -15,6 +15,11 @@ public enum DensityMatrixEngineError: Error {
     case invalidTraceForRenormalization(trace: Double)
 }
 
+/// Metal density-matrix engine.
+///
+/// Thread-safety: the engine may be shared across threads (`MTLCommandQueue` + buffer pool are
+/// synchronized). A single ``DensityMatrix`` must not be mutated concurrently. Distinct matrices
+/// may run in parallel. Prefer one engine instance per concurrent worker when practical.
 public final class DensityMatrixEngine: @unchecked Sendable {
     struct Pipelines: @unchecked Sendable {
         let leftMultiplySingleQubit: MTLComputePipelineState
@@ -78,12 +83,20 @@ public final class DensityMatrixEngine: @unchecked Sendable {
         _ circuit: QuantumCircuit,
         on density: DensityMatrix,
         rng: inout QuantumRNG,
-        noise: NoiseModel? = nil
+        noise: NoiseModel? = nil,
+        runState: CircuitRunState = .full,
+        cancellationCheck: (() throws -> Void)? = nil
     ) throws -> CircuitExecutionResult {
         guard circuit.qubitCount == density.qubitCount else {
             throw DensityMatrixEngineError.qubitCountMismatch(circuit: circuit.qubitCount, matrix: density.qubitCount)
         }
         try circuit.requireFullyBound()
+        let instructionRange = try CircuitRunStateValidation.resolvedRange(
+            gateCount: circuit.gates.count,
+            runState: runState
+        )
+        // Drain on all exits so cancel/error paths do not leave in-flight GPU work unbound.
+        defer { try? drainPipeline() }
 
         let scratchBytes = density.elementCount * MemoryLayout<QFloat>.stride
         let scratchReal = try bufferPool.acquire(length: scratchBytes)
@@ -105,9 +118,10 @@ public final class DensityMatrixEngine: @unchecked Sendable {
             }
         }
 
-        var measurementOutcomes: [[Int]] = []
-        var appliedGateCount = 0
-        var classicalMemory = ClassicalMemory(
+        var measurementOutcomes = runState.measurementOutcomes
+        var appliedGateCount = runState.appliedGateCount
+        var classicalMemory = runState.classicalMemory
+            ?? ClassicalMemory(
             registerWidths: circuit.classicalRegisters.map(\.bitCount)
         )
 
@@ -251,8 +265,9 @@ public final class DensityMatrixEngine: @unchecked Sendable {
             }
         }
 
-        for (gateIndex, gate) in circuit.gates.enumerated() {
-            try executeRuntimeGate(gate, at: gateIndex)
+        for gateIndex in instructionRange {
+            try cancellationCheck?()
+            try executeRuntimeGate(circuit.gates[gateIndex], at: gateIndex)
         }
 
         // Every gate/channel above is committed without blocking the CPU. Drain the serial queue
@@ -261,8 +276,21 @@ public final class DensityMatrixEngine: @unchecked Sendable {
         try drainPipeline()
         return CircuitExecutionResult(
             measurementOutcomes: measurementOutcomes,
-            classicalMemory: classicalMemory
+            classicalMemory: classicalMemory,
+            appliedGateCount: appliedGateCount
         )
+    }
+
+    /// Drains GPU work, then copies ρ into a host snapshot.
+    public func snapshot(_ density: DensityMatrix) throws -> DensityMatrixSnapshot {
+        try drainPipeline()
+        return density.snapshotHostMatrix()
+    }
+
+    /// Restores ρ from a host snapshot after draining any in-flight work.
+    public func restore(_ density: DensityMatrix, from snapshot: DensityMatrixSnapshot) throws {
+        try drainPipeline()
+        try density.restoreHostMatrix(from: snapshot)
     }
 
     func shouldRenormalize(afterAppliedGateCount gateCount: Int) -> Bool {

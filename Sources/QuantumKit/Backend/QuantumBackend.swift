@@ -118,6 +118,10 @@ public enum QuantumBackendFactory {
 }
 
 /// GPU state-vector backend backed by ``QuantumEngine``.
+///
+/// Thread-safety: safe to share the backend/engine across threads. Do not mutate one
+/// ``StateVector`` concurrently; concurrent runs on distinct states (including batched shots)
+/// are supported. Prefer a shared ``MTLDevice`` via ``MetalRuntime``.
 public final class StatevectorBackend: QuantumBackend, @unchecked Sendable {
     public let engine: QuantumEngine
     public var method: QuantumSimulationMethod { .statevector }
@@ -176,6 +180,9 @@ public final class StatevectorBackend: QuantumBackend, @unchecked Sendable {
 }
 
 /// GPU density-matrix backend backed by ``DensityMatrixEngine``.
+///
+/// Thread-safety: share the backend across threads only with distinct ``DensityMatrix``
+/// instances per concurrent run.
 public final class DensityMatrixBackend: QuantumBackend, @unchecked Sendable {
     public let engine: DensityMatrixEngine
     public var method: QuantumSimulationMethod { .densityMatrix }
@@ -212,14 +219,14 @@ public final class DensityMatrixBackend: QuantumBackend, @unchecked Sendable {
     }
 }
 
-private func makeRNG(seed: UInt64?) -> QuantumRNG {
+func makeRNG(seed: UInt64?) -> QuantumRNG {
     if let seed {
         return .seeded(seed)
     }
     return .hardware
 }
 
-private func makeMetadata(
+func makeMetadata(
     circuit: QuantumCircuit,
     options: QuantumRunOptions,
     started: DispatchTime,

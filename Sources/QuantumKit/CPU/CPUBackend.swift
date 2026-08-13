@@ -16,7 +16,7 @@ extension QuantumBackendFactory {
         qubitCount: Int? = nil,
         policy: SimulationPolicy = .default
     ) throws -> any QuantumBackend {
-        switch try resolveDevice(devicePreference) {
+        switch try resolveDevice(devicePreference, precision: policy.precision) {
         case .metal:
             return try StatevectorBackend(renormalizationInterval: renormalizationInterval)
         case .cpu:
@@ -37,7 +37,7 @@ extension QuantumBackendFactory {
         qubitCount: Int? = nil,
         policy: SimulationPolicy = .default
     ) throws -> any QuantumBackend {
-        switch try resolveDevice(devicePreference) {
+        switch try resolveDevice(devicePreference, precision: policy.precision) {
         case .metal:
             return try DensityMatrixBackend(renormalizationInterval: renormalizationInterval)
         case .cpu:
@@ -56,7 +56,19 @@ extension QuantumBackendFactory {
         case cpu
     }
 
-    private static func resolveDevice(_ preference: SimulationDevicePreference) throws -> ResolvedDevice {
+    private static func resolveDevice(
+        _ preference: SimulationDevicePreference,
+        precision: SimulationPrecision = .float32
+    ) throws -> ResolvedDevice {
+        if precision == .float64 {
+            // Metal shaders/buffers are Float32-only; Float64 is CPU Double.
+            switch preference {
+            case .metal:
+                throw SimulationPrecisionError.metalFloat64Unsupported
+            case .cpu, .automatic:
+                return .cpu
+            }
+        }
         switch preference {
         case .cpu:
             return .cpu
@@ -72,6 +84,9 @@ extension QuantumBackendFactory {
 }
 
 /// CPU statevector backend backed by ``CPUStatevectorEngine``.
+///
+/// Thread-safety: backend/engine may be shared; do not run concurrent shots that mutate a shared
+/// ``CPUStateVector``. Distinct per-shot states (as in ``run``) are safe across concurrent backends.
 public final class CPUStatevectorBackend: QuantumBackend, @unchecked Sendable {
     public let engine: CPUStatevectorEngine
     public var method: QuantumSimulationMethod { .statevector }
@@ -129,6 +144,9 @@ public final class CPUStatevectorBackend: QuantumBackend, @unchecked Sendable {
 }
 
 /// CPU density-matrix backend backed by ``CPUDensityMatrixEngine``.
+///
+/// Thread-safety: share freely across threads only when each call uses a distinct
+/// ``CPUDensityMatrix`` (``run`` allocates one per invocation).
 public final class CPUDensityMatrixBackend: QuantumBackend, @unchecked Sendable {
     public let engine: CPUDensityMatrixEngine
     public var method: QuantumSimulationMethod { .densityMatrix }
@@ -164,12 +182,12 @@ public final class CPUDensityMatrixBackend: QuantumBackend, @unchecked Sendable 
     }
 }
 
-private func makeCPURNG(seed: UInt64?) -> QuantumRNG {
+func makeCPURNG(seed: UInt64?) -> QuantumRNG {
     if let seed { return .seeded(seed) }
     return .hardware
 }
 
-private func makeCPUMetadata(
+func makeCPUMetadata(
     circuit: QuantumCircuit,
     options: QuantumRunOptions,
     started: DispatchTime,

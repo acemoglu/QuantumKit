@@ -1,6 +1,9 @@
 import Foundation
 
 /// Host-side density-matrix engine mirroring ``DensityMatrixEngine`` CPTP semantics without Metal.
+///
+/// Thread-safety: share the engine across threads if desired, but never mutate the same
+/// ``CPUDensityMatrix`` concurrently. Concurrent runs on distinct matrices are supported.
 public final class CPUDensityMatrixEngine: @unchecked Sendable {
     public let renormalizationInterval: Int
 
@@ -21,18 +24,23 @@ public final class CPUDensityMatrixEngine: @unchecked Sendable {
         _ circuit: QuantumCircuit,
         on density: CPUDensityMatrix,
         rng: inout QuantumRNG,
-        noise: NoiseModel? = nil
+        noise: NoiseModel? = nil,
+        runState: CircuitRunState = .full,
+        cancellationCheck: (() throws -> Void)? = nil
     ) throws -> CircuitExecutionResult {
         guard circuit.qubitCount == density.qubitCount else {
             throw CPUEngineError.qubitCountMismatch(circuit: circuit.qubitCount, state: density.qubitCount)
         }
         try circuit.requireFullyBound()
-
-        var measurementOutcomes: [[Int]] = []
-        var appliedGateCount = 0
-        var classicalMemory = ClassicalMemory(
-            registerWidths: circuit.classicalRegisters.map(\.bitCount)
+        let instructionRange = try CircuitRunStateValidation.resolvedRange(
+            gateCount: circuit.gates.count,
+            runState: runState
         )
+
+        var measurementOutcomes = runState.measurementOutcomes
+        var appliedGateCount = runState.appliedGateCount
+        var classicalMemory = runState.classicalMemory
+            ?? ClassicalMemory(registerWidths: circuit.classicalRegisters.map(\.bitCount))
 
         func executeRuntimeGate(_ gate: Gate, at gateIndex: Int) throws {
             switch gate {
@@ -95,18 +103,20 @@ public final class CPUDensityMatrixEngine: @unchecked Sendable {
             }
         }
 
-        for (gateIndex, gate) in circuit.gates.enumerated() {
-            try executeRuntimeGate(gate, at: gateIndex)
+        for gateIndex in instructionRange {
+            try cancellationCheck?()
+            try executeRuntimeGate(circuit.gates[gateIndex], at: gateIndex)
         }
         renormalizeTrace(of: density)
 
         return CircuitExecutionResult(
             measurementOutcomes: measurementOutcomes,
-            classicalMemory: classicalMemory
+            classicalMemory: classicalMemory,
+            appliedGateCount: appliedGateCount
         )
     }
 
-    // MARK: - Unitary
+// MARK: - Unitary
 
     func applyUnitaryGate(_ gate: Gate, on density: CPUDensityMatrix) throws {
         let pieces = try QuantumEngine.expandForExecution(gate)

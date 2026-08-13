@@ -501,12 +501,21 @@ public final class QuantumEngine: @unchecked Sendable {
         _ circuit: QuantumCircuit,
         on state: StateVector,
         rng: inout QuantumRNG,
-        noise: NoiseModel? = nil
+        noise: NoiseModel? = nil,
+        runState: CircuitRunState = .full,
+        cancellationCheck: (() throws -> Void)? = nil
     ) throws -> CircuitExecutionResult {
         guard circuit.qubitCount == state.qubitCount else {
             throw QuantumEngineError.qubitCountMismatch(circuit: circuit.qubitCount, state: state.qubitCount)
         }
         try circuit.requireFullyBound()
+        let instructionRange = try CircuitRunStateValidation.resolvedRange(
+            gateCount: circuit.gates.count,
+            runState: runState
+        )
+        // Always drain on exit (success, cancel, or other error) so in-flight command buffers
+        // complete before buffer-pool reuse or host inspection.
+        defer { try? drainPipeline() }
 
         if let noise, noise.hasLocalizedGateNoise {
             throw QuantumEngineError.localizedNoiseRequiresDensityMatrixBackend
@@ -516,10 +525,11 @@ public final class QuantumEngine: @unchecked Sendable {
         }
 
         let noiseEnabled = noise?.hasGateNoise == true
-        var measurementOutcomes: [[Int]] = []
+        var measurementOutcomes = runState.measurementOutcomes
         var pendingUnitaryGates: [Gate] = []
-        var unitaryGateCounter = 0
-        var classicalMemory = ClassicalMemory(
+        var unitaryGateCounter = runState.appliedGateCount
+        var classicalMemory = runState.classicalMemory
+            ?? ClassicalMemory(
             registerWidths: circuit.classicalRegisters.map(\.bitCount)
         )
 
@@ -656,8 +666,9 @@ public final class QuantumEngine: @unchecked Sendable {
             }
         }
 
-        for gate in circuit.gates {
-            try executeRuntimeGate(gate)
+        for index in instructionRange {
+            try cancellationCheck?()
+            try executeRuntimeGate(circuit.gates[index])
         }
 
         try flushPendingUnitaryGates()
@@ -667,7 +678,20 @@ public final class QuantumEngine: @unchecked Sendable {
         try drainPipeline()
         return CircuitExecutionResult(
             measurementOutcomes: measurementOutcomes,
-            classicalMemory: classicalMemory
+            classicalMemory: classicalMemory,
+            appliedGateCount: unitaryGateCounter
         )
+    }
+
+    /// Drains GPU work, then copies ``StateVector`` amplitudes to a host snapshot.
+    public func snapshot(_ state: StateVector) throws -> StateVectorSnapshot {
+        try drainPipeline()
+        return state.snapshotHostAmplitudes()
+    }
+
+    /// Restores amplitudes from a host snapshot (caller should not have in-flight GPU work on `state`).
+    public func restore(_ state: StateVector, from snapshot: StateVectorSnapshot) throws {
+        try drainPipeline()
+        try state.restoreHostAmplitudes(from: snapshot)
     }
 }

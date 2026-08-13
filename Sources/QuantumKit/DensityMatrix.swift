@@ -12,6 +12,10 @@ public enum DensityMatrixError: Error {
 ///
 /// Stores a `2^n x 2^n` complex matrix in row-major order using two shared Metal buffers
 /// (real + imaginary components). Designed for low-qubit, high-fidelity noisy simulation.
+///
+/// Thread-safety: a single ``DensityMatrix`` must not be mutated concurrently. Distinct matrices
+/// may be evolved in parallel with the same or separate ``DensityMatrixEngine`` instances.
+/// Prefer one engine per concurrent worker when sharing an ``MTLDevice``.
 public final class DensityMatrix {
     public static let maxQubitCount = 14
 
@@ -65,5 +69,34 @@ public final class DensityMatrix {
         real.update(repeating: 0, count: elementCount)
         imag.update(repeating: 0, count: elementCount)
         real[0] = 1.0
+    }
+
+    /// Host copy of ρ after GPU work has drained. Prefer ``DensityMatrixEngine/snapshot(_:)``.
+    public func snapshotHostMatrix() -> DensityMatrixSnapshot {
+        let realPointer = realBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let imagPointer = imagBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        var real = [Float](repeating: 0, count: elementCount)
+        var imag = [Float](repeating: 0, count: elementCount)
+        for index in 0..<elementCount {
+            real[index] = realPointer[index]
+            imag[index] = imagPointer[index]
+        }
+        return DensityMatrixSnapshot(qubitCount: qubitCount, real: real, imag: imag)
+    }
+
+    /// Restores ρ from a host snapshot into the existing shared buffers.
+    public func restoreHostMatrix(from snapshot: DensityMatrixSnapshot) throws {
+        guard snapshot.qubitCount == qubitCount else {
+            throw CheckpointError.qubitCountMismatch(expected: qubitCount, actual: snapshot.qubitCount)
+        }
+        guard snapshot.real.count == elementCount, snapshot.imag.count == elementCount else {
+            throw CheckpointError.elementCountMismatch(expected: elementCount, actual: snapshot.real.count)
+        }
+        let realPointer = realBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let imagPointer = imagBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        for index in 0..<elementCount {
+            realPointer[index] = snapshot.real[index]
+            imagPointer[index] = snapshot.imag[index]
+        }
     }
 }

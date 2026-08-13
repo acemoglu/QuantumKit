@@ -149,7 +149,8 @@ public struct QuantumMeasurement {
         shots: Int,
         rng: inout QuantumRNG,
         noise: NoiseModel? = nil,
-        options: SampleCountOptions = SampleCountOptions()
+        options: SampleCountOptions = SampleCountOptions(),
+        cancellationCheck: (() throws -> Void)? = nil
     ) throws -> ShotCounts {
         try BatchSampleExecutor.runSampleCountsRNG(
             circuit: circuit,
@@ -157,7 +158,8 @@ public struct QuantumMeasurement {
             shots: shots,
             rng: &rng,
             noise: noise,
-            options: options
+            options: options,
+            cancellationCheck: cancellationCheck
         )
     }
 

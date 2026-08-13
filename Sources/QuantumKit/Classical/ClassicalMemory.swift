@@ -19,6 +19,10 @@ public enum ClassicalMemoryError: Error, Equatable {
 }
 
 /// Runtime classical bit storage updated by mid-circuit measurements.
+///
+/// ``ClassicalMemory`` is a value type: copy freely, snapshot via ``Codable`` / ``snapshot()``, and
+/// restore with ``init(snapshot:)`` or ``restore(from:)``. Safe to share across threads as an
+/// immutable value; mutate only from one execution context at a time.
 public struct ClassicalMemory: Sendable, Equatable, Codable {
     public let registerWidths: [Int]
     private(set) var registerValues: [Int]
@@ -26,6 +30,28 @@ public struct ClassicalMemory: Sendable, Equatable, Codable {
     public init(registerWidths: [Int] = []) {
         self.registerWidths = registerWidths
         self.registerValues = Array(repeating: 0, count: registerWidths.count)
+    }
+
+    /// Restores register values from a prior snapshot (widths must match).
+    public init(snapshot: ClassicalMemory) {
+        self.registerWidths = snapshot.registerWidths
+        self.registerValues = snapshot.registerValues
+    }
+
+    /// Value-type snapshot (identical to copying the struct).
+    public func snapshot() -> ClassicalMemory {
+        ClassicalMemory(snapshot: self)
+    }
+
+    /// Replaces register values from `other`. Widths must be identical.
+    public mutating func restore(from other: ClassicalMemory) throws {
+        guard other.registerWidths == registerWidths else {
+            throw ClassicalMemoryError.registerIndexOutOfBounds(
+                index: other.registerWidths.count,
+                count: registerWidths.count
+            )
+        }
+        registerValues = other.registerValues
     }
 
     public func value(ofRegister index: Int) -> Int {

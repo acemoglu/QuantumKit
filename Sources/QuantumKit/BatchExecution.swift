@@ -83,7 +83,8 @@ enum BatchSampleExecutor {
         shots: Int,
         rng: inout QuantumRNG,
         noise: NoiseModel?,
-        options: SampleCountOptions
+        options: SampleCountOptions,
+        cancellationCheck: (() throws -> Void)? = nil
     ) throws -> ShotCounts {
         let device = engine.device
         guard shots > 0 else {
@@ -101,6 +102,7 @@ enum BatchSampleExecutor {
         var completedShots = 0
 
         while completedShots < shots {
+            try cancellationCheck?()
             let activeCount = min(batchSize, shots - completedShots)
             let activeStates = Array(pool.states.prefix(activeCount))
 
@@ -116,12 +118,14 @@ enum BatchSampleExecutor {
                 }
             } else {
                 for state in activeStates {
+                    try cancellationCheck?()
                     state.resetToZero()
                     try engine.executeRNG(
                         circuit,
                         on: state,
                         rng: &rng,
-                        noise: gateNoise ? noise : nil
+                        noise: gateNoise ? noise : nil,
+                        cancellationCheck: cancellationCheck
                     )
                     let outcome = try engine.executeMeasurementCollapse(on: state, rng: &rng, noise: noise)
                     histogram[outcome, default: 0] += 1

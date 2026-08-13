@@ -1,6 +1,10 @@
 import Foundation
 
 /// Host-side statevector engine mirroring ``QuantumEngine/executeRNG`` semantics without Metal.
+///
+/// Thread-safety: the engine itself is safe to share across threads. Do **not** mutate the same
+/// ``CPUStateVector`` from concurrent `execute` / `executeRNG` calls. Concurrent runs on distinct
+/// states are supported.
 public final class CPUStatevectorEngine: @unchecked Sendable {
     public let renormalizationInterval: Int
 
@@ -21,12 +25,18 @@ public final class CPUStatevectorEngine: @unchecked Sendable {
         _ circuit: QuantumCircuit,
         on state: CPUStateVector,
         rng: inout QuantumRNG,
-        noise: NoiseModel? = nil
+        noise: NoiseModel? = nil,
+        runState: CircuitRunState = .full,
+        cancellationCheck: (() throws -> Void)? = nil
     ) throws -> CircuitExecutionResult {
         guard circuit.qubitCount == state.qubitCount else {
             throw CPUEngineError.qubitCountMismatch(circuit: circuit.qubitCount, state: state.qubitCount)
         }
         try circuit.requireFullyBound()
+        let instructionRange = try CircuitRunStateValidation.resolvedRange(
+            gateCount: circuit.gates.count,
+            runState: runState
+        )
 
         if let noise, noise.hasLocalizedGateNoise {
             throw CPUEngineError.localizedNoiseRequiresDensityMatrixBackend
@@ -36,11 +46,10 @@ public final class CPUStatevectorEngine: @unchecked Sendable {
         }
 
         let noiseEnabled = noise?.hasGateNoise == true
-        var measurementOutcomes: [[Int]] = []
-        var appliedGateCount = 0
-        var classicalMemory = ClassicalMemory(
-            registerWidths: circuit.classicalRegisters.map(\.bitCount)
-        )
+        var measurementOutcomes = runState.measurementOutcomes
+        var appliedGateCount = runState.appliedGateCount
+        var classicalMemory = runState.classicalMemory
+            ?? ClassicalMemory(registerWidths: circuit.classicalRegisters.map(\.bitCount))
 
         func applyNoise(after gate: Gate) throws {
             guard noiseEnabled, let noise else { return }
@@ -141,18 +150,20 @@ public final class CPUStatevectorEngine: @unchecked Sendable {
             }
         }
 
-        for gate in circuit.gates {
-            try executeRuntimeGate(gate)
+        for index in instructionRange {
+            try cancellationCheck?()
+            try executeRuntimeGate(circuit.gates[index])
         }
         try normalize(state)
 
         return CircuitExecutionResult(
             measurementOutcomes: measurementOutcomes,
-            classicalMemory: classicalMemory
+            classicalMemory: classicalMemory,
+            appliedGateCount: appliedGateCount
         )
     }
 
-    // MARK: - Unitaries
+// MARK: - Unitaries
 
     func applyUnitaryGate(_ gate: Gate, on state: CPUStateVector) throws {
         let pieces = try QuantumEngine.expandForExecution(gate)
@@ -247,7 +258,7 @@ public final class CPUStatevectorEngine: @unchecked Sendable {
         on state: CPUStateVector,
         qubits: [Int],
         rng: inout QuantumRNG,
-        noise: NoiseModel?
+        noise: NoiseModel? = nil
     ) throws -> Int {
         guard !qubits.isEmpty else {
             throw QuantumMeasurementError.emptyQubitSelection
