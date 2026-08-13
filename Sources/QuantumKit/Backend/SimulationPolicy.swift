@@ -5,21 +5,43 @@ public enum SimulationPolicyError: Error, Equatable {
     case densityMatrixRequiredButTooWide(requested: Int, max: Int)
 }
 
+/// Prefers Metal GPU engines when available, otherwise host CPU fallbacks.
+public enum SimulationDevicePreference: String, Sendable, Equatable, Codable {
+    /// Use Metal when a device exists; otherwise fall back to CPU.
+    case automatic
+    /// Require Metal; fail if unavailable.
+    case metal
+    /// Force host CPU engines.
+    case cpu
+}
+
 /// Tiering policy for automatic backend / method selection (B6 / F1).
 public struct SimulationPolicy: Sendable, Equatable {
     public var statevectorQubitLimit: Int
     public var densityMatrixQubitLimit: Int
     /// When noise has channels, prefer density-matrix if width fits.
     public var preferDensityMatrixWhenNoisy: Bool
+    /// Metal vs CPU engine selection.
+    public var devicePreference: SimulationDevicePreference
+    /// Soft width cap for CPU statevector backends.
+    public var cpuStatevectorQubitLimit: Int
+    /// Soft width cap for CPU density-matrix backends.
+    public var cpuDensityMatrixQubitLimit: Int
 
     public init(
         statevectorQubitLimit: Int = StateVector.maxQubitCount,
         densityMatrixQubitLimit: Int = DensityMatrix.maxQubitCount,
-        preferDensityMatrixWhenNoisy: Bool = true
+        preferDensityMatrixWhenNoisy: Bool = true,
+        devicePreference: SimulationDevicePreference = .automatic,
+        cpuStatevectorQubitLimit: Int = CPUStateVector.maxQubitCount,
+        cpuDensityMatrixQubitLimit: Int = CPUDensityMatrix.maxQubitCount
     ) {
         self.statevectorQubitLimit = statevectorQubitLimit
         self.densityMatrixQubitLimit = densityMatrixQubitLimit
         self.preferDensityMatrixWhenNoisy = preferDensityMatrixWhenNoisy
+        self.devicePreference = devicePreference
+        self.cpuStatevectorQubitLimit = max(1, min(cpuStatevectorQubitLimit, CPUStateVector.maxQubitCount))
+        self.cpuDensityMatrixQubitLimit = max(1, min(cpuDensityMatrixQubitLimit, CPUDensityMatrix.maxQubitCount))
     }
 
     public static let `default` = SimulationPolicy()
@@ -85,18 +107,29 @@ extension QuantumBackendFactory {
         )
     }
 
-    /// Builds the backend recommended by ``recommendMethod``.
+    /// Builds the backend recommended by ``recommendMethod`` using ``SimulationPolicy/devicePreference``.
     public static func makeRecommended(
         qubitCount: Int,
         noise: NoiseModel? = nil,
         policy: SimulationPolicy = .default,
         renormalizationInterval: Int = 50
     ) throws -> any QuantumBackend {
-        switch try recommendMethod(qubitCount: qubitCount, noise: noise, policy: policy) {
+        let method = try recommendMethod(qubitCount: qubitCount, noise: noise, policy: policy)
+        switch method {
         case .statevector:
-            return try makeStatevector(renormalizationInterval: renormalizationInterval)
+            return try makeStatevector(
+                renormalizationInterval: renormalizationInterval,
+                devicePreference: policy.devicePreference,
+                qubitCount: qubitCount,
+                policy: policy
+            )
         case .densityMatrix:
-            return try makeDensityMatrix(renormalizationInterval: renormalizationInterval)
+            return try makeDensityMatrix(
+                renormalizationInterval: renormalizationInterval,
+                devicePreference: policy.devicePreference,
+                qubitCount: qubitCount,
+                policy: policy
+            )
         }
     }
 

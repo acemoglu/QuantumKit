@@ -171,7 +171,8 @@ enum CircuitUnitary {
         abs(lhs.re - rhs.re) <= tolerance && abs(lhs.im - rhs.im) <= tolerance
     }
 
-    private static func matrix(for gate: Gate, qubitCount: Int) throws -> UnitaryMatrix {
+    /// Builds the embedded unitary for a single gate (used by CPU engines and equivalence checks).
+    static func matrix(for gate: Gate, qubitCount: Int) throws -> UnitaryMatrix {
         switch gate {
         case .h(let target):
             let v = 1.0 / sqrt(2.0)
