@@ -5,6 +5,12 @@ public enum CoherentRotationAxis: String, Sendable, Equatable, Codable, CaseIter
     case x, y, z
 }
 
+public enum QuantumChannelError: Error, Equatable {
+    case emptyKrausSet
+    case invalidKrausDimension(operatorIndex: Int, count: Int)
+    case pauliProbabilitiesExceedOne(sum: QFloat)
+}
+
 /// A physical noise channel attachable to specific gates or qubits.
 public enum QuantumChannel: Sendable, Equatable, Codable {
     case depolarizing(probability: QFloat)
@@ -27,6 +33,13 @@ public enum QuantumChannel: Sendable, Equatable, Codable {
     /// Coherent always-on ZZ crosstalk (C5): apply ``Gate/rzz`` with the given angle
     /// on the application pair. Requires exactly two application qubits.
     case correlatedZZ(angle: QFloat)
+    /// Arbitrary single-qubit Kraus channel (C2).
+    /// Each operator is a length-4 row-major 2×2 complex matrix.
+    /// Callers are responsible for supplying a valid (e.g. CPTP) set — this case does not validate completeness.
+    case kraus1Q(operators: [[ComplexAmplitude]])
+    /// General single-qubit Pauli channel (C2):
+    /// `(1-px-py-pz)ρ + px XρX + py YρY + pz ZρZ` with `px+py+pz ≤ 1`.
+    case pauliChannel(px: QFloat, py: QFloat, pz: QFloat)
 }
 
 extension QuantumChannel {
@@ -46,6 +59,10 @@ extension QuantumChannel {
             return p
         case .correlatedZZ(let angle):
             return abs(angle) > 0 ? 1 : 0
+        case .kraus1Q(let operators):
+            return operators.isEmpty ? 0 : 1
+        case .pauliChannel(let px, let py, let pz):
+            return px + py + pz
         }
     }
 
@@ -64,6 +81,10 @@ extension QuantumChannel {
             return p > 0
         case .correlatedZZ(let angle):
             return abs(angle) > 0
+        case .kraus1Q(let operators):
+            return !operators.isEmpty
+        case .pauliChannel(let px, let py, let pz):
+            return px + py + pz > 0
         }
     }
 
@@ -90,5 +111,46 @@ extension QuantumChannel {
     /// Imperfect |0⟩ / computational preparation: bit-flip with the given probability (C9).
     public static func preparationBitFlip(probability: QFloat) -> QuantumChannel {
         .pauliXFlip(probability: probability)
+    }
+
+    /// Validates shape and wraps a 1Q Kraus set (each operator: 4 complex entries, row-major).
+    /// Does not prove the set is CPTP.
+    public static func fromKraus1Q(_ operators: [[ComplexAmplitude]]) throws -> QuantumChannel {
+        guard !operators.isEmpty else { throw QuantumChannelError.emptyKrausSet }
+        for (index, op) in operators.enumerated() where op.count != 4 {
+            throw QuantumChannelError.invalidKrausDimension(operatorIndex: index, count: op.count)
+        }
+        return .kraus1Q(operators: operators)
+    }
+
+    /// Pauli channel with probabilities `px, py, pz` (sum must be ≤ 1).
+    public static func makePauliChannel(px: QFloat, py: QFloat, pz: QFloat) throws -> QuantumChannel {
+        let cx = min(max(px, 0), 1)
+        let cy = min(max(py, 0), 1)
+        let cz = min(max(pz, 0), 1)
+        let sum = cx + cy + cz
+        guard sum <= 1 + 1e-6 else {
+            throw QuantumChannelError.pauliProbabilitiesExceedOne(sum: sum)
+        }
+        return .pauliChannel(px: cx, py: cy, pz: min(cz, max(0, 1 - cx - cy)))
+    }
+
+    /// Pauli–Lindblad rates → Pauli channel over duration `t` (C2):
+    /// `p_a = (1 - exp(-2 λ_a t)) / 2`.
+    public static func fromPauliLindblad(
+        lambdaX: QFloat = 0,
+        lambdaY: QFloat = 0,
+        lambdaZ: QFloat = 0,
+        duration: QFloat
+    ) throws -> QuantumChannel {
+        func rateToProbability(_ lambda: QFloat) -> QFloat {
+            guard lambda > 0, duration > 0 else { return 0 }
+            return min(max((1 - exp(-2 * lambda * duration)) / 2, 0), 1)
+        }
+        return try makePauliChannel(
+            px: rateToProbability(lambdaX),
+            py: rateToProbability(lambdaY),
+            pz: rateToProbability(lambdaZ)
+        )
     }
 }

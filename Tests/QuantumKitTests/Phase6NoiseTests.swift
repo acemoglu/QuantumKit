@@ -73,7 +73,7 @@ extension QuantumKitTests {
         XCTAssertEqual(result[3], 1 - 4 * p / 5, accuracy: 1e-5)
     }
 
-    func testNoiseModelFromDeviceCalibration() {
+    func testNoiseModelFromDeviceCalibration() throws {
         var calibration = DeviceCalibration(qubitCount: 2, gateTime: 0.1)
         calibration[qubit: 0] = QubitCalibration(t1: 50, t2: 70, readoutError0To1: 0.02, readoutError1To0: 0.03)
         calibration[qubit: 1] = QubitCalibration(t1: 60, t2: 80, readoutError0To1: 0.01, readoutError1To0: 0.04)
@@ -85,9 +85,48 @@ extension QuantumKitTests {
         let noise = NoiseModel.from(calibration: calibration)
 
         XCTAssertTrue(noise.hasLocalizedGateNoise)
+        XCTAssertEqual(noise.localizedRules.count, 6)
+
+        // Per-qubit readout is preserved in the confusion matrix (qubit 0 = LSB),
+        // not collapsed to max(p01)/max(p10) globals.
+        let matrix = try XCTUnwrap(noise.readoutConfusion)
+        XCTAssertEqual(matrix.qubitCount, 2)
+
+        // Prepared |00⟩: P(flip qubit0) = 0.02, P(flip qubit1) = 0.01
+        let row00 = matrix.probabilities[0]
+        XCTAssertEqual(row00[1] + row00[3], 0.02, accuracy: 1e-6)
+        XCTAssertEqual(row00[2] + row00[3], 0.01, accuracy: 1e-6)
+
+        // Prepared |10⟩ (qubit1=1): P(measure qubit1 → 0) = p10 of qubit1 = 0.04
+        let row10 = matrix.probabilities[2]
+        XCTAssertEqual(row10[0] + row10[1], 0.04, accuracy: 1e-6)
+
+        // Prepared |01⟩ (qubit0=1): P(measure qubit0 → 0) = p10 of qubit0 = 0.03
+        let row01 = matrix.probabilities[1]
+        XCTAssertEqual(row01[0] + row01[2], 0.03, accuracy: 1e-6)
+
+        // Fallback globals retained for mismatched measure widths (max over qubits).
         XCTAssertEqual(noise.readoutFlip0To1, 0.02, accuracy: 1e-6)
         XCTAssertEqual(noise.readoutFlip1To0, 0.04, accuracy: 1e-6)
-        XCTAssertEqual(noise.localizedRules.count, 6)
+    }
+
+    func testCalibrationReadoutFallsBackToGlobalsWhenMeasureWidthMismatches() throws {
+        var calibration = DeviceCalibration(qubitCount: 2, gateTime: 0.1)
+        calibration[qubit: 0] = QubitCalibration(readoutError0To1: 0.0, readoutError1To0: 1.0)
+        calibration[qubit: 1] = QubitCalibration(readoutError0To1: 0.0, readoutError1To0: 0.5)
+
+        let noise = NoiseModel.from(calibration: calibration)
+        XCTAssertEqual(noise.readoutConfusion?.qubitCount, 2)
+        // max(p10) across qubits
+        XCTAssertEqual(noise.readoutFlip1To0, 1.0, accuracy: 1e-6)
+
+        // Measure width 1 ≠ confusion width 2 → must use globals, not silent no-op.
+        var rng: QuantumRNG = .seeded(1)
+        XCTAssertEqual(
+            noise.flipReadoutOutcome(1, measuredQubitCount: 1, rng: &rng),
+            0,
+            "prepared |1⟩ with p10=1 must flip to 0 via global fallback"
+        )
     }
 
     func testStatevectorBackendRejectsLocalizedGateNoise() throws {

@@ -2,11 +2,12 @@ import Foundation
 
 extension NoiseModel {
 
-    /// Builds a noise model from hardware calibration data.
+    /// Builds a noise model from hardware calibration data (C3).
     ///
-    /// Per-qubit T1/T2 are mapped to localized amplitude and phase damping on every gate
-    /// touching that qubit. Gate-specific error rates become localized depolarizing channels.
-    /// Readout asymmetry is stored in the global readout fields (applied at measurement).
+    /// Per-qubit T1/T2 become localized amplitude/phase damping. Gate error rates become
+    /// localized depolarizing. Per-qubit readout asymmetry is preserved as a tensor-product
+    /// ``ReadoutConfusionMatrix`` (qubit 0 = LSB). Optional coupling-map crosstalk is attached
+    /// when ``DeviceCalibration/nearestNeighborCrosstalkProbability`` is positive.
     public static func from(calibration: DeviceCalibration) -> NoiseModel {
         var rules: [LocalizedNoiseRule] = []
         rules.reserveCapacity(calibration.qubits.count * 2 + calibration.gateErrors.count)
@@ -44,19 +45,34 @@ extension NoiseModel {
             )
         }
 
-        var readoutFlip0To1: QFloat = 0
-        var readoutFlip1To0: QFloat = 0
-        if !calibration.qubits.isEmpty {
-            readoutFlip0To1 = calibration.qubits.map(\.readoutError0To1).max() ?? 0
-            readoutFlip1To0 = calibration.qubits.map(\.readoutError1To0).max() ?? 0
-        }
-
-        return NoiseModel(
+        var model = NoiseModel(
             gateTime: calibration.gateTime,
-            readoutFlip0To1: readoutFlip0To1,
-            readoutFlip1To0: readoutFlip1To0,
             localizedRules: rules
         )
+
+        if calibration.qubitCount > 0 {
+            let pairs: [(p01: QFloat, p10: QFloat)] = (0..<calibration.qubitCount).map { index in
+                let props = calibration[qubit: index]
+                return (p01: props.readoutError0To1, p10: props.readoutError1To0)
+            }
+            if let confusion = try? ReadoutConfusionMatrix.product(of: pairs) {
+                model.readoutConfusion = confusion
+            }
+            // Keep max globals as fallback when a measure width ≠ calibration qubitCount
+            // (confusion only applies on exact width match).
+            model.readoutFlip0To1 = pairs.map(\.p01).max() ?? 0
+            model.readoutFlip1To0 = pairs.map(\.p10).max() ?? 0
+        }
+
+        if let map = calibration.couplingMap,
+           calibration.nearestNeighborCrosstalkProbability > 0 {
+            model = model.addingNearestNeighborCrosstalk(
+                couplingMap: map,
+                probability: calibration.nearestNeighborCrosstalkProbability
+            )
+        }
+
+        return model
     }
 
     /// Returns a copy with an additional localized noise rule.
@@ -68,6 +84,38 @@ extension NoiseModel {
     public func adding(_ rule: LocalizedNoiseRule) -> NoiseModel {
         var copy = self
         copy.localizedRules.append(rule)
+        return copy
+    }
+
+    /// Layered composition (C1): concatenate localized rules (`self` then `other`) and take
+    /// the element-wise max of shared global probabilities. `other`'s non-default
+    /// measurement mode / confusion matrix wins when set.
+    public func merging(_ other: NoiseModel) -> NoiseModel {
+        var copy = self
+        copy.depolarizingProbability = max(depolarizingProbability, other.depolarizingProbability)
+        copy.amplitudeDampingProbability = max(amplitudeDampingProbability, other.amplitudeDampingProbability)
+        copy.phaseDampingProbability = max(phaseDampingProbability, other.phaseDampingProbability)
+        copy.t1 = max(t1, other.t1)
+        copy.t2 = max(t2, other.t2)
+        copy.gateTime = max(gateTime, other.gateTime)
+        copy.readoutFlip0To1 = max(readoutFlip0To1, other.readoutFlip0To1)
+        copy.readoutFlip1To0 = max(readoutFlip1To0, other.readoutFlip1To0)
+        copy.resetErrorProbability = max(resetErrorProbability, other.resetErrorProbability)
+        copy.preparationErrorProbability = max(preparationErrorProbability, other.preparationErrorProbability)
+        copy.thermalRelaxationOnDelay = thermalRelaxationOnDelay || other.thermalRelaxationOnDelay
+        copy.measurementDephasingProbability = max(
+            measurementDephasingProbability,
+            other.measurementDephasingProbability
+        )
+        if other.measurementMode != .projective {
+            copy.measurementMode = other.measurementMode
+        }
+        if let confusion = other.readoutConfusion {
+            copy.readoutConfusion = confusion
+        } else if copy.readoutConfusion == nil {
+            copy.readoutConfusion = readoutConfusion
+        }
+        copy.localizedRules = localizedRules + other.localizedRules
         return copy
     }
 

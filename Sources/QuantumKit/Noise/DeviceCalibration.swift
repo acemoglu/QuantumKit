@@ -40,23 +40,31 @@ public struct GateCalibration: Sendable, Equatable, Codable {
     }
 }
 
-/// Hardware calibration properties for a quantum device.
+/// Hardware calibration properties for a quantum device (C3).
 public struct DeviceCalibration: Sendable, Equatable, Codable {
     public let qubitCount: Int
     public var qubits: [QubitCalibration]
     public var gateErrors: [GateCalibration]
     public var gateTime: QFloat
+    /// Optional device connectivity used to seed nearest-neighbor crosstalk.
+    public var couplingMap: CouplingMap?
+    /// Spectator depolarizing probability applied on every coupling-map edge (bidirectional).
+    public var nearestNeighborCrosstalkProbability: QFloat
 
     public init(
         qubitCount: Int,
         qubits: [QubitCalibration] = [],
         gateErrors: [GateCalibration] = [],
-        gateTime: QFloat = 0
+        gateTime: QFloat = 0,
+        couplingMap: CouplingMap? = nil,
+        nearestNeighborCrosstalkProbability: QFloat = 0
     ) {
         self.qubitCount = qubitCount
         self.qubits = qubits
         self.gateErrors = gateErrors
         self.gateTime = max(gateTime, 0)
+        self.couplingMap = couplingMap
+        self.nearestNeighborCrosstalkProbability = min(max(nearestNeighborCrosstalkProbability, 0), 1)
     }
 
     public subscript(qubit index: Int) -> QubitCalibration {

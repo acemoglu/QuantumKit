@@ -1349,6 +1349,43 @@ extension DensityMatrixEngine {
                 scratchReal: scratchReal,
                 scratchImag: scratchImag
             )
+
+        case .kraus1Q(let operators):
+            guard !operators.isEmpty else { return }
+            let kraus: [[SIMD2<QFloat>]] = operators.map { op in
+                op.map { complex($0.real, $0.imaginary) }
+            }
+            for qubit in qubits {
+                try applyKrausChannel(
+                    on: density,
+                    targetQubit: qubit,
+                    kraus: kraus,
+                    scratchReal: scratchReal,
+                    scratchImag: scratchImag
+                )
+            }
+
+        case .pauliChannel(let px, let py, let pz):
+            let pI = max(0, 1 - px - py - pz)
+            guard px + py + pz > 0 else { return }
+            let kI = sqrt(pI)
+            let kx = sqrt(max(0, px))
+            let ky = sqrt(max(0, py))
+            let kz = sqrt(max(0, pz))
+            for qubit in qubits {
+                try applyKrausChannel(
+                    on: density,
+                    targetQubit: qubit,
+                    kraus: [
+                        [complex(kI, 0), complex(0, 0), complex(0, 0), complex(kI, 0)],
+                        [complex(0, 0), complex(kx, 0), complex(kx, 0), complex(0, 0)],
+                        [complex(0, 0), complex(0, -ky), complex(0, ky), complex(0, 0)],
+                        [complex(kz, 0), complex(0, 0), complex(0, 0), complex(-kz, 0)],
+                    ],
+                    scratchReal: scratchReal,
+                    scratchImag: scratchImag
+                )
+            }
         }
     }
 
