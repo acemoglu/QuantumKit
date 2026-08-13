@@ -71,6 +71,32 @@ extension NoiseModel {
         return copy
     }
 
+    /// Adds bidirectional nearest-neighbor spectator crosstalk (C5): a gate on `a` applies
+    /// `channel` on `b` and vice versa, for every undirected edge of `couplingMap`.
+    public func addingNearestNeighborCrosstalk(
+        couplingMap: CouplingMap,
+        channel: QuantumChannel
+    ) -> NoiseModel {
+        var copy = self
+        for (a, b) in couplingMap.edges {
+            copy = copy
+                .adding(channel, for: .crosstalk(driven: a, spectator: b))
+                .adding(channel, for: .crosstalk(driven: b, spectator: a))
+        }
+        return copy
+    }
+
+    /// Convenience: nearest-neighbor spectator depolarizing with probability `probability`.
+    public func addingNearestNeighborCrosstalk(
+        couplingMap: CouplingMap,
+        probability: QFloat
+    ) -> NoiseModel {
+        addingNearestNeighborCrosstalk(
+            couplingMap: couplingMap,
+            channel: .depolarizing(probability: probability)
+        )
+    }
+
     /// `true` when any localized rule applies gate-time stochastic channels.
     public var hasLocalizedGateNoise: Bool {
         localizedRules.contains { $0.channel.isGateChannel }

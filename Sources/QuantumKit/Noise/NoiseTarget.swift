@@ -14,6 +14,10 @@ public enum NoiseTarget: Sendable, Equatable, Hashable, Codable {
   case allGatesOnQubit(Int)
   /// Apply after the instruction at this absolute circuit index (C7).
   case circuitIndex(Int)
+  /// Spectator crosstalk (C5): after a gate touching `driven`, apply on `spectator`.
+  case crosstalk(driven: Int, spectator: Int)
+  /// Correlated pair (C5): after a gate touching either qubit, apply on both (order-independent).
+  case qubitPair(Int, Int)
 }
 
 extension NoiseTarget {
@@ -37,6 +41,12 @@ extension NoiseTarget {
 
         case .circuitIndex(let index):
             return gateIndex == index
+
+        case .crosstalk(let driven, _):
+            return affectedQubits.contains(driven)
+
+        case .qubitPair(let a, let b):
+            return affectedQubits.contains(a) || affectedQubits.contains(b)
         }
     }
 
@@ -48,6 +58,12 @@ extension NoiseTarget {
 
         case .gate, .gateOnQubits, .circuitIndex:
             return affectedQubits
+
+        case .crosstalk(_, let spectator):
+            return [spectator]
+
+        case .qubitPair(let a, let b):
+            return [min(a, b), max(a, b)]
         }
     }
 }

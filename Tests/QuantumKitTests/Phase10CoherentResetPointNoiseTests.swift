@@ -363,6 +363,88 @@ extension QuantumKitTests {
         XCTAssertEqual(method, .densityMatrix)
     }
 
+    // MARK: - C5 crosstalk / correlated errors
+
+    func testSpectatorCrosstalkFlipsNeighbor() throws {
+        guard let (engine, density) = try makeDensitySetupForPointNoise(qubitCount: 2) else { return }
+
+        var circuit = try QuantumCircuit(qubitCount: 2)
+        try circuit.x(0) // drives qubit 0; crosstalk X on spectator 1
+
+        let noise = NoiseModel().adding(
+            .pauliXFlip(probability: 1),
+            for: .crosstalk(driven: 0, spectator: 1)
+        )
+        try engine.execute(circuit, on: density, noise: noise)
+
+        let probabilities = engine.probabilities(of: density)
+        // |10⟩ after X(0), then X on qubit 1 → |11⟩
+        XCTAssertEqual(probabilities[3], 1.0, accuracy: 1e-5)
+    }
+
+    func testCorrelatedXXOnQubitPair() throws {
+        guard let (engine, density) = try makeDensitySetupForPointNoise(qubitCount: 2) else { return }
+
+        var circuit = try QuantumCircuit(qubitCount: 2)
+        try circuit.z(0) // touches qubit 0 → pair (0,1) fires
+
+        let noise = NoiseModel().adding(
+            .correlatedPauli(axis: .x, probability: 1),
+            for: .qubitPair(0, 1)
+        )
+        try engine.execute(circuit, on: density, noise: noise)
+
+        let probabilities = engine.probabilities(of: density)
+        // X⊗X |00⟩ → |11⟩
+        XCTAssertEqual(probabilities[3], 1.0, accuracy: 1e-5)
+    }
+
+    func testCorrelatedZZPreservesComputationalPopulations() throws {
+        guard let (engine, density) = try makeDensitySetupForPointNoise(qubitCount: 2) else { return }
+
+        var circuit = try QuantumCircuit(qubitCount: 2)
+        try circuit.x(0)
+
+        let noise = NoiseModel().adding(
+            .correlatedZZ(angle: 0.4),
+            for: .qubitPair(0, 1)
+        )
+        try engine.execute(circuit, on: density, noise: noise)
+
+        let probabilities = engine.probabilities(of: density)
+        // X(0) → |10⟩ (qubit 0 = LSB ⇒ index 1); ZZ phase keeps computational populations.
+        XCTAssertEqual(probabilities[1], 1.0, accuracy: 1e-5)
+    }
+
+    func testNearestNeighborCrosstalkFromCouplingMap() throws {
+        let map = try CouplingMap.linear(3)
+        let noise = NoiseModel().addingNearestNeighborCrosstalk(
+            couplingMap: map,
+            probability: 0.05
+        )
+        XCTAssertTrue(noise.hasLocalizedGateNoise)
+        // linear 0—1—2 ⇒ edges (0,1),(1,2) ⇒ 4 directed crosstalk rules
+        XCTAssertEqual(noise.localizedRules.count, 4)
+    }
+
+    func testCorrelatedPauliMixtureOnGroundState() throws {
+        guard let (engine, density) = try makeDensitySetupForPointNoise(qubitCount: 2) else { return }
+
+        var circuit = try QuantumCircuit(qubitCount: 2)
+        try circuit.z(0)
+
+        let p: QFloat = 0.3
+        let noise = NoiseModel().adding(
+            .correlatedPauli(axis: .x, probability: p),
+            for: .qubitPair(0, 1)
+        )
+        try engine.execute(circuit, on: density, noise: noise)
+
+        let probabilities = engine.probabilities(of: density)
+        XCTAssertEqual(probabilities[0], 1 - p, accuracy: 1e-5)
+        XCTAssertEqual(probabilities[3], p, accuracy: 1e-5)
+    }
+
     private func makeDensitySetupForPointNoise(
         qubitCount: Int
     ) throws -> (DensityMatrixEngine, DensityMatrix)? {

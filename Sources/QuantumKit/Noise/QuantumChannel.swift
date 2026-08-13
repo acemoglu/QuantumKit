@@ -21,6 +21,12 @@ public enum QuantumChannel: Sendable, Equatable, Codable {
     /// Thermal relaxation during idle time. Strength is computed from the matched
     /// ``Gate/delay`` duration (C8); ignored on non-delay instructions.
     case idleThermalRelaxation(t1: QFloat, t2: QFloat)
+    /// Correlated two-qubit Pauli error (C5): with probability `probability` apply `P⊗P`
+    /// on the application pair; otherwise identity. Requires exactly two application qubits.
+    case correlatedPauli(axis: CoherentRotationAxis, probability: QFloat)
+    /// Coherent always-on ZZ crosstalk (C5): apply ``Gate/rzz`` with the given angle
+    /// on the application pair. Requires exactly two application qubits.
+    case correlatedZZ(angle: QFloat)
 }
 
 extension QuantumChannel {
@@ -36,6 +42,10 @@ extension QuantumChannel {
             return p
         case .idleThermalRelaxation(let t1, let t2):
             return (t1 > 0 || t2 > 0) ? 1 : 0
+        case .correlatedPauli(_, let p):
+            return p
+        case .correlatedZZ(let angle):
+            return abs(angle) > 0 ? 1 : 0
         }
     }
 
@@ -50,6 +60,10 @@ extension QuantumChannel {
             return p > 0 && abs(angle) > 0
         case .idleThermalRelaxation(let t1, let t2):
             return t1 > 0 || t2 > 0
+        case .correlatedPauli(_, let p):
+            return p > 0
+        case .correlatedZZ(let angle):
+            return abs(angle) > 0
         }
     }
 

@@ -1328,7 +1328,85 @@ extension DensityMatrixEngine {
                     scratchImag: scratchImag
                 )
             }
+
+        case .correlatedPauli(let axis, let probability):
+            guard qubits.count == 2, probability > 0 else { return }
+            try applyCorrelatedPauli(
+                on: density,
+                qubitA: qubits[0],
+                qubitB: qubits[1],
+                axis: axis,
+                probability: probability,
+                scratchReal: scratchReal,
+                scratchImag: scratchImag
+            )
+
+        case .correlatedZZ(let angle):
+            guard qubits.count == 2, abs(angle) > 0 else { return }
+            try applyUnitaryGate(
+                .rzz(theta: QFloatExpr(angle), q1: qubits[0], q2: qubits[1]),
+                on: density,
+                scratchReal: scratchReal,
+                scratchImag: scratchImag
+            )
         }
+    }
+
+    /// Exact channel `(1-p)ρ + p (P⊗P)ρ(P⊗P)` on a qubit pair (C5).
+    private func applyCorrelatedPauli(
+        on density: DensityMatrix,
+        qubitA: Int,
+        qubitB: Int,
+        axis: CoherentRotationAxis,
+        probability p: QFloat,
+        scratchReal: MTLBuffer,
+        scratchImag: MTLBuffer
+    ) throws {
+        if p >= 1 {
+            let gate: Gate
+            switch axis {
+            case .x: gate = .x(target: qubitA)
+            case .y: gate = .y(target: qubitA)
+            case .z: gate = .z(target: qubitA)
+            }
+            let gateB: Gate
+            switch axis {
+            case .x: gateB = .x(target: qubitB)
+            case .y: gateB = .y(target: qubitB)
+            case .z: gateB = .z(target: qubitB)
+            }
+            try applyUnitaryGate(gate, on: density, scratchReal: scratchReal, scratchImag: scratchImag)
+            try applyUnitaryGate(gateB, on: density, scratchReal: scratchReal, scratchImag: scratchImag)
+            return
+        }
+
+        let axisCode: Int
+        switch axis {
+        case .x: axisCode = 1
+        case .y: axisCode = 2
+        case .z: axisCode = 3
+        }
+
+        let identityWeight = max(0, 1 - p).squareRoot()
+        let pauliWeight = max(0, p).squareRoot()
+        let pauli = singleQubitPauli(axis: axisCode)
+        var kraus: [SIMD2<QFloat>] = []
+        kraus.reserveCapacity(2 * 16)
+        kraus.append(contentsOf: scaledMatrix(
+            kron(singleQubitPauli(axis: 0), singleQubitPauli(axis: 0)),
+            by: identityWeight
+        ))
+        kraus.append(contentsOf: scaledMatrix(kron(pauli, pauli), by: pauliWeight))
+
+        try applyTwoQubitKrausChannel(
+            on: density,
+            qubitA: qubitA,
+            qubitB: qubitB,
+            krausCount: 2,
+            krausFlat: kraus,
+            scratchReal: scratchReal,
+            scratchImag: scratchImag
+        )
     }
 
     /// Apply AD then pure-dephasing for an idle interval of `duration` (C8).
