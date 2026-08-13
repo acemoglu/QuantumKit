@@ -111,7 +111,7 @@ public final class DensityMatrixEngine: @unchecked Sendable {
             registerWidths: circuit.classicalRegisters.map(\.bitCount)
         )
 
-        func executeRuntimeGate(_ gate: Gate) throws {
+        func executeRuntimeGate(_ gate: Gate, at gateIndex: Int) throws {
             switch gate {
             case .measure(let spec):
                 let bits = try applyMeasurement(
@@ -139,8 +139,30 @@ public final class DensityMatrixEngine: @unchecked Sendable {
                     scratchReal: scratchReal,
                     scratchImag: scratchImag
                 )
+                if let noise {
+                    try applyPointNoiseChannels(
+                        after: gate,
+                        at: gateIndex,
+                        on: density,
+                        noise: noise,
+                        scratchReal: scratchReal,
+                        scratchImag: scratchImag
+                    )
+                }
 
-            case .barrier, .delay, .id:
+            case .barrier, .delay:
+                if let noise {
+                    try applyPointNoiseChannels(
+                        after: gate,
+                        at: gateIndex,
+                        on: density,
+                        noise: noise,
+                        scratchReal: scratchReal,
+                        scratchImag: scratchImag
+                    )
+                }
+
+            case .id:
                 break
 
             case .swap(let q1, let q2):
@@ -152,16 +174,34 @@ public final class DensityMatrixEngine: @unchecked Sendable {
                     scratchImag: scratchImag
                 )
                 if let noise {
-                    try applyNoiseChannels(after: gate, on: density, noise: noise, scratchReal: scratchReal, scratchImag: scratchImag)
+                    try applyNoiseChannels(
+                        after: gate,
+                        at: gateIndex,
+                        on: density,
+                        noise: noise,
+                        scratchReal: scratchReal,
+                        scratchImag: scratchImag
+                    )
                 }
 
             case .c_if(let classicalRegister, let expectedValue, let conditionedGate):
                 if classicalMemory.value(ofRegister: classicalRegister) == expectedValue {
-                    try executeRuntimeGate(conditionedGate)
+                    // Conditioned body reuses the enclosing instruction index for C7 targeting.
+                    try executeRuntimeGate(conditionedGate, at: gateIndex)
                 }
 
             case .initialize(let qubits, let amplitudes):
                 try density.initialize(qubits: qubits, amplitudes: amplitudes)
+                if let noise {
+                    try applyPointNoiseChannels(
+                        after: gate,
+                        at: gateIndex,
+                        on: density,
+                        noise: noise,
+                        scratchReal: scratchReal,
+                        scratchImag: scratchImag
+                    )
+                }
 
             case .customUnitary(let matrix, let qubits) where qubits.count > 1:
                 try applyHostCustomUnitary(
@@ -170,13 +210,27 @@ public final class DensityMatrixEngine: @unchecked Sendable {
                     on: density
                 )
                 if let noise {
-                    try applyNoiseChannels(after: gate, on: density, noise: noise, scratchReal: scratchReal, scratchImag: scratchImag)
+                    try applyNoiseChannels(
+                        after: gate,
+                        at: gateIndex,
+                        on: density,
+                        noise: noise,
+                        scratchReal: scratchReal,
+                        scratchImag: scratchImag
+                    )
                 }
 
             default:
                 try applyUnitaryGate(gate, on: density, scratchReal: scratchReal, scratchImag: scratchImag)
                 if let noise {
-                    try applyNoiseChannels(after: gate, on: density, noise: noise, scratchReal: scratchReal, scratchImag: scratchImag)
+                    try applyNoiseChannels(
+                        after: gate,
+                        at: gateIndex,
+                        on: density,
+                        noise: noise,
+                        scratchReal: scratchReal,
+                        scratchImag: scratchImag
+                    )
                 }
             }
 
@@ -186,8 +240,8 @@ public final class DensityMatrixEngine: @unchecked Sendable {
             }
         }
 
-        for gate in circuit.gates {
-            try executeRuntimeGate(gate)
+        for (gateIndex, gate) in circuit.gates.enumerated() {
+            try executeRuntimeGate(gate, at: gateIndex)
         }
 
         // Every gate/channel above is committed without blocking the CPU. Drain the serial queue
@@ -337,6 +391,7 @@ public final class DensityMatrixEngine: @unchecked Sendable {
 
     private func applyNoiseChannels(
         after gate: Gate,
+        at gateIndex: Int,
         on density: DensityMatrix,
         noise: NoiseModel,
         scratchReal: MTLBuffer,
@@ -397,6 +452,53 @@ public final class DensityMatrixEngine: @unchecked Sendable {
         if noise.hasLocalizedGateNoise {
             try applyLocalizedNoiseChannels(
                 after: gate,
+                at: gateIndex,
+                on: density,
+                noise: noise,
+                scratchReal: scratchReal,
+                scratchImag: scratchImag
+            )
+        }
+    }
+
+    /// Localized (+ global reset/prep) noise at non-unitary circuit points (C7 / C9).
+    /// Skips global post-unitary dep/AD/PD — those remain unitary-gate-only.
+    private func applyPointNoiseChannels(
+        after gate: Gate,
+        at gateIndex: Int,
+        on density: DensityMatrix,
+        noise: NoiseModel,
+        scratchReal: MTLBuffer,
+        scratchImag: MTLBuffer
+    ) throws {
+        if case .reset(let qubit) = gate, noise.resetErrorProbability > 0 {
+            try applyPauliFlipChannel(
+                on: density,
+                qubit: qubit,
+                axis: .x,
+                probability: noise.resetErrorProbability,
+                scratchReal: scratchReal,
+                scratchImag: scratchImag
+            )
+        }
+
+        if case .initialize(let qubits, _) = gate, noise.preparationErrorProbability > 0 {
+            for qubit in qubits {
+                try applyPauliFlipChannel(
+                    on: density,
+                    qubit: qubit,
+                    axis: .x,
+                    probability: noise.preparationErrorProbability,
+                    scratchReal: scratchReal,
+                    scratchImag: scratchImag
+                )
+            }
+        }
+
+        if noise.hasLocalizedGateNoise {
+            try applyLocalizedNoiseChannels(
+                after: gate,
+                at: gateIndex,
                 on: density,
                 noise: noise,
                 scratchReal: scratchReal,
@@ -1003,6 +1105,7 @@ extension DensityMatrixEngine {
 
     func applyLocalizedNoiseChannels(
         after gate: Gate,
+        at gateIndex: Int,
         on density: DensityMatrix,
         noise: NoiseModel,
         scratchReal: MTLBuffer,
@@ -1011,7 +1114,11 @@ extension DensityMatrixEngine {
         var seen = Set<Int>()
         let affected = gate.affectedQubits.filter { seen.insert($0).inserted }
 
-        for rule in noise.matchingLocalizedRules(for: gate, affectedQubits: affected) {
+        for rule in noise.matchingLocalizedRules(
+            for: gate,
+            affectedQubits: affected,
+            gateIndex: gateIndex
+        ) {
             let qubits = rule.target.applicationQubits(gate: gate, affectedQubits: affected)
             guard !qubits.isEmpty else { continue }
             try applyLocalized(
@@ -1108,7 +1215,95 @@ extension DensityMatrixEngine {
                     scratchImag: scratchImag
                 )
             }
+
+        case .coherentOverRotation(let axis, let angle):
+            guard abs(angle) > 0 else { return }
+            for qubit in qubits {
+                try applyUnitaryGate(
+                    Self.rotationGate(axis: axis, angle: angle, target: qubit),
+                    on: density,
+                    scratchReal: scratchReal,
+                    scratchImag: scratchImag
+                )
+            }
+
+        case .coherentUnitaryError(let axis, let angle, let probability):
+            guard probability > 0, abs(angle) > 0 else { return }
+            for qubit in qubits {
+                try applyCoherentUnitaryMixture(
+                    on: density,
+                    qubit: qubit,
+                    axis: axis,
+                    angle: angle,
+                    probability: probability,
+                    scratchReal: scratchReal,
+                    scratchImag: scratchImag
+                )
+            }
         }
+    }
+
+    private static func rotationGate(
+        axis: CoherentRotationAxis,
+        angle: QFloat,
+        target: Int
+    ) -> Gate {
+        let theta = QFloatExpr(angle)
+        switch axis {
+        case .x: return .rx(theta: theta, target: target)
+        case .y: return .ry(theta: theta, target: target)
+        case .z: return .rz(theta: theta, target: target)
+        }
+    }
+
+    /// Exact channel `(1-p)ρ + p UρU†` via Kraus `{√(1-p) I, √p U}`.
+    private func applyCoherentUnitaryMixture(
+        on density: DensityMatrix,
+        qubit: Int,
+        axis: CoherentRotationAxis,
+        angle: QFloat,
+        probability p: QFloat,
+        scratchReal: MTLBuffer,
+        scratchImag: MTLBuffer
+    ) throws {
+        if p >= 1 {
+            try applyUnitaryGate(
+                Self.rotationGate(axis: axis, angle: angle, target: qubit),
+                on: density,
+                scratchReal: scratchReal,
+                scratchImag: scratchImag
+            )
+            return
+        }
+
+        let half = angle / 2
+        let c = cos(half)
+        let s = sin(half)
+        let k0 = sqrt(max(0, 1 - p))
+        let k1 = sqrt(max(0, p))
+
+        let u: [SIMD2<QFloat>]
+        switch axis {
+        case .x:
+            u = [complex(c, 0), complex(0, -s), complex(0, -s), complex(c, 0)]
+        case .y:
+            u = [complex(c, 0), complex(-s, 0), complex(s, 0), complex(c, 0)]
+        case .z:
+            u = [complex(cos(half), -sin(half)), complex(0, 0), complex(0, 0), complex(cos(half), sin(half))]
+        }
+
+        let kraus: [[SIMD2<QFloat>]] = [
+            [complex(k0, 0), complex(0, 0), complex(0, 0), complex(k0, 0)],
+            u.map { complex($0.x * k1, $0.y * k1) },
+        ]
+
+        try applyKrausChannel(
+            on: density,
+            targetQubit: qubit,
+            kraus: kraus,
+            scratchReal: scratchReal,
+            scratchImag: scratchImag
+        )
     }
 
     private enum PauliFlipAxis {

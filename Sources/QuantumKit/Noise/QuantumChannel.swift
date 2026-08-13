@@ -1,5 +1,10 @@
 import Foundation
 
+/// Axis for single-qubit coherent rotation error channels (C6).
+public enum CoherentRotationAxis: String, Sendable, Equatable, Codable, CaseIterable {
+    case x, y, z
+}
+
 /// A physical noise channel attachable to specific gates or qubits.
 public enum QuantumChannel: Sendable, Equatable, Codable {
     case depolarizing(probability: QFloat)
@@ -8,6 +13,11 @@ public enum QuantumChannel: Sendable, Equatable, Codable {
     case pauliXFlip(probability: QFloat)
     case pauliYFlip(probability: QFloat)
     case pauliZFlip(probability: QFloat)
+    /// Deterministic coherent over-rotation: apply `R_axis(angle)` on matched qubits.
+    case coherentOverRotation(axis: CoherentRotationAxis, angle: QFloat)
+    /// Stochastic coherent error: with probability `probability`, apply `R_axis(angle)`;
+    /// otherwise identity. Exact DM realization is `(1-p)ρ + p UρU†`.
+    case coherentUnitaryError(axis: CoherentRotationAxis, angle: QFloat, probability: QFloat)
 }
 
 extension QuantumChannel {
@@ -17,6 +27,10 @@ extension QuantumChannel {
         case .depolarizing(let p), .amplitudeDamping(let p), .phaseDamping(let p),
              .pauliXFlip(let p), .pauliYFlip(let p), .pauliZFlip(let p):
             return p
+        case .coherentOverRotation:
+            return 1
+        case .coherentUnitaryError(_, _, let p):
+            return p
         }
     }
 
@@ -25,6 +39,10 @@ extension QuantumChannel {
         case .depolarizing, .amplitudeDamping, .phaseDamping,
              .pauliXFlip, .pauliYFlip, .pauliZFlip:
             return probability > 0
+        case .coherentOverRotation(_, let angle):
+            return abs(angle) > 0
+        case .coherentUnitaryError(_, let angle, let p):
+            return p > 0 && abs(angle) > 0
         }
     }
 
@@ -46,5 +64,10 @@ extension QuantumChannel {
 
         let lambda = 1.0 - exp(-2.0 * Double(gateTime) * inversePureDephasing)
         return .phaseDamping(probability: QFloat(min(max(lambda, 0), 1)))
+    }
+
+    /// Imperfect |0⟩ / computational preparation: bit-flip with the given probability (C9).
+    public static func preparationBitFlip(probability: QFloat) -> QuantumChannel {
+        .pauliXFlip(probability: probability)
     }
 }

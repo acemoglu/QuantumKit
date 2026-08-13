@@ -12,11 +12,13 @@ public enum NoiseTarget: Sendable, Equatable, Hashable, Codable {
   case gateOnQubits(gate: GateKind, qubits: [Int])
   /// Apply after every gate that touches `qubit`, on that qubit only.
   case allGatesOnQubit(Int)
+  /// Apply after the instruction at this absolute circuit index (C7).
+  case circuitIndex(Int)
 }
 
 extension NoiseTarget {
 
-    func matches(gate: Gate, affectedQubits: [Int]) -> Bool {
+    func matches(gate: Gate, affectedQubits: [Int], gateIndex: Int) -> Bool {
         switch self {
         case .qubit(let qubit):
             return affectedQubits.contains(qubit)
@@ -32,6 +34,9 @@ extension NoiseTarget {
 
         case .allGatesOnQubit(let qubit):
             return affectedQubits.contains(qubit)
+
+        case .circuitIndex(let index):
+            return gateIndex == index
         }
     }
 
@@ -41,7 +46,7 @@ extension NoiseTarget {
         case .qubit(let qubit), .gateOnQubit(_, let qubit), .allGatesOnQubit(let qubit):
             return affectedQubits.contains(qubit) ? [qubit] : []
 
-        case .gate, .gateOnQubits:
+        case .gate, .gateOnQubits, .circuitIndex:
             return affectedQubits
         }
     }

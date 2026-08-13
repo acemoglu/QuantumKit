@@ -48,6 +48,13 @@ public struct NoiseModel: Sendable, Equatable, Codable {
     /// measured width, it overrides independent per-bit flips for that outcome.
     public var readoutConfusion: ReadoutConfusionMatrix?
 
+    /// After each ``Gate/reset``, apply an X flip with this probability (imperfect |0⟩ prep, C9).
+    public var resetErrorProbability: QFloat
+
+    /// After each ``Gate/initialize``, apply an independent X flip with this probability
+    /// on every initialized qubit (C9).
+    public var preparationErrorProbability: QFloat
+
     /// Per-gate, per-qubit localized noise rules applied after matching gates execute.
     public var localizedRules: [LocalizedNoiseRule]
 
@@ -62,6 +69,8 @@ public struct NoiseModel: Sendable, Equatable, Codable {
         readoutFlip0To1: QFloat = 0,
         readoutFlip1To0: QFloat = 0,
         readoutConfusion: ReadoutConfusionMatrix? = nil,
+        resetErrorProbability: QFloat = 0,
+        preparationErrorProbability: QFloat = 0,
         localizedRules: [LocalizedNoiseRule] = []
     ) {
         self.depolarizingProbability = Self.clamp(depolarizingProbability)
@@ -86,6 +95,8 @@ public struct NoiseModel: Sendable, Equatable, Codable {
         }
 
         self.readoutConfusion = readoutConfusion
+        self.resetErrorProbability = Self.clamp(resetErrorProbability)
+        self.preparationErrorProbability = Self.clamp(preparationErrorProbability)
         self.localizedRules = localizedRules
     }
 
@@ -161,8 +172,13 @@ public struct NoiseModel: Sendable, Equatable, Codable {
         appliesDepolarizing || appliesAmplitudeDamping || appliesPhaseDamping || hasLocalizedGateNoise
     }
 
+    /// Imperfect reset / initialize channels (C9).
+    public var hasPreparationNoise: Bool {
+        resetErrorProbability > 0 || preparationErrorProbability > 0
+    }
+
     public var hasAnyChannel: Bool {
-        hasGateNoise || appliesReadoutError
+        hasGateNoise || appliesReadoutError || hasPreparationNoise
     }
 
     /// Flips a single classical bit using asymmetric readout error rates.

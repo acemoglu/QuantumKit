@@ -76,8 +76,14 @@ extension NoiseModel {
         localizedRules.contains { $0.channel.isGateChannel }
     }
 
-    /// Localized rules that match `gate` after execution.
-    func matchingLocalizedRules(for gate: Gate, affectedQubits: [Int]) -> [LocalizedNoiseRule] {
-        localizedRules.filter { $0.target.matches(gate: gate, affectedQubits: affectedQubits) }
+    /// Localized rules that match `gate` after execution at `gateIndex`.
+    func matchingLocalizedRules(
+        for gate: Gate,
+        affectedQubits: [Int],
+        gateIndex: Int
+    ) -> [LocalizedNoiseRule] {
+        localizedRules.filter {
+            $0.target.matches(gate: gate, affectedQubits: affectedQubits, gateIndex: gateIndex)
+        }
     }
 }

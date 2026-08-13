@@ -574,6 +574,10 @@ public final class QuantumEngine: @unchecked Sendable {
             case .reset(let qubit):
                 try flushPendingUnitaryGates()
                 try executeResetQubit(on: state, qubit: qubit, rng: &rng)
+                if let noise, noise.resetErrorProbability > 0,
+                   rng.nextUnitFloat() < noise.resetErrorProbability {
+                    try executeUnitaryGate(.x(target: qubit), on: state, gateCounter: &unitaryGateCounter)
+                }
 
             case .barrier, .delay:
                 try flushPendingUnitaryGates()
@@ -594,6 +598,11 @@ public final class QuantumEngine: @unchecked Sendable {
             case .initialize(let qubits, let amplitudes):
                 try flushPendingUnitaryGates()
                 try state.initialize(qubits: qubits, amplitudes: amplitudes)
+                if let noise, noise.preparationErrorProbability > 0 {
+                    for qubit in qubits where rng.nextUnitFloat() < noise.preparationErrorProbability {
+                        try executeUnitaryGate(.x(target: qubit), on: state, gateCounter: &unitaryGateCounter)
+                    }
+                }
 
             case .customUnitary(let matrix, let qubits) where qubits.count > 1:
                 try flushPendingUnitaryGates()

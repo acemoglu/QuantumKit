@@ -41,10 +41,15 @@ public enum PipelineFingerprint {
             "phase:\(noise.phaseDampingProbability)",
             "p01:\(noise.readoutFlip0To1)",
             "p10:\(noise.readoutFlip1To0)",
+            "reset:\(noise.resetErrorProbability)",
+            "prep:\(noise.preparationErrorProbability)",
             "rules:\(noise.localizedRules.count)",
         ]
         if let matrix = noise.readoutConfusion {
             parts.append("conf:\(matrix.qubitCount):\(matrix.probabilities)")
+        }
+        for rule in noise.localizedRules {
+            parts.append("rule:\(String(describing: rule.target)):\(String(describing: rule.channel))")
         }
         return parts.joined(separator: "|")
     }
