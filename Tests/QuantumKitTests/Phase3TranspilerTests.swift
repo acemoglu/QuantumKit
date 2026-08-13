@@ -83,15 +83,14 @@ extension QuantumKitTests {
         XCTAssertTrue(try assertTranspiledEquivalent(hadamardCircuit, decomposedCircuit))
     }
 
-    func testTranspilerRejectsUnsupportedMultiControlGate() throws {
+    func testTranspilerExpandsMultiControlGate() throws {
         var circuit = try QuantumCircuit(qubitCount: 4)
         try circuit.mcx(controls: [0, 1, 2], target: 3)
 
-        XCTAssertThrowsError(
-            try Transpiler.transpile(circuit, targetBasis: .ibmEagle)
-        ) { error in
-            XCTAssertEqual(error as? TranspilerError, .unsupportedGate(.mcx(controls: [0, 1, 2], target: 3)))
-        }
+        let transpiled = try Transpiler.transpile(circuit, targetBasis: .ibmEagle)
+        XCTAssertFalse(transpiled.gates.isEmpty)
+        XCTAssertFalse(transpiled.gates.contains { if case .mcx = $0 { return true }; return false })
+        XCTAssertTrue(try assertTranspiledEquivalent(circuit, transpiled))
     }
 
     private func assertTranspiledEquivalent(

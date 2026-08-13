@@ -25,7 +25,7 @@ public struct BasisTranslatorPass: CompilerPass, Sendable {
             }
 
             switch gate {
-            case .measure, .reset, .c_if:
+            case .measure, .reset, .c_if, .barrier, .delay:
                 try translated.apply(gate)
             default:
                 let replacements = try GateDecomposition.expandRecursively(gate, into: targetBasis)

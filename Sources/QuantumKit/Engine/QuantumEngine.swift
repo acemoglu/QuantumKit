@@ -23,6 +23,7 @@ public enum QuantumEngineError: Error {
     case zeroStateNorm
     case circuitNotUnitaryOnly
     case localizedNoiseRequiresDensityMatrixBackend
+    case unsupportedGateEncoding(Gate)
 
 }
 
@@ -573,6 +574,12 @@ public final class QuantumEngine: @unchecked Sendable {
             case .reset(let qubit):
                 try flushPendingUnitaryGates()
                 try executeResetQubit(on: state, qubit: qubit, rng: &rng)
+
+            case .barrier, .delay:
+                try flushPendingUnitaryGates()
+
+            case .id:
+                break
 
             case .c_if(let classicalRegister, let expectedValue, let conditionedGate):
                 try flushPendingUnitaryGates()

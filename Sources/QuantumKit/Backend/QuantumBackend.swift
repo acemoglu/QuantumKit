@@ -37,6 +37,8 @@ public struct QuantumResultMetadata: Codable, Sendable, Equatable {
     public let qubitCount: Int
     public let gateCount: Int
     public let noiseSnapshot: NoiseModel?
+    /// SHA-256 hex digest of circuit + run options (version, method, seed, shots, noise).
+    public let pipelineHash: String?
 
     public init(
         quantumKitVersion: String = QuantumKitInfo.version,
@@ -46,7 +48,8 @@ public struct QuantumResultMetadata: Codable, Sendable, Equatable {
         wallClockNanoseconds: UInt64,
         qubitCount: Int,
         gateCount: Int,
-        noiseSnapshot: NoiseModel?
+        noiseSnapshot: NoiseModel?,
+        pipelineHash: String? = nil
     ) {
         self.quantumKitVersion = quantumKitVersion
         self.method = method
@@ -56,6 +59,7 @@ public struct QuantumResultMetadata: Codable, Sendable, Equatable {
         self.qubitCount = qubitCount
         self.gateCount = gateCount
         self.noiseSnapshot = noiseSnapshot
+        self.pipelineHash = pipelineHash
     }
 }
 
@@ -73,6 +77,26 @@ public struct QuantumResult: Sendable, Equatable {
         self.metadata = metadata
         self.execution = execution
         self.shotCounts = shotCounts
+    }
+
+    /// MSB-first bitstring histogram when shots were requested.
+    public var bitstringCounts: [String: Int]? {
+        shotCounts?.bitstringCounts(qubitCount: metadata.qubitCount)
+    }
+
+    /// Hex-encoded outcome histogram (e.g. `"0x3"` for bitstring `11` on 2 qubits).
+    public var hexCounts: [String: Int]? {
+        shotCounts?.hexCounts(qubitCount: metadata.qubitCount)
+    }
+
+    /// Empirical probabilities from shot counts, when available.
+    public var probabilities: [String: QFloat]? {
+        shotCounts?.probabilities(qubitCount: metadata.qubitCount)
+    }
+
+    /// Classical register values after mid-circuit measurement, when available.
+    public var memorySlots: [Int]? {
+        execution.map { $0.classicalMemory.memorySlots }
     }
 }
 
@@ -209,6 +233,7 @@ private func makeMetadata(
         wallClockNanoseconds: elapsed,
         qubitCount: circuit.qubitCount,
         gateCount: circuit.gates.count,
-        noiseSnapshot: options.noise
+        noiseSnapshot: options.noise,
+        pipelineHash: PipelineFingerprint.hash(circuit: circuit, method: method, options: options)
     )
 }

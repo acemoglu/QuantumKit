@@ -4,6 +4,17 @@ public enum GradientCalculatorError: Error, Equatable {
     case unsupportedBackend
     case noDifferentiableParameters
     case missingParameterBinding(String)
+    case adjointRequiresUnitaryNoiseFreeCircuit
+    case adjointUnsupportedGate(Gate)
+    case adjointRequiresStatevectorBackend
+}
+
+/// Selects the algorithm used by ``GradientCalculator``.
+public enum DifferentiationMethod: String, Sendable, Equatable, Codable {
+    /// Analytic parameter-shift rule (2 evaluations per parameter).
+    case parameterShift
+    /// Reverse-mode adjoint differentiation (O(1) evolutions in parameter count).
+    case adjoint
 }
 
 /// Standard parameter-shift amount for Pauli-generator rotations (RX, RY, RZ).
@@ -29,13 +40,13 @@ public struct ParameterGradient: Sendable, Equatable {
     public var name: String { parameter.name }
 }
 
-/// Result of a parameter-shift gradient evaluation.
+/// Result of a parameter-shift or adjoint gradient evaluation.
 public struct GradientResult: Sendable, Equatable {
     /// ⟨H⟩ at the supplied parameter bindings.
     public let expectationValue: QFloat
     /// Per-parameter gradients in deterministic name-sorted order.
     public let parameterGradients: [ParameterGradient]
-    /// Total number of distinct circuit evolutions performed (base + shift pairs).
+    /// Total number of distinct circuit evolutions performed (base + shift pairs, or 1 for adjoint).
     public let circuitEvaluations: Int
     public let metadata: QuantumResultMetadata
 
@@ -57,12 +68,15 @@ public struct GradientResult: Sendable, Equatable {
     }
 }
 
-/// Options controlling batched expectation evaluation during gradient computation.
+/// Options controlling gradient evaluation.
 public struct GradientOptions: Sendable, Equatable {
     /// Maximum number of shifted circuits evaluated per GPU batch when batching is available.
     public var batchSize: Int
+    /// Differentiation algorithm (default: parameter-shift).
+    public var method: DifferentiationMethod
 
-    public init(batchSize: Int = 32) {
+    public init(batchSize: Int = 32, method: DifferentiationMethod = .parameterShift) {
         self.batchSize = max(batchSize, 1)
+        self.method = method
     }
 }

@@ -96,6 +96,53 @@ public struct QuantumCircuit {
                     reason: "SWAP requires two distinct qubits"
                 )
             }
+        case .id(let target):
+            try validateQubitIndex(target)
+        case .barrier(let qubits):
+            // Empty barrier is allowed (caller may resolve to all qubits later).
+            for qubit in qubits {
+                try validateQubitIndex(qubit)
+            }
+        case .delay(let duration, let qubit):
+            guard duration >= 0 else {
+                throw QuantumCircuitError.invalidAlgorithmParameter(
+                    reason: "delay duration must be non-negative"
+                )
+            }
+            try validateQubitIndex(qubit)
+        case .iswap(let q1, let q2), .dcx(let q1, let q2):
+            try validateQubitIndex(q1)
+            try validateQubitIndex(q2)
+            guard q1 != q2 else {
+                throw QuantumCircuitError.invalidAlgorithmParameter(
+                    reason: "Two-qubit gate requires distinct qubits"
+                )
+            }
+        case .ecr(let control, let target):
+            try validateQubitIndex(control)
+            try validateQubitIndex(target)
+            guard control != target else {
+                throw QuantumCircuitError.invalidAlgorithmParameter(
+                    reason: "ECR requires distinct control and target qubits"
+                )
+            }
+        case .rxx(_, let q1, let q2), .ryy(_, let q1, let q2), .rzz(_, let q1, let q2):
+            try validateQubitIndex(q1)
+            try validateQubitIndex(q2)
+            guard q1 != q2 else {
+                throw QuantumCircuitError.invalidAlgorithmParameter(
+                    reason: "Ising rotation requires two distinct qubits"
+                )
+            }
+        case .cswap(let control, let q1, let q2):
+            try validateQubitIndex(control)
+            try validateQubitIndex(q1)
+            try validateQubitIndex(q2)
+            guard control != q1, control != q2, q1 != q2 else {
+                throw QuantumCircuitError.invalidAlgorithmParameter(
+                    reason: "CSWAP requires three distinct qubits"
+                )
+            }
         case .ccx(let control1, let control2, let target):
             try validateQubitIndex(control1)
             try validateQubitIndex(control2)

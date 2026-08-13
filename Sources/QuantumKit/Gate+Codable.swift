@@ -16,6 +16,7 @@ extension Gate: Codable {
         case theta
         case phi
         case lambda
+        case duration
         case classicalRegister
         case classicalBitOffset
         case expectedValue
@@ -25,7 +26,9 @@ extension Gate: Codable {
 
     private enum GateType: String, Codable {
         case h, x, y, z, s, t, sdg, tdg, sx, sxdg, p, u
-        case cx, cz, swap, ccx, mcx, mcz
+        case cx, cz, swap, id, barrier, delay
+        case iswap, ecr, rxx, ryy, rzz, dcx, cswap
+        case ccx, mcx, mcz
         case rx, ry, rz, crx, cry, crz, cp
         case measure, reset, c_if, unitary1, initialize, customUnitary
     }
@@ -79,6 +82,54 @@ extension Gate: Codable {
             )
         case .swap:
             self = .swap(
+                q1: try container.decode(Int.self, forKey: .q1),
+                q2: try container.decode(Int.self, forKey: .q2)
+            )
+        case .id:
+            self = .id(target: try container.decode(Int.self, forKey: .target))
+        case .barrier:
+            self = .barrier(qubits: try container.decode([Int].self, forKey: .qubits))
+        case .delay:
+            self = .delay(
+                duration: try container.decode(QFloat.self, forKey: .duration),
+                qubit: try container.decode(Int.self, forKey: .qubit)
+            )
+        case .iswap:
+            self = .iswap(
+                q1: try container.decode(Int.self, forKey: .q1),
+                q2: try container.decode(Int.self, forKey: .q2)
+            )
+        case .ecr:
+            self = .ecr(
+                control: try container.decode(Int.self, forKey: .control),
+                target: try container.decode(Int.self, forKey: .target)
+            )
+        case .rxx:
+            self = .rxx(
+                theta: try container.decode(QFloatExpr.self, forKey: .theta),
+                q1: try container.decode(Int.self, forKey: .q1),
+                q2: try container.decode(Int.self, forKey: .q2)
+            )
+        case .ryy:
+            self = .ryy(
+                theta: try container.decode(QFloatExpr.self, forKey: .theta),
+                q1: try container.decode(Int.self, forKey: .q1),
+                q2: try container.decode(Int.self, forKey: .q2)
+            )
+        case .rzz:
+            self = .rzz(
+                theta: try container.decode(QFloatExpr.self, forKey: .theta),
+                q1: try container.decode(Int.self, forKey: .q1),
+                q2: try container.decode(Int.self, forKey: .q2)
+            )
+        case .dcx:
+            self = .dcx(
+                q1: try container.decode(Int.self, forKey: .q1),
+                q2: try container.decode(Int.self, forKey: .q2)
+            )
+        case .cswap:
+            self = .cswap(
+                control: try container.decode(Int.self, forKey: .control),
                 q1: try container.decode(Int.self, forKey: .q1),
                 q2: try container.decode(Int.self, forKey: .q2)
             )
@@ -228,6 +279,48 @@ extension Gate: Codable {
             try container.encode(target, forKey: .target)
         case .swap(let q1, let q2):
             try container.encode(GateType.swap, forKey: .type)
+            try container.encode(q1, forKey: .q1)
+            try container.encode(q2, forKey: .q2)
+        case .id(let target):
+            try container.encode(GateType.id, forKey: .type)
+            try container.encode(target, forKey: .target)
+        case .barrier(let qubits):
+            try container.encode(GateType.barrier, forKey: .type)
+            try container.encode(qubits, forKey: .qubits)
+        case .delay(let duration, let qubit):
+            try container.encode(GateType.delay, forKey: .type)
+            try container.encode(duration, forKey: .duration)
+            try container.encode(qubit, forKey: .qubit)
+        case .iswap(let q1, let q2):
+            try container.encode(GateType.iswap, forKey: .type)
+            try container.encode(q1, forKey: .q1)
+            try container.encode(q2, forKey: .q2)
+        case .ecr(let control, let target):
+            try container.encode(GateType.ecr, forKey: .type)
+            try container.encode(control, forKey: .control)
+            try container.encode(target, forKey: .target)
+        case .rxx(let theta, let q1, let q2):
+            try container.encode(GateType.rxx, forKey: .type)
+            try container.encode(theta, forKey: .theta)
+            try container.encode(q1, forKey: .q1)
+            try container.encode(q2, forKey: .q2)
+        case .ryy(let theta, let q1, let q2):
+            try container.encode(GateType.ryy, forKey: .type)
+            try container.encode(theta, forKey: .theta)
+            try container.encode(q1, forKey: .q1)
+            try container.encode(q2, forKey: .q2)
+        case .rzz(let theta, let q1, let q2):
+            try container.encode(GateType.rzz, forKey: .type)
+            try container.encode(theta, forKey: .theta)
+            try container.encode(q1, forKey: .q1)
+            try container.encode(q2, forKey: .q2)
+        case .dcx(let q1, let q2):
+            try container.encode(GateType.dcx, forKey: .type)
+            try container.encode(q1, forKey: .q1)
+            try container.encode(q2, forKey: .q2)
+        case .cswap(let control, let q1, let q2):
+            try container.encode(GateType.cswap, forKey: .type)
+            try container.encode(control, forKey: .control)
             try container.encode(q1, forKey: .q1)
             try container.encode(q2, forKey: .q2)
         case .ccx(let control1, let control2, let target):

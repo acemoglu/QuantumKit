@@ -140,6 +140,9 @@ public final class DensityMatrixEngine: @unchecked Sendable {
                     scratchImag: scratchImag
                 )
 
+            case .barrier, .delay, .id:
+                break
+
             case .swap(let q1, let q2):
                 try applySwap(
                     q1: q1,
@@ -261,6 +264,13 @@ public final class DensityMatrixEngine: @unchecked Sendable {
         scratchReal: MTLBuffer,
         scratchImag: MTLBuffer
     ) throws {
+        if GateDecomposition.needsExecutionExpansion(gate) {
+            for piece in try QuantumEngine.expandForExecution(gate) {
+                try applyUnitaryGate(piece, on: density, scratchReal: scratchReal, scratchImag: scratchImag)
+            }
+            return
+        }
+
         let encoded = try encodeSingleQubitUnitary(gate)
         let matrixBuffer = try acquirePooledMatrixBuffer(values: encoded.matrix)
         // Until the buffer is handed to a committed command buffer (via `release(_:after:)` below),
@@ -933,7 +943,10 @@ public final class DensityMatrixEngine: @unchecked Sendable {
                 controlMask: 0,
                 matrix: matrix.map { complex($0.real, $0.imaginary) }
             )
-        case .initialize, .swap, .measure, .reset, .c_if:
+        case .initialize, .swap, .measure, .reset, .c_if, .barrier, .delay, .id:
+            throw DensityMatrixEngineError.unsupportedGate(gate)
+        case .iswap, .ecr, .rxx, .ryy, .rzz, .dcx, .cswap:
+            // Composites must be expanded in applyUnitaryGate before encoding.
             throw DensityMatrixEngineError.unsupportedGate(gate)
         }
     }

@@ -44,6 +44,10 @@ public struct NoiseModel: Sendable, Equatable, Codable {
     /// Readout bit-flip probability 1 → 0.
     public var readoutFlip1To0: QFloat
 
+    /// Optional full assignment matrix. When set and its `qubitCount` matches the
+    /// measured width, it overrides independent per-bit flips for that outcome.
+    public var readoutConfusion: ReadoutConfusionMatrix?
+
     /// Per-gate, per-qubit localized noise rules applied after matching gates execute.
     public var localizedRules: [LocalizedNoiseRule]
 
@@ -57,6 +61,7 @@ public struct NoiseModel: Sendable, Equatable, Codable {
         readoutErrorProbability: QFloat = 0,
         readoutFlip0To1: QFloat = 0,
         readoutFlip1To0: QFloat = 0,
+        readoutConfusion: ReadoutConfusionMatrix? = nil,
         localizedRules: [LocalizedNoiseRule] = []
     ) {
         self.depolarizingProbability = Self.clamp(depolarizingProbability)
@@ -80,6 +85,7 @@ public struct NoiseModel: Sendable, Equatable, Codable {
             self.readoutFlip1To0 = Self.clamp(readoutFlip1To0)
         }
 
+        self.readoutConfusion = readoutConfusion
         self.localizedRules = localizedRules
     }
 
@@ -138,7 +144,7 @@ public struct NoiseModel: Sendable, Equatable, Codable {
     }
 
     public var appliesReadoutError: Bool {
-        readoutFlip0To1 > 0 || readoutFlip1To0 > 0
+        readoutFlip0To1 > 0 || readoutFlip1To0 > 0 || readoutConfusion != nil
     }
 
     /// Symmetric readout alias: `p01 + p10` (setting via init maps `p01 = p10 = p/2`).
@@ -170,8 +176,12 @@ public struct NoiseModel: Sendable, Equatable, Codable {
         return 0
     }
 
-    /// Flips each bit in a packed outcome index independently.
+    /// Flips each bit in a packed outcome index independently, or samples a full
+    /// assignment matrix when ``readoutConfusion`` matches `measuredQubitCount`.
     public func flipReadoutOutcome(_ outcome: Int, measuredQubitCount: Int, rng: inout QuantumRNG) -> Int {
+        if let matrix = readoutConfusion, matrix.qubitCount == measuredQubitCount {
+            return matrix.sampleMeasured(prepared: outcome, rng: &rng)
+        }
         guard appliesReadoutError else { return outcome }
         var result = outcome
         for position in 0..<measuredQubitCount {
@@ -185,7 +195,16 @@ public struct NoiseModel: Sendable, Equatable, Codable {
     }
 
     /// Flips each classical bit in a measurement bit array independently.
+    /// When a matching ``readoutConfusion`` is set, samples the joint assignment once.
     public func flipReadoutBits(_ bits: [Int], rng: inout QuantumRNG) -> [Int] {
+        if let matrix = readoutConfusion, matrix.qubitCount == bits.count {
+            var prepared = 0
+            for (position, bit) in bits.enumerated() where bit != 0 {
+                prepared |= 1 << position
+            }
+            let measured = matrix.sampleMeasured(prepared: prepared, rng: &rng)
+            return (0..<bits.count).map { (measured >> $0) & 1 }
+        }
         guard appliesReadoutError else { return bits }
         return bits.map { flipReadoutBit($0, rng: &rng) }
     }

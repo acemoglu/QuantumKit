@@ -1,12 +1,12 @@
 import Foundation
 
-/// Computes Hamiltonian expectation gradients via the analytic parameter-shift rule.
+/// Computes Hamiltonian expectation gradients via parameter-shift or adjoint differentiation.
 ///
-/// For each symbolic parameter θ the gradient is obtained from two shifted evaluations:
+/// Parameter-shift (default): for each symbolic parameter θ,
 /// `∂⟨H⟩/∂θ = ½ (⟨H⟩(θ + π/2) − ⟨H⟩(θ − π/2))`.
 ///
-/// Shifted circuits are evaluated in batches through ``BatchExpectationExecutor`` when the
-/// ansatz is unitary-only and noise-free, reusing the GPU batch infrastructure from Phase 1.
+/// Adjoint: reverse-mode sweep with O(1) circuit evolutions in the parameter count
+/// (``StatevectorBackend`` only; `RX`/`RY`/`RZ` parameters).
 public struct GradientCalculator: Sendable {
     private let estimator: Estimator
 
@@ -21,6 +21,38 @@ public struct GradientCalculator: Sendable {
         backend: any QuantumBackend,
         options: QuantumRunOptions = QuantumRunOptions(),
         gradientOptions: GradientOptions = GradientOptions()
+    ) throws -> GradientResult {
+        switch gradientOptions.method {
+        case .adjoint:
+            guard let statevectorBackend = backend as? StatevectorBackend else {
+                throw GradientCalculatorError.adjointRequiresStatevectorBackend
+            }
+            return try AdjointDifferentiator().run(
+                circuit: circuit,
+                hamiltonian: hamiltonian,
+                parameters: parameters,
+                backend: statevectorBackend,
+                options: options
+            )
+        case .parameterShift:
+            return try runParameterShift(
+                circuit: circuit,
+                hamiltonian: hamiltonian,
+                parameters: parameters,
+                backend: backend,
+                options: options,
+                gradientOptions: gradientOptions
+            )
+        }
+    }
+
+    private func runParameterShift(
+        circuit: QuantumCircuit,
+        hamiltonian: Hamiltonian,
+        parameters: [String: QFloat],
+        backend: any QuantumBackend,
+        options: QuantumRunOptions,
+        gradientOptions: GradientOptions
     ) throws -> GradientResult {
         let started = DispatchTime.now()
 

@@ -50,6 +50,36 @@ public enum Gate: Equatable, Sendable {
     /// Swaps the states of two qubits.
     case swap(q1: Int, q2: Int)
 
+    /// Identity on a single qubit (explicit no-op).
+    case id(target: Int)
+
+    /// Ordering barrier on the listed qubits (empty = all circuit qubits at validation time).
+    case barrier(qubits: [Int])
+
+    /// Idle / delay instruction with duration metadata (simulation timing; not a pulse).
+    case delay(duration: QFloat, qubit: Int)
+
+    /// iSWAP: swaps qubits with a relative phase of +i on the odd-parity subspace.
+    case iswap(q1: Int, q2: Int)
+
+    /// Echoed cross-resonance (IBM native-style); decomposed for simulation.
+    case ecr(control: Int, target: Int)
+
+    /// Ising XX rotation exp(-i θ XX / 2).
+    case rxx(theta: QFloatExpr, q1: Int, q2: Int)
+
+    /// Ising YY rotation exp(-i θ YY / 2).
+    case ryy(theta: QFloatExpr, q1: Int, q2: Int)
+
+    /// Ising ZZ rotation exp(-i θ ZZ / 2).
+    case rzz(theta: QFloatExpr, q1: Int, q2: Int)
+
+    /// Double CNOT: CX(q1,q2) then CX(q2,q1).
+    case dcx(q1: Int, q2: Int)
+
+    /// Fredkin gate (controlled-SWAP).
+    case cswap(control: Int, q1: Int, q2: Int)
+
     /// Toffoli gate (CCX): X on target when both controls are |1>
     case ccx(control1:Int, control2:Int, target:Int)
 
@@ -111,14 +141,20 @@ extension Gate {
              .s(let target), .t(let target), .sdg(let target), .tdg(let target),
              .sx(let target), .sxdg(let target), .p(_, let target), .u(_, _, _, let target),
              .rx(_, let target), .ry(_, let target), .rz(_, let target), .reset(let target),
-             .unitary1(_, let target):
+             .unitary1(_, let target), .id(let target), .delay(_, let target):
             return [target]
         case .cx(let control, let target), .cz(let control, let target),
              .crx(_, let control, let target), .cry(_, let control, let target),
-             .crz(_, let control, let target), .cp(_, let control, let target):
+             .crz(_, let control, let target), .cp(_, let control, let target),
+             .ecr(let control, let target):
             return [control, target]
-        case .swap(let q1, let q2):
+        case .swap(let q1, let q2), .iswap(let q1, let q2), .dcx(let q1, let q2),
+             .rxx(_, let q1, let q2), .ryy(_, let q1, let q2), .rzz(_, let q1, let q2):
             return [q1, q2]
+        case .cswap(let control, let q1, let q2):
+            return [control, q1, q2]
+        case .barrier(let qubits):
+            return qubits
         case .ccx(let control1, let control2, let target):
             return [control1, control2, target]
         case .mcx(let controls, let target), .mcz(let controls, let target):
@@ -142,8 +178,16 @@ extension Gate {
     /// `measure`/`reset` are non-unitary and return themselves; guard with ``QuantumCircuit/isUnitaryOnly``.
     public var adjoint: Gate {
         switch self {
-        case .h, .x, .y, .z, .cx, .cz, .swap, .ccx, .mcx, .mcz:
+        case .h, .x, .y, .z, .cx, .cz, .swap, .ccx, .mcx, .mcz, .id, .barrier, .iswap, .dcx, .cswap, .ecr:
             return self
+        case .delay(let duration, let qubit):
+            return .delay(duration: duration, qubit: qubit)
+        case .rxx(let theta, let q1, let q2):
+            return .rxx(theta: -theta, q1: q1, q2: q2)
+        case .ryy(let theta, let q1, let q2):
+            return .ryy(theta: -theta, q1: q1, q2: q2)
+        case .rzz(let theta, let q1, let q2):
+            return .rzz(theta: -theta, q1: q1, q2: q2)
         case .s(let target):
             return .sdg(target: target)
         case .sdg(let target):
@@ -222,6 +266,12 @@ extension Gate {
             return .crz(theta: Gate.wrapAngle(theta), control: control, target: target)
         case .cp(let theta, let control, let target):
             return .cp(theta: Gate.wrapAngle(theta), control: control, target: target)
+        case .rxx(let theta, let q1, let q2):
+            return .rxx(theta: Gate.wrapAngle(theta), q1: q1, q2: q2)
+        case .ryy(let theta, let q1, let q2):
+            return .ryy(theta: Gate.wrapAngle(theta), q1: q1, q2: q2)
+        case .rzz(let theta, let q1, let q2):
+            return .rzz(theta: Gate.wrapAngle(theta), q1: q1, q2: q2)
         default:
             return self
         }

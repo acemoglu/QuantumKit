@@ -8,6 +8,8 @@ public enum GateKind: String, Sendable, Equatable, Codable, CaseIterable {
     case p, u
     case rx, ry, rz
     case cx, cz, swap
+    case id, barrier, delay
+    case iswap, ecr, rxx, ryy, rzz, dcx, cswap
     case ccx, mcx, mcz
     case crx, cry, crz, cp
     case measure, reset, c_if, unitary1, initialize, customUnitary
@@ -36,6 +38,16 @@ extension Gate {
         case .cx: return .cx
         case .cz: return .cz
         case .swap: return .swap
+        case .id: return .id
+        case .barrier: return .barrier
+        case .delay: return .delay
+        case .iswap: return .iswap
+        case .ecr: return .ecr
+        case .rxx: return .rxx
+        case .ryy: return .ryy
+        case .rzz: return .rzz
+        case .dcx: return .dcx
+        case .cswap: return .cswap
         case .ccx: return .ccx
         case .mcx: return .mcx
         case .mcz: return .mcz

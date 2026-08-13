@@ -33,6 +33,16 @@ public struct ClassicalMemory: Sendable, Equatable, Codable {
         return maskedValue(at: index)
     }
 
+    /// Current classical register values (memory slots), in register-index order.
+    public var memorySlots: [Int] {
+        (0..<registerValues.count).map { value(ofRegister: $0) }
+    }
+
+    /// Hex representation of a register value (e.g. `"0x5"`).
+    public func hexValue(ofRegister index: Int) -> String {
+        String(format: "0x%x", value(ofRegister: index))
+    }
+
     public mutating func writeMeasuredBits(
         _ bits: [Int],
         register: Int,

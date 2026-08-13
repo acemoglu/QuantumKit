@@ -170,6 +170,13 @@ extension QuantumEngine {
     }
 
     func executeUnitaryGate(_ gate: Gate, on state: StateVector, gateCounter: inout Int) throws {
+        if GateDecomposition.needsExecutionExpansion(gate) {
+            let pieces = try Self.expandForExecution(gate)
+            guard !pieces.isEmpty else { return }
+            try flushUnitaryGates(pieces, on: state, gateCounter: &gateCounter)
+            return
+        }
+
         if case .unitary1(let matrix, let target) = gate {
             try applyHost1QUnitary(matrix, target: target, on: state)
             gateCounter += 1
@@ -205,6 +212,16 @@ extension QuantumEngine {
         commandBuffer.commit()
     }
 
+    /// Recursively expands composite / no-op gates that lack a native GPU kernel.
+    static func expandForExecution(_ gate: Gate) throws -> [Gate] {
+        guard GateDecomposition.needsExecutionExpansion(gate) else { return [gate] }
+        var result: [Gate] = []
+        for piece in try GateDecomposition.expand(gate) {
+            result.append(contentsOf: try expandForExecution(piece))
+        }
+        return result
+    }
+
     func flushUnitaryGates(_ gates: [Gate], on state: StateVector) throws {
         var gateCounter = 0
         try flushUnitaryGates(gates, on: state, gateCounter: &gateCounter)
@@ -220,24 +237,33 @@ extension QuantumEngine {
         var scratch: RenormalizationScratch?
 
         for gate in gates {
-            if case .unitary1(let matrix, let target) = gate {
-                try applyHost1QUnitary(matrix, target: target, on: state)
-                gateCounter += 1
-                continue
+            let expanded: [Gate]
+            if GateDecomposition.needsExecutionExpansion(gate) {
+                expanded = try Self.expandForExecution(gate)
+            } else {
+                expanded = [gate]
             }
-            if case .customUnitary(let matrix, let qubits) = gate, qubits.count > 1 {
-                try applyHostCustomUnitary(matrix, qubits: qubits, on: state)
-                gateCounter += 1
-                continue
-            }
-            try encodeUnitaryGate(gate, encoder: computeEncoder, state: state)
-            gateCounter += 1
-            if shouldRenormalize(afterAppliedGateCount: gateCounter) {
-                if scratch == nil {
-                    scratch = try makeRenormalizationScratch(stateCount: state.stateCount)
+
+            for piece in expanded {
+                if case .unitary1(let matrix, let target) = piece {
+                    try applyHost1QUnitary(matrix, target: target, on: state)
+                    gateCounter += 1
+                    continue
                 }
-                if let scratch {
-                    try encodeStateRenormalization(encoder: computeEncoder, state: state, scratch: scratch)
+                if case .customUnitary(let matrix, let qubits) = piece, qubits.count > 1 {
+                    try applyHostCustomUnitary(matrix, qubits: qubits, on: state)
+                    gateCounter += 1
+                    continue
+                }
+                try encodeUnitaryGate(piece, encoder: computeEncoder, state: state)
+                gateCounter += 1
+                if shouldRenormalize(afterAppliedGateCount: gateCounter) {
+                    if scratch == nil {
+                        scratch = try makeRenormalizationScratch(stateCount: state.stateCount)
+                    }
+                    if let scratch {
+                        try encodeStateRenormalization(encoder: computeEncoder, state: state, scratch: scratch)
+                    }
                 }
             }
         }
@@ -450,6 +476,14 @@ extension QuantumEngine {
                 var thetaValue = resolvedTheta
                 encoder.setBytes(&thetaValue, length: MemoryLayout<Float>.stride, index: 3)
             }
+
+        case .id, .barrier, .delay:
+            // No-ops / structural ops — never dispatched as unitaries.
+            break
+
+        case .iswap, .ecr, .rxx, .ryy, .rzz, .dcx, .cswap:
+            // Composites must be expanded in executeUnitaryGate / flushUnitaryGates before encode.
+            throw QuantumEngineError.unsupportedGateEncoding(gate)
 
         case .measure, .reset:
             break

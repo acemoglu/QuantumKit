@@ -312,6 +312,12 @@ enum CircuitUnitary {
                 .multiplied(by: try matrix(for: .cx(control: q2, target: q1), qubitCount: qubitCount))
                 .multiplied(by: try matrix(for: .cx(control: q1, target: q2), qubitCount: qubitCount))
 
+        case .id:
+            return UnitaryMatrix.identity(1 << qubitCount)
+
+        case .iswap, .ecr, .rxx, .ryy, .rzz, .dcx, .cswap:
+            return try matrixFromDecomposition(gate, qubitCount: qubitCount)
+
         case .ccx(let control1, let control2, let target):
             return embed(
                 u00: .zero, u01: .one,
@@ -391,9 +397,19 @@ enum CircuitUnitary {
                 controlMask: 0, target: target, qubitCount: qubitCount
             )
 
-        case .initialize, .measure, .reset, .c_if:
+        case .initialize, .measure, .reset, .c_if, .barrier, .delay:
             throw QuantumCircuitError.circuitNotUnitary
         }
+    }
+
+    private static func matrixFromDecomposition(_ gate: Gate, qubitCount: Int) throws -> UnitaryMatrix {
+        let pieces = try GateDecomposition.expand(gate)
+        var product = UnitaryMatrix.identity(1 << qubitCount)
+        for piece in pieces {
+            let local = try matrix(for: piece, qubitCount: qubitCount)
+            product = local.multiplied(by: product)
+        }
+        return product
     }
 
     private static func rzMatrix(theta: QFloatExpr, target: Int, qubitCount: Int) throws -> UnitaryMatrix {

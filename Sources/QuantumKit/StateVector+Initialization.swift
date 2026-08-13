@@ -82,4 +82,23 @@ extension StateVector {
         )
         try initialize(amplitudes: embedded)
     }
+
+    /// Writes amplitudes without renormalizing. Used for adjoint intermediate states that are
+    /// not required to be unit vectors (e.g. ``H|ψ⟩``).
+    func replaceAmplitudesUnchecked(_ amplitudes: [ComplexAmplitude]) throws {
+        guard amplitudes.count == stateCount else {
+            throw StateVectorInitializationError.amplitudeCountMismatch(
+                expected: stateCount,
+                actual: amplitudes.count
+            )
+        }
+
+        let realPointer = realBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let imagPointer = imagBuffer.contents().assumingMemoryBound(to: QFloat.self)
+
+        for index in 0..<stateCount {
+            realPointer[index] = amplitudes[index].real
+            imagPointer[index] = amplitudes[index].imaginary
+        }
+    }
 }

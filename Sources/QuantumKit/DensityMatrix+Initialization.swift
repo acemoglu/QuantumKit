@@ -74,4 +74,20 @@ extension DensityMatrix {
         )
         try initialize(amplitudes: embedded)
     }
+
+    /// Initializes ρ to the pure computational-basis projector |index⟩⟨index|.
+    public func initializeComputationalBasis(index: Int) throws {
+        guard index >= 0, index < stateCount else {
+            throw DensityMatrixInitializationError.amplitudeCountMismatch(
+                expected: stateCount,
+                actual: index
+            )
+        }
+        var amplitudes = Array(
+            repeating: ComplexAmplitude(real: 0, imaginary: 0),
+            count: stateCount
+        )
+        amplitudes[index] = ComplexAmplitude(real: 1, imaginary: 0)
+        try initialize(amplitudes: amplitudes)
+    }
 }

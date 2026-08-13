@@ -51,7 +51,7 @@ extension QuantumCircuit {
     public var isUnitaryOnly: Bool {
         gates.allSatisfy { gate in
             switch gate {
-            case .measure, .reset, .c_if:
+            case .measure, .reset, .c_if, .barrier, .delay:
                 return false
             case .initialize:
                 return false

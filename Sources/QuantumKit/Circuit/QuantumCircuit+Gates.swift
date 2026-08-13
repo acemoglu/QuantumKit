@@ -127,6 +127,81 @@ extension QuantumCircuit {
     }
 
     @discardableResult
+    public mutating func id(_ target: Int) throws -> QuantumCircuit {
+        try applyValidated(.id(target: target))
+        return self
+    }
+
+    @discardableResult
+    public mutating func barrier(_ qubits: [Int] = []) throws -> QuantumCircuit {
+        try applyValidated(.barrier(qubits: qubits))
+        return self
+    }
+
+    @discardableResult
+    public mutating func delay(duration: QFloat, _ qubit: Int) throws -> QuantumCircuit {
+        try applyValidated(.delay(duration: duration, qubit: qubit))
+        return self
+    }
+
+    @discardableResult
+    public mutating func iswap(_ q1: Int, _ q2: Int) throws -> QuantumCircuit {
+        try applyValidated(.iswap(q1: q1, q2: q2))
+        return self
+    }
+
+    @discardableResult
+    public mutating func ecr(control: Int, target: Int) throws -> QuantumCircuit {
+        try applyValidated(.ecr(control: control, target: target))
+        return self
+    }
+
+    @discardableResult
+    public mutating func rxx(theta: QFloatExpr, _ q1: Int, _ q2: Int) throws -> QuantumCircuit {
+        try applyValidated(.rxx(theta: theta, q1: q1, q2: q2))
+        return self
+    }
+
+    @discardableResult
+    public mutating func rxx(theta: QFloat, _ q1: Int, _ q2: Int) throws -> QuantumCircuit {
+        try rxx(theta: QFloatExpr(theta), q1, q2)
+    }
+
+    @discardableResult
+    public mutating func ryy(theta: QFloatExpr, _ q1: Int, _ q2: Int) throws -> QuantumCircuit {
+        try applyValidated(.ryy(theta: theta, q1: q1, q2: q2))
+        return self
+    }
+
+    @discardableResult
+    public mutating func ryy(theta: QFloat, _ q1: Int, _ q2: Int) throws -> QuantumCircuit {
+        try ryy(theta: QFloatExpr(theta), q1, q2)
+    }
+
+    @discardableResult
+    public mutating func rzz(theta: QFloatExpr, _ q1: Int, _ q2: Int) throws -> QuantumCircuit {
+        try applyValidated(.rzz(theta: theta, q1: q1, q2: q2))
+        return self
+    }
+
+    @discardableResult
+    public mutating func rzz(theta: QFloat, _ q1: Int, _ q2: Int) throws -> QuantumCircuit {
+        try rzz(theta: QFloatExpr(theta), q1, q2)
+    }
+
+    @discardableResult
+    public mutating func dcx(_ q1: Int, _ q2: Int) throws -> QuantumCircuit {
+        try applyValidated(.dcx(q1: q1, q2: q2))
+        return self
+    }
+
+    @discardableResult
+    public mutating func cswap(control: Int, _ q1: Int, _ q2: Int) throws -> QuantumCircuit {
+        try applyValidated(.cswap(control: control, q1: q1, q2: q2))
+        return self
+    }
+
+    @discardableResult
     public mutating func crx(theta: QFloatExpr, control: Int, target: Int) throws -> QuantumCircuit {
         try applyValidated(.crx(theta: theta, control: control, target: target))
         return self
@@ -242,6 +317,54 @@ extension QuantumCircuit {
     ) throws -> QuantumCircuit {
         try applyValidated(.initialize(qubits: qubits, amplitudes: amplitudes))
         return self
+    }
+
+    /// Prepares a computational-basis product state |index⟩ on the full register
+    /// (qubit 0 = LSB of `index`).
+    @discardableResult
+    public mutating func initializeComputationalBasis(_ index: Int) throws -> QuantumCircuit {
+        let stateCount = 1 << qubitCount
+        guard index >= 0, index < stateCount else {
+            throw QuantumCircuitError.invalidAlgorithmParameter(
+                reason: "computational basis index \(index) is outside 0..<\(stateCount)"
+            )
+        }
+        var amplitudes = Array(
+            repeating: ComplexAmplitude(real: 0, imaginary: 0),
+            count: stateCount
+        )
+        amplitudes[index] = ComplexAmplitude(real: 1, imaginary: 0)
+        return try initialize(qubits: Array(0..<qubitCount), amplitudes: amplitudes)
+    }
+
+    /// Prepares a computational-basis bitstring on the listed qubits (leftmost = highest index
+    /// in `bits`, matching MSB-first bitstring convention for that subset).
+    @discardableResult
+    public mutating func initializeProductState(qubits: [Int], bits: [Int]) throws -> QuantumCircuit {
+        guard qubits.count == bits.count else {
+            throw QuantumCircuitError.invalidAlgorithmParameter(
+                reason: "product-state bits count must match qubits count"
+            )
+        }
+        guard bits.allSatisfy({ $0 == 0 || $0 == 1 }) else {
+            throw QuantumCircuitError.invalidAlgorithmParameter(
+                reason: "product-state bits must be 0 or 1"
+            )
+        }
+        var index = 0
+        for (position, bit) in bits.enumerated() where bit == 1 {
+            // bits array is MSB-first for the listed qubits order: bits[0] is highest qubit index weight
+            let weight = qubits.count - 1 - position
+            index |= bit << weight
+        }
+        // Map subset basis index into amplitudes on those qubits
+        let count = 1 << qubits.count
+        var amplitudes = Array(
+            repeating: ComplexAmplitude(real: 0, imaginary: 0),
+            count: count
+        )
+        amplitudes[index] = ComplexAmplitude(real: 1, imaginary: 0)
+        return try initialize(qubits: qubits, amplitudes: amplitudes)
     }
 
     @discardableResult

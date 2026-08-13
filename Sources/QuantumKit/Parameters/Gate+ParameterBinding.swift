@@ -11,6 +11,8 @@ extension Gate {
             return !theta.isFullyBound || !phi.isFullyBound || !lambda.isFullyBound
         case .crx(let theta, _, _), .cry(let theta, _, _), .crz(let theta, _, _), .cp(let theta, _, _):
             return !theta.isFullyBound
+        case .rxx(let theta, _, _), .ryy(let theta, _, _), .rzz(let theta, _, _):
+            return !theta.isFullyBound
         case .c_if(_, _, let conditionedGate):
             return conditionedGate.containsUnboundParameters
         default:
@@ -26,6 +28,8 @@ extension Gate {
         case .u(let theta, let phi, let lambda, _):
             return theta.referencedParameters.union(phi.referencedParameters).union(lambda.referencedParameters)
         case .crx(let theta, _, _), .cry(let theta, _, _), .crz(let theta, _, _), .cp(let theta, _, _):
+            return theta.referencedParameters
+        case .rxx(let theta, _, _), .ryy(let theta, _, _), .rzz(let theta, _, _):
             return theta.referencedParameters
         case .c_if(_, _, let conditionedGate):
             return conditionedGate.referencedParameters
@@ -60,6 +64,12 @@ extension Gate {
             return .crz(theta: try theta.bound(using: parameters), control: control, target: target)
         case .cp(let theta, let control, let target):
             return .cp(theta: try theta.bound(using: parameters), control: control, target: target)
+        case .rxx(let theta, let q1, let q2):
+            return .rxx(theta: try theta.bound(using: parameters), q1: q1, q2: q2)
+        case .ryy(let theta, let q1, let q2):
+            return .ryy(theta: try theta.bound(using: parameters), q1: q1, q2: q2)
+        case .rzz(let theta, let q1, let q2):
+            return .rzz(theta: try theta.bound(using: parameters), q1: q1, q2: q2)
         case .c_if(let classicalRegister, let expectedValue, let conditionedGate):
             return .c_if(
                 classicalRegister: classicalRegister,

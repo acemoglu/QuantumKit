@@ -26,6 +26,29 @@ public struct ShotCounts: Sendable, Equatable {
         return result
     }
 
+    /// Outcome counts keyed by hex strings (`"0x0"`, `"0x1"`, …) for the packed index.
+    public func hexCounts(qubitCount: Int) -> [String: Int] {
+        var result: [String: Int] = [:]
+        result.reserveCapacity(counts.count)
+        let width = max((qubitCount + 3) / 4, 1)
+        for (index, count) in counts {
+            result[String(format: "0x%0\(width)x", index)] = count
+        }
+        return result
+    }
+
+    /// Empirical frequencies from the histogram.
+    public func probabilities(qubitCount: Int) -> [String: QFloat] {
+        guard shots > 0 else { return [:] }
+        let bitstrings = bitstringCounts(qubitCount: qubitCount)
+        var result: [String: QFloat] = [:]
+        result.reserveCapacity(bitstrings.count)
+        for (key, count) in bitstrings {
+            result[key] = QFloat(count) / QFloat(shots)
+        }
+        return result
+    }
+
     private static func bitstring(for index: Int, qubits: [Int]) -> String {
         (0..<qubits.count)
             .reversed()
