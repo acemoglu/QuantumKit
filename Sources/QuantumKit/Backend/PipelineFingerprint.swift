@@ -43,6 +43,9 @@ public enum PipelineFingerprint {
             "p10:\(noise.readoutFlip1To0)",
             "reset:\(noise.resetErrorProbability)",
             "prep:\(noise.preparationErrorProbability)",
+            "idleDelay:\(noise.thermalRelaxationOnDelay)",
+            "mDeph:\(noise.measurementDephasingProbability)",
+            "mMode:\(noise.measurementMode.rawValue)",
             "rules:\(noise.localizedRules.count)",
         ]
         if let matrix = noise.readoutConfusion {

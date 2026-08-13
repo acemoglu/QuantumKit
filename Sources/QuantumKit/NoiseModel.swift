@@ -55,6 +55,17 @@ public struct NoiseModel: Sendable, Equatable, Codable {
     /// on every initialized qubit (C9).
     public var preparationErrorProbability: QFloat
 
+    /// When `true`, each ``Gate/delay`` applies T1/T2 thermal relaxation using the delay's
+    /// own duration and this model's ``t1``/``t2`` (C8). Does not require ``gateTime``.
+    public var thermalRelaxationOnDelay: Bool
+
+    /// Phase-damping strength `λ` applied to each measured qubit immediately before
+    /// the measurement update (measurement-induced dephasing, C10).
+    public var measurementDephasingProbability: QFloat
+
+    /// Quantum-state update semantics for ``Gate/measure`` (C10).
+    public var measurementMode: MeasurementMode
+
     /// Per-gate, per-qubit localized noise rules applied after matching gates execute.
     public var localizedRules: [LocalizedNoiseRule]
 
@@ -71,6 +82,9 @@ public struct NoiseModel: Sendable, Equatable, Codable {
         readoutConfusion: ReadoutConfusionMatrix? = nil,
         resetErrorProbability: QFloat = 0,
         preparationErrorProbability: QFloat = 0,
+        thermalRelaxationOnDelay: Bool = false,
+        measurementDephasingProbability: QFloat = 0,
+        measurementMode: MeasurementMode = .projective,
         localizedRules: [LocalizedNoiseRule] = []
     ) {
         self.depolarizingProbability = Self.clamp(depolarizingProbability)
@@ -97,6 +111,9 @@ public struct NoiseModel: Sendable, Equatable, Codable {
         self.readoutConfusion = readoutConfusion
         self.resetErrorProbability = Self.clamp(resetErrorProbability)
         self.preparationErrorProbability = Self.clamp(preparationErrorProbability)
+        self.thermalRelaxationOnDelay = thermalRelaxationOnDelay
+        self.measurementDephasingProbability = Self.clamp(measurementDephasingProbability)
+        self.measurementMode = measurementMode
         self.localizedRules = localizedRules
     }
 
@@ -177,8 +194,39 @@ public struct NoiseModel: Sendable, Equatable, Codable {
         resetErrorProbability > 0 || preparationErrorProbability > 0
     }
 
+    /// Idle thermal relaxation during ``Gate/delay`` (C8).
+    public var hasIdleNoise: Bool {
+        thermalRelaxationOnDelay && (t1 > 0 || t2 > 0)
+    }
+
+    /// Measurement-induced dephasing / non-projective measure semantics (C10).
+    public var hasMeasurementChannelNoise: Bool {
+        measurementDephasingProbability > 0 || measurementMode != .projective
+    }
+
     public var hasAnyChannel: Bool {
-        hasGateNoise || appliesReadoutError || hasPreparationNoise
+        hasGateNoise || appliesReadoutError || hasPreparationNoise || hasIdleNoise || hasMeasurementChannelNoise
+    }
+
+    /// Amplitude-damping strength `γ = 1 - exp(-duration / T1)` for an idle interval.
+    public func amplitudeDampingProbability(forDuration duration: QFloat) -> QFloat {
+        guard t1 > 0, duration > 0 else { return 0 }
+        return Self.clamp(1 - exp(-duration / t1))
+    }
+
+    /// Pure-dephasing strength `λ` for an idle interval of `duration` (same T1/T2 formula
+    /// as ``effectivePhaseDampingProbability``, but using `duration` instead of ``gateTime``).
+    public func phaseDampingProbability(forDuration duration: QFloat) -> QFloat {
+        guard t2 > 0, duration > 0 else { return 0 }
+
+        let inverseT2 = 1.0 / Double(t2)
+        let inversePureDephasing = t1 > 0
+            ? inverseT2 - 1.0 / (2.0 * Double(t1))
+            : inverseT2
+        guard inversePureDephasing > 0 else { return 0 }
+
+        let lambda = 1.0 - exp(-2.0 * Double(duration) * inversePureDephasing)
+        return Self.clamp(QFloat(lambda))
     }
 
     /// Flips a single classical bit using asymmetric readout error rates.

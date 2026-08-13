@@ -23,6 +23,7 @@ public enum QuantumEngineError: Error {
     case zeroStateNorm
     case circuitNotUnitaryOnly
     case localizedNoiseRequiresDensityMatrixBackend
+    case nonProjectiveMeasurementRequiresDensityMatrixBackend
     case unsupportedGateEncoding(Gate)
 
 }
@@ -510,6 +511,9 @@ public final class QuantumEngine: @unchecked Sendable {
         if let noise, noise.hasLocalizedGateNoise {
             throw QuantumEngineError.localizedNoiseRequiresDensityMatrixBackend
         }
+        if let noise, noise.measurementMode != .projective {
+            throw QuantumEngineError.nonProjectiveMeasurementRequiresDensityMatrixBackend
+        }
 
         let noiseEnabled = noise?.hasGateNoise == true
         var measurementOutcomes: [[Int]] = []
@@ -557,6 +561,15 @@ public final class QuantumEngine: @unchecked Sendable {
             case .measure(let spec):
                 try flushPendingUnitaryGates()
 
+                if let noise, noise.measurementDephasingProbability > 0 {
+                    try applyPhaseDamping(
+                        after: gate,
+                        on: state,
+                        flipProbability: noise.measurementDephasingProbability,
+                        rng: &rng
+                    )
+                }
+
                 let outcome = try executePartialMeasurementCollapse(
                     on: state,
                     qubits: spec.qubits,
@@ -579,8 +592,31 @@ public final class QuantumEngine: @unchecked Sendable {
                     try executeUnitaryGate(.x(target: qubit), on: state, gateCounter: &unitaryGateCounter)
                 }
 
-            case .barrier, .delay:
+            case .barrier:
                 try flushPendingUnitaryGates()
+
+            case .delay(let duration, _):
+                try flushPendingUnitaryGates()
+                if let noise, noise.thermalRelaxationOnDelay {
+                    let gamma = noise.amplitudeDampingProbability(forDuration: duration)
+                    if gamma > 0 {
+                        try applyAmplitudeDamping(
+                            after: gate,
+                            on: state,
+                            probability: gamma,
+                            rng: &rng
+                        )
+                    }
+                    let lambda = noise.phaseDampingProbability(forDuration: duration)
+                    if lambda > 0 {
+                        try applyPhaseDamping(
+                            after: gate,
+                            on: state,
+                            flipProbability: lambda,
+                            rng: &rng
+                        )
+                    }
+                }
 
             case .id:
                 break

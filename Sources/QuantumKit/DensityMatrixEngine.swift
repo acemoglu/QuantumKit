@@ -118,6 +118,7 @@ public final class DensityMatrixEngine: @unchecked Sendable {
                     qubits: spec.qubits,
                     on: density,
                     rng: &rng,
+                    noise: noise,
                     scratchReal: scratchReal,
                     scratchImag: scratchImag
                 )
@@ -131,6 +132,16 @@ public final class DensityMatrixEngine: @unchecked Sendable {
                     register: spec.classicalRegister,
                     bitOffset: spec.classicalBitOffset
                 )
+                if let noise, noise.hasLocalizedGateNoise {
+                    try applyPointNoiseChannels(
+                        after: gate,
+                        at: gateIndex,
+                        on: density,
+                        noise: noise,
+                        scratchReal: scratchReal,
+                        scratchImag: scratchImag
+                    )
+                }
 
             case .reset(let qubit):
                 try applyReset(
@@ -461,7 +472,7 @@ public final class DensityMatrixEngine: @unchecked Sendable {
         }
     }
 
-    /// Localized (+ global reset/prep) noise at non-unitary circuit points (C7 / C9).
+    /// Localized (+ global reset/prep / idle) noise at non-unitary circuit points (C7 / C8 / C9).
     /// Skips global post-unitary dep/AD/PD — those remain unitary-gate-only.
     private func applyPointNoiseChannels(
         after gate: Gate,
@@ -493,6 +504,18 @@ public final class DensityMatrixEngine: @unchecked Sendable {
                     scratchImag: scratchImag
                 )
             }
+        }
+
+        if case .delay(let duration, let qubit) = gate, noise.thermalRelaxationOnDelay {
+            try applyThermalRelaxation(
+                on: density,
+                qubit: qubit,
+                duration: duration,
+                t1: noise.t1,
+                t2: noise.t2,
+                scratchReal: scratchReal,
+                scratchImag: scratchImag
+            )
         }
 
         if noise.hasLocalizedGateNoise {
@@ -816,19 +839,16 @@ public final class DensityMatrixEngine: @unchecked Sendable {
         )
     }
 
-    /// Projective computational-basis measurement with state collapse. Each listed qubit is measured
-    /// independently in circuit order; on distinct qubits the projectors commute, so sequential
-    /// collapse reproduces the correct joint distribution.
+    /// Computational-basis measurement with optional measurement-induced dephasing (C10).
     ///
-    /// For qubit q the outcome probability is p_b = Tr(Π_b ρ), the sum of the diagonal populations
-    /// over basis states whose q-th bit equals b. After sampling b with the engine's RNG, the
-    /// selected projector is folded with its own normalization into a single Kraus operator
-    /// Π_b / √p_b, so the existing Kraus pipeline performs ρ → Π_b ρ Π_b / p_b in one pass and the
-    /// post-measurement matrix already has unit trace.
+    /// For each qubit: optional pre-measure phase damping, Born-rule sample, then either
+    /// projective collapse (``MeasurementMode/projective``) or full Z-dephasing without
+    /// collapse (``MeasurementMode/dephasingOnly``). Classical readout flips are applied last.
     private func applyMeasurement(
         qubits: [Int],
         on density: DensityMatrix,
         rng: inout QuantumRNG,
+        noise: NoiseModel?,
         scratchReal: MTLBuffer,
         scratchImag: MTLBuffer
     ) throws -> [Int] {
@@ -836,37 +856,89 @@ public final class DensityMatrixEngine: @unchecked Sendable {
             throw QuantumMeasurementError.emptyQubitSelection
         }
 
+        let mode = noise?.measurementMode ?? .projective
+        let preDephasing = noise?.measurementDephasingProbability ?? 0
+
         var bits: [Int] = []
         bits.reserveCapacity(qubits.count)
 
         for qubit in qubits {
+            if preDephasing > 0 {
+                try applyPhaseDampingChannel(
+                    on: density,
+                    qubit: qubit,
+                    lambda: preDephasing,
+                    scratchReal: scratchReal,
+                    scratchImag: scratchImag
+                )
+            }
+
             let p0 = try diagonalPopulation(of: density, qubit: qubit, bit: 0)
             let dice = rng.nextUnitDouble()
             let outcome = dice < p0 ? 0 : 1
-            let probability = outcome == 0 ? p0 : 1 - p0
-            guard probability > 0 else {
-                throw DensityMatrixEngineError.zeroProbabilityMeasurement(qubit: qubit)
+
+            switch mode {
+            case .projective:
+                let probability = outcome == 0 ? p0 : 1 - p0
+                guard probability > 0 else {
+                    throw DensityMatrixEngineError.zeroProbabilityMeasurement(qubit: qubit)
+                }
+
+                let scaleFactor = 1 / probability.squareRoot()
+                let maxFloat32 = Double(Float32.greatestFiniteMagnitude)
+                let safeScaleFactor = min(scaleFactor, maxFloat32)
+                let scale = QFloat(safeScaleFactor)
+                let projector: [SIMD2<QFloat>] = outcome == 0
+                    ? [complex(scale, 0), complex(0, 0), complex(0, 0), complex(0, 0)]
+                    : [complex(0, 0), complex(0, 0), complex(0, 0), complex(scale, 0)]
+
+                try applyKrausChannel(
+                    on: density,
+                    targetQubit: qubit,
+                    kraus: [projector],
+                    scratchReal: scratchReal,
+                    scratchImag: scratchImag
+                )
+
+            case .dephasingOnly:
+                try applyPhaseDampingChannel(
+                    on: density,
+                    qubit: qubit,
+                    lambda: 1,
+                    scratchReal: scratchReal,
+                    scratchImag: scratchImag
+                )
             }
 
-            let scaleFactor = 1 / probability.squareRoot()
-            let maxFloat32 = Double(Float32.greatestFiniteMagnitude)
-            let safeScaleFactor = min(scaleFactor, maxFloat32)
-            let scale = QFloat(safeScaleFactor)
-            let projector: [SIMD2<QFloat>] = outcome == 0
-                ? [complex(scale, 0), complex(0, 0), complex(0, 0), complex(0, 0)] // Π0 / √p0
-                : [complex(0, 0), complex(0, 0), complex(0, 0), complex(scale, 0)] // Π1 / √p1
-
-            try applyKrausChannel(
-                on: density,
-                targetQubit: qubit,
-                kraus: [projector],
-                scratchReal: scratchReal,
-                scratchImag: scratchImag
-            )
             bits.append(outcome)
         }
 
+        if let noise {
+            return noise.flipReadoutBits(bits, rng: &rng)
+        }
         return bits
+    }
+
+    private func applyPhaseDampingChannel(
+        on density: DensityMatrix,
+        qubit: Int,
+        lambda: QFloat,
+        scratchReal: MTLBuffer,
+        scratchImag: MTLBuffer
+    ) throws {
+        guard lambda > 0 else { return }
+        let keep = sqrt(max(0, 1 - lambda))
+        let dephase = sqrt(max(0, lambda))
+        try applyKrausChannel(
+            on: density,
+            targetQubit: qubit,
+            kraus: [
+                [complex(1, 0), complex(0, 0), complex(0, 0), complex(keep, 0)],
+                [complex(0, 0), complex(0, 0), complex(0, 0), complex(dephase, 0)],
+            ],
+            scratchReal: scratchReal,
+            scratchImag: scratchImag
+        )
     }
 
     /// Population of outcome `bit` on `qubit`: Σ_i ρ_ii over basis states i whose q-th bit is `bit`.
@@ -1123,6 +1195,7 @@ extension DensityMatrixEngine {
             guard !qubits.isEmpty else { continue }
             try applyLocalized(
                 channel: rule.channel,
+                after: gate,
                 on: density,
                 qubits: qubits,
                 scratchReal: scratchReal,
@@ -1133,6 +1206,7 @@ extension DensityMatrixEngine {
 
     private func applyLocalized(
         channel: QuantumChannel,
+        after gate: Gate,
         on density: DensityMatrix,
         qubits: [Int],
         scratchReal: MTLBuffer,
@@ -1240,7 +1314,80 @@ extension DensityMatrixEngine {
                     scratchImag: scratchImag
                 )
             }
+
+        case .idleThermalRelaxation(let t1, let t2):
+            guard case .delay(let duration, _) = gate else { return }
+            for qubit in qubits {
+                try applyThermalRelaxation(
+                    on: density,
+                    qubit: qubit,
+                    duration: duration,
+                    t1: t1,
+                    t2: t2,
+                    scratchReal: scratchReal,
+                    scratchImag: scratchImag
+                )
+            }
         }
+    }
+
+    /// Apply AD then pure-dephasing for an idle interval of `duration` (C8).
+    private func applyThermalRelaxation(
+        on density: DensityMatrix,
+        qubit: Int,
+        duration: QFloat,
+        t1: QFloat,
+        t2: QFloat,
+        scratchReal: MTLBuffer,
+        scratchImag: MTLBuffer
+    ) throws {
+        let gamma = Self.amplitudeDampingProbability(t1: t1, duration: duration)
+        if gamma > 0 {
+            let keep = sqrt(max(0, 1 - gamma))
+            let relax = sqrt(max(0, gamma))
+            try applyKrausChannel(
+                on: density,
+                targetQubit: qubit,
+                kraus: [
+                    [complex(1, 0), complex(0, 0), complex(0, 0), complex(keep, 0)],
+                    [complex(0, 0), complex(relax, 0), complex(0, 0), complex(0, 0)],
+                ],
+                scratchReal: scratchReal,
+                scratchImag: scratchImag
+            )
+        }
+
+        let lambda = Self.phaseDampingProbability(t1: t1, t2: t2, duration: duration)
+        if lambda > 0 {
+            let keep = sqrt(max(0, 1 - lambda))
+            let dephase = sqrt(max(0, lambda))
+            try applyKrausChannel(
+                on: density,
+                targetQubit: qubit,
+                kraus: [
+                    [complex(1, 0), complex(0, 0), complex(0, 0), complex(keep, 0)],
+                    [complex(0, 0), complex(0, 0), complex(0, 0), complex(dephase, 0)],
+                ],
+                scratchReal: scratchReal,
+                scratchImag: scratchImag
+            )
+        }
+    }
+
+    private static func amplitudeDampingProbability(t1: QFloat, duration: QFloat) -> QFloat {
+        guard t1 > 0, duration > 0 else { return 0 }
+        return min(max(1 - exp(-duration / t1), 0), 1)
+    }
+
+    private static func phaseDampingProbability(t1: QFloat, t2: QFloat, duration: QFloat) -> QFloat {
+        guard t2 > 0, duration > 0 else { return 0 }
+        let inverseT2 = 1.0 / Double(t2)
+        let inversePureDephasing = t1 > 0
+            ? inverseT2 - 1.0 / (2.0 * Double(t1))
+            : inverseT2
+        guard inversePureDephasing > 0 else { return 0 }
+        let lambda = 1.0 - exp(-2.0 * Double(duration) * inversePureDephasing)
+        return min(max(QFloat(lambda), 0), 1)
     }
 
     private static func rotationGate(

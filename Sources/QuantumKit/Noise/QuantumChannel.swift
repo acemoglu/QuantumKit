@@ -18,6 +18,9 @@ public enum QuantumChannel: Sendable, Equatable, Codable {
     /// Stochastic coherent error: with probability `probability`, apply `R_axis(angle)`;
     /// otherwise identity. Exact DM realization is `(1-p)ρ + p UρU†`.
     case coherentUnitaryError(axis: CoherentRotationAxis, angle: QFloat, probability: QFloat)
+    /// Thermal relaxation during idle time. Strength is computed from the matched
+    /// ``Gate/delay`` duration (C8); ignored on non-delay instructions.
+    case idleThermalRelaxation(t1: QFloat, t2: QFloat)
 }
 
 extension QuantumChannel {
@@ -31,6 +34,8 @@ extension QuantumChannel {
             return 1
         case .coherentUnitaryError(_, _, let p):
             return p
+        case .idleThermalRelaxation(let t1, let t2):
+            return (t1 > 0 || t2 > 0) ? 1 : 0
         }
     }
 
@@ -43,6 +48,8 @@ extension QuantumChannel {
             return abs(angle) > 0
         case .coherentUnitaryError(_, let angle, let p):
             return p > 0 && abs(angle) > 0
+        case .idleThermalRelaxation(let t1, let t2):
+            return t1 > 0 || t2 > 0
         }
     }
 
