@@ -162,8 +162,28 @@ public final class CPUDensityMatrixBackend: QuantumBackend, @unchecked Sendable 
     public func run(circuit: QuantumCircuit, options: QuantumRunOptions = QuantumRunOptions()) throws -> QuantumResult {
         let started = DispatchTime.now()
         try circuit.requireFullyBound()
-        let density = try CPUDensityMatrix(qubitCount: circuit.qubitCount)
         var rng = makeCPURNG(seed: options.seed)
+
+        if let shots = options.shots {
+            let counts = try DensityMatrixShotSampler.runSampleCountsRNG(
+                circuit: circuit,
+                engine: engine,
+                shots: shots,
+                rng: &rng,
+                noise: options.noise
+            )
+            return QuantumResult(
+                metadata: makeCPUMetadata(
+                    circuit: circuit,
+                    options: options,
+                    started: started,
+                    method: .densityMatrix
+                ),
+                shotCounts: counts
+            )
+        }
+
+        let density = try CPUDensityMatrix(qubitCount: circuit.qubitCount)
         let execution = try engine.executeRNG(
             circuit,
             on: density,

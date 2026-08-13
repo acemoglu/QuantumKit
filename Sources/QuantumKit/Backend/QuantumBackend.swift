@@ -4,6 +4,8 @@ import Foundation
 public enum QuantumSimulationMethod: String, Codable, Sendable, Equatable {
     case statevector
     case densityMatrix
+    /// Monte-Carlo statevector unraveling ensemble (shared global noise channels).
+    case trajectory
 }
 
 /// Options for a single ``QuantumBackend/run(circuit:options:)`` invocation.
@@ -198,8 +200,28 @@ public final class DensityMatrixBackend: QuantumBackend, @unchecked Sendable {
     public func run(circuit: QuantumCircuit, options: QuantumRunOptions = QuantumRunOptions()) throws -> QuantumResult {
         let started = DispatchTime.now()
         try circuit.requireFullyBound()
-        let density = try DensityMatrix(qubitCount: circuit.qubitCount)
         var rng = makeRNG(seed: options.seed)
+
+        if let shots = options.shots {
+            let counts = try DensityMatrixShotSampler.runSampleCountsRNG(
+                circuit: circuit,
+                engine: engine,
+                shots: shots,
+                rng: &rng,
+                noise: options.noise
+            )
+            return QuantumResult(
+                metadata: makeMetadata(
+                    circuit: circuit,
+                    options: options,
+                    started: started,
+                    method: .densityMatrix
+                ),
+                shotCounts: counts
+            )
+        }
+
+        let density = try DensityMatrix(qubitCount: circuit.qubitCount)
         let execution = try engine.executeRNG(
             circuit,
             on: density,

@@ -2,7 +2,6 @@ import Foundation
 
 public enum EstimatorError: Error, Equatable {
     case unsupportedBackend
-    case shotsNotSupportedForDensityMatrix
     case invalidShotCount(Int)
     case invalidPrecision(QFloat)
 }
@@ -10,7 +9,7 @@ public enum EstimatorError: Error, Equatable {
 /// Options for ``Estimator`` beyond the shared ``QuantumRunOptions``.
 ///
 /// When `shots` or `precision` is set, the estimator uses Pauli measurement sampling
-/// on statevector backends instead of exact analytic expectations.
+/// instead of exact analytic expectations.
 public struct EstimatorOptions: Sendable, Equatable {
     /// Explicit shot count for Pauli sampling. Wins over ``precision`` when both are set.
     public var shots: Int?
@@ -68,7 +67,7 @@ public struct EstimatorResult: Sendable, Equatable {
 /// Exact path: GPU Pauli kernels on ``StatevectorBackend`` and Tr(ρH) on
 /// ``DensityMatrixBackend``.
 /// Shot path (``EstimatorOptions/shots`` / ``precision``): Pauli-basis sampling on
-/// statevector only.
+/// statevector, density-matrix (prepared-ρ batching), and trajectory backends.
 public struct Estimator: Sendable {
     public init() {}
 
@@ -83,16 +82,10 @@ public struct Estimator: Sendable {
         let resolvedShots = try estimatorOptions.resolvedShots() ?? options.shots
 
         if let shots = resolvedShots {
-            guard let statevectorBackend = backend as? StatevectorBackend else {
-                if backend is DensityMatrixBackend {
-                    throw EstimatorError.shotsNotSupportedForDensityMatrix
-                }
-                throw EstimatorError.unsupportedBackend
-            }
             return try estimateShots(
                 circuit: circuit,
                 hamiltonian: hamiltonian,
-                engine: statevectorBackend.engine,
+                backend: backend,
                 options: options,
                 shots: shots,
                 started: started
@@ -101,9 +94,11 @@ public struct Estimator: Sendable {
 
         let value: QFloat
         let method: QuantumSimulationMethod
+        let deviceName: String?
 
         if let statevectorBackend = backend as? StatevectorBackend {
             method = .statevector
+            deviceName = MetalRuntime.deviceName
             value = try estimateExact(
                 circuit: circuit,
                 hamiltonian: hamiltonian,
@@ -112,12 +107,17 @@ public struct Estimator: Sendable {
             )
         } else if let densityBackend = backend as? DensityMatrixBackend {
             method = .densityMatrix
+            deviceName = MetalRuntime.deviceName
             value = try estimateExact(
                 circuit: circuit,
                 hamiltonian: hamiltonian,
                 engine: densityBackend.engine,
                 options: options
             )
+        } else if let trajectory = backend as? TrajectoryBackend {
+            // Exact path for a single trajectory is not a mixed-state expectation; require shots.
+            _ = trajectory
+            throw EstimatorError.unsupportedBackend
         } else {
             throw EstimatorError.unsupportedBackend
         }
@@ -126,7 +126,7 @@ public struct Estimator: Sendable {
         let metadata = QuantumResultMetadata(
             method: method,
             seed: options.seed,
-            deviceName: MetalRuntime.deviceName,
+            deviceName: deviceName,
             wallClockNanoseconds: elapsed,
             qubitCount: circuit.qubitCount,
             gateCount: circuit.gates.count,
@@ -163,7 +163,7 @@ public struct Estimator: Sendable {
     private func estimateShots(
         circuit: QuantumCircuit,
         hamiltonian: Hamiltonian,
-        engine: QuantumEngine,
+        backend: any QuantumBackend,
         options: QuantumRunOptions,
         shots: Int,
         started: DispatchTime
@@ -173,29 +173,87 @@ public struct Estimator: Sendable {
         var rng = makePrimitiveRNG(seed: options.seed)
         var total: QFloat = 0
         var varianceAccumulator: QFloat = 0
+        let method: QuantumSimulationMethod
+        let deviceName: String?
 
-        for term in hamiltonian.terms {
-            let (mean, secondMoment) = try PauliShotEstimator.estimateTerm(
-                circuit: circuit,
-                term: term,
-                engine: engine,
-                shots: shots,
-                rng: &rng,
-                noise: options.noise,
-                sampleOptions: options.sampleOptions
-            )
-            total += term.coefficient * mean
-            // Var(cX) = c² Var(X); Var(X) ≈ E[X²] - E[X]² with X=±1 ⇒ E[X²]=1
-            let termVar = max(0, secondMoment - mean * mean)
-            varianceAccumulator += term.coefficient * term.coefficient * termVar
+        if let statevectorBackend = backend as? StatevectorBackend {
+            method = .statevector
+            deviceName = MetalRuntime.deviceName
+            for term in hamiltonian.terms {
+                let (mean, secondMoment) = try PauliShotEstimator.estimateTerm(
+                    circuit: circuit,
+                    term: term,
+                    engine: statevectorBackend.engine,
+                    shots: shots,
+                    rng: &rng,
+                    noise: options.noise,
+                    sampleOptions: options.sampleOptions
+                )
+                total += term.coefficient * mean
+                let termVar = max(0, secondMoment - mean * mean)
+                varianceAccumulator += term.coefficient * term.coefficient * termVar
+            }
+        } else if let densityBackend = backend as? DensityMatrixBackend {
+            method = .densityMatrix
+            deviceName = MetalRuntime.deviceName
+            for term in hamiltonian.terms {
+                let (mean, secondMoment) = try PauliShotEstimator.estimateTerm(
+                    circuit: circuit,
+                    term: term,
+                    engine: densityBackend.engine,
+                    shots: shots,
+                    rng: &rng,
+                    noise: options.noise
+                )
+                total += term.coefficient * mean
+                let termVar = max(0, secondMoment - mean * mean)
+                varianceAccumulator += term.coefficient * term.coefficient * termVar
+            }
+        } else if let cpuDensity = backend as? CPUDensityMatrixBackend {
+            method = .densityMatrix
+            deviceName = "CPU"
+            for term in hamiltonian.terms {
+                let (mean, secondMoment) = try PauliShotEstimator.estimateTerm(
+                    circuit: circuit,
+                    term: term,
+                    engine: cpuDensity.engine,
+                    shots: shots,
+                    rng: &rng,
+                    noise: options.noise
+                )
+                total += term.coefficient * mean
+                let termVar = max(0, secondMoment - mean * mean)
+                varianceAccumulator += term.coefficient * term.coefficient * termVar
+            }
+        } else if let trajectory = backend as? TrajectoryBackend {
+            method = .trajectory
+            deviceName = MetalRuntime.isAvailable ? MetalRuntime.deviceName : "CPU"
+            // Trajectory shot estimates reuse the wrapped backend via run + Z parity on counts.
+            for term in hamiltonian.terms {
+                let (mean, secondMoment) = try PauliShotEstimator.estimateTermTrajectory(
+                    circuit: circuit,
+                    term: term,
+                    backend: trajectory,
+                    shots: shots,
+                    seedBase: options.seed,
+                    rng: &rng,
+                    noise: options.noise,
+                    sampleOptions: options.sampleOptions
+                )
+                total += term.coefficient * mean
+                let termVar = max(0, secondMoment - mean * mean)
+                varianceAccumulator += term.coefficient * term.coefficient * termVar
+            }
+        } else {
+            throw EstimatorError.unsupportedBackend
         }
 
         let standardError = sqrt(varianceAccumulator / QFloat(shots))
         let elapsed = DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds
         let metadata = QuantumResultMetadata(
-            method: .statevector,
+            method: method,
             seed: options.seed,
-            deviceName: MetalRuntime.deviceName,
+            deviceName: deviceName,
             wallClockNanoseconds: elapsed,
             qubitCount: circuit.qubitCount,
             gateCount: circuit.gates.count,
@@ -224,10 +282,104 @@ enum PauliShotEstimator {
     ) throws -> (mean: QFloat, secondMoment: QFloat) {
         let support = term.paulis.keys.filter { term.paulis[$0] != .i }.sorted()
         if support.isEmpty {
-            // Identity term: ⟨I⟩ = 1 with no sampling noise.
             return (1, 1)
         }
 
+        let measureCircuit = try basisChangedCircuit(circuit: circuit, term: term, support: support)
+        let counts = try QuantumMeasurement.runSampleCountsRNG(
+            circuit: measureCircuit,
+            engine: engine,
+            shots: shots,
+            rng: &rng,
+            noise: noise,
+            options: sampleOptions
+        )
+        return moments(from: counts, qubits: support, shots: shots)
+    }
+
+    static func estimateTerm(
+        circuit: QuantumCircuit,
+        term: PauliTerm,
+        engine: DensityMatrixEngine,
+        shots: Int,
+        rng: inout QuantumRNG,
+        noise: NoiseModel?
+    ) throws -> (mean: QFloat, secondMoment: QFloat) {
+        let support = term.paulis.keys.filter { term.paulis[$0] != .i }.sorted()
+        if support.isEmpty {
+            return (1, 1)
+        }
+
+        let measureCircuit = try basisChangedCircuit(circuit: circuit, term: term, support: support)
+        let counts = try DensityMatrixShotSampler.runSampleCountsRNG(
+            circuit: measureCircuit,
+            engine: engine,
+            shots: shots,
+            rng: &rng,
+            noise: noise
+        )
+        return moments(from: counts, qubits: support, shots: shots)
+    }
+
+    static func estimateTerm(
+        circuit: QuantumCircuit,
+        term: PauliTerm,
+        engine: CPUDensityMatrixEngine,
+        shots: Int,
+        rng: inout QuantumRNG,
+        noise: NoiseModel?
+    ) throws -> (mean: QFloat, secondMoment: QFloat) {
+        let support = term.paulis.keys.filter { term.paulis[$0] != .i }.sorted()
+        if support.isEmpty {
+            return (1, 1)
+        }
+
+        let measureCircuit = try basisChangedCircuit(circuit: circuit, term: term, support: support)
+        let counts = try DensityMatrixShotSampler.runSampleCountsRNG(
+            circuit: measureCircuit,
+            engine: engine,
+            shots: shots,
+            rng: &rng,
+            noise: noise
+        )
+        return moments(from: counts, qubits: support, shots: shots)
+    }
+
+    static func estimateTermTrajectory(
+        circuit: QuantumCircuit,
+        term: PauliTerm,
+        backend: TrajectoryBackend,
+        shots: Int,
+        seedBase: UInt64?,
+        rng: inout QuantumRNG,
+        noise: NoiseModel?,
+        sampleOptions: SampleCountOptions
+    ) throws -> (mean: QFloat, secondMoment: QFloat) {
+        let support = term.paulis.keys.filter { term.paulis[$0] != .i }.sorted()
+        if support.isEmpty {
+            return (1, 1)
+        }
+
+        let measureCircuit = try basisChangedCircuit(circuit: circuit, term: term, support: support)
+        let seed = seedBase ?? UInt64(rng.nextUnitDouble() * Double(UInt64.max))
+        let result = try backend.run(
+            circuit: measureCircuit,
+            options: QuantumRunOptions(
+                noise: noise,
+                seed: seed,
+                shots: shots,
+                sampleOptions: sampleOptions
+            )
+        )
+        let counts = result.shotCounts ?? ShotCounts(shots: shots, counts: [:])
+        return moments(from: counts, qubits: support, shots: shots)
+    }
+
+    private static func basisChangedCircuit(
+        circuit: QuantumCircuit,
+        term: PauliTerm,
+        support: [Int]
+    ) throws -> QuantumCircuit {
         var measureCircuit = try QuantumCircuit(
             qubitCount: circuit.qubitCount,
             classicalRegisters: circuit.classicalRegisters
@@ -247,24 +399,19 @@ enum PauliShotEstimator {
                 break
             }
         }
+        return measureCircuit
+    }
 
-        let counts = try QuantumMeasurement.runSampleCountsRNG(
-            circuit: measureCircuit,
-            engine: engine,
-            shots: shots,
-            rng: &rng,
-            noise: noise,
-            options: sampleOptions
-        )
-
+    private static func moments(
+        from counts: ShotCounts,
+        qubits: [Int],
+        shots: Int
+    ) -> (mean: QFloat, secondMoment: QFloat) {
         var sum: QFloat = 0
         for (outcome, count) in counts.counts {
-            let eigenvalue = parityEigenvalue(outcome: outcome, qubits: support)
-            sum += eigenvalue * QFloat(count)
+            sum += parityEigenvalue(outcome: outcome, qubits: qubits) * QFloat(count)
         }
-
         let mean = sum / QFloat(shots)
-        // For ±1 observables, X² = 1 always.
         return (mean, 1)
     }
 

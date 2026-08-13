@@ -43,7 +43,7 @@ extension QuantumKitTests {
         XCTAssertEqual(try options.resolvedShots(), 100)
     }
 
-    func testShotEstimatorRejectsDensityMatrixBackend() throws {
+    func testShotEstimatorDensityMatrixParityWithExact() throws {
         guard makeDevice() != nil else {
             throw XCTSkip("Metal device unavailable")
         }
@@ -53,16 +53,17 @@ extension QuantumKitTests {
         let hamiltonian = try Hamiltonian(PauliTerm(coefficient: 1.0, label: "Z0"))
         let backend = try DensityMatrixBackend()
 
-        XCTAssertThrowsError(
-            try Estimator().run(
-                circuit: circuit,
-                hamiltonian: hamiltonian,
-                backend: backend,
-                estimatorOptions: EstimatorOptions(shots: 64)
-            )
-        ) { error in
-            XCTAssertEqual(error as? EstimatorError, .shotsNotSupportedForDensityMatrix)
-        }
+        let result = try Estimator().run(
+            circuit: circuit,
+            hamiltonian: hamiltonian,
+            backend: backend,
+            options: QuantumRunOptions(seed: 7),
+            estimatorOptions: EstimatorOptions(shots: 2048)
+        )
+        // ⟨Z⟩ after H is 0; shot estimate within statistical noise.
+        XCTAssertEqual(result.value, 0, accuracy: 0.08)
+        XCTAssertEqual(result.shots, 2048)
+        XCTAssertNotNil(result.standardError)
     }
 
     // MARK: - Adjoint differentiation (E4)

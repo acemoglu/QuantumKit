@@ -61,6 +61,26 @@ extension QuantumCircuit {
         }
     }
 
+    /// `true` when density-matrix evolution is deterministic for `noise`, so terminal shots can
+    /// be drawn from a single prepared ρ without re-executing the circuit.
+    ///
+    /// Projective mid-circuit measures (and classical control that depends on them) make each
+    /// run stochastic; ``MeasurementMode/dephasingOnly`` remains deterministic on ρ.
+    public func allowsPreparedDensityShotBatching(noise: NoiseModel? = nil) -> Bool {
+        let projective = (noise?.measurementMode ?? .projective) == .projective
+        for gate in gates {
+            switch gate {
+            case .measure where projective:
+                return false
+            case .c_if:
+                return false
+            default:
+                continue
+            }
+        }
+        return true
+    }
+
     var containsHostAppliedUnitaryGates: Bool {
         gates.contains { gate in
             switch gate {

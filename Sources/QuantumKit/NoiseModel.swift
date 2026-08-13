@@ -208,6 +208,15 @@ public struct NoiseModel: Sendable, Equatable, Codable {
         hasGateNoise || appliesReadoutError || hasPreparationNoise || hasIdleNoise || hasMeasurementChannelNoise
     }
 
+    /// `true` when this model can be simulated via statevector Monte-Carlo trajectories.
+    ///
+    /// Matches ``QuantumEngine`` / ``CPUStatevectorEngine`` constraints: no localized gate noise
+    /// and projective measurement only. Global dep / AD / PD / reset / idle / measurement
+    /// dephasing are supported; ``MeasurementMode/dephasingOnly`` is not.
+    public var supportsTrajectorySimulation: Bool {
+        !hasLocalizedGateNoise && measurementMode == .projective
+    }
+
     /// Amplitude-damping strength `γ = 1 - exp(-duration / T1)` for an idle interval.
     public func amplitudeDampingProbability(forDuration duration: QFloat) -> QFloat {
         guard t1 > 0, duration > 0 else { return 0 }

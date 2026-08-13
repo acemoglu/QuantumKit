@@ -125,12 +125,15 @@ extension QuantumKitTests {
         let sv = try QuantumBackendFactory.estimateResources(qubitCount: 4, noise: nil)
         XCTAssertEqual(sv.recommendedMethod, .statevector)
         XCTAssertEqual(sv.estimatedStateBytes, (1 << 4) * 2 * MemoryLayout<QFloat>.stride)
+        XCTAssertGreaterThanOrEqual(sv.estimatedPeakMemoryBytes, sv.estimatedStateBytes)
+        XCTAssertGreaterThan(sv.estimatedRuntimeHintNanoseconds, 0)
 
         let noise = NoiseModel(depolarizingProbability: 0.01)
         let dm = try QuantumBackendFactory.estimateResources(qubitCount: 3, noise: noise)
         XCTAssertEqual(dm.recommendedMethod, .densityMatrix)
         let dim = 1 << 3
         XCTAssertEqual(dm.estimatedStateBytes, dim * dim * 2 * MemoryLayout<QFloat>.stride)
+        XCTAssertGreaterThanOrEqual(dm.estimatedPeakMemoryBytes, dm.estimatedStateBytes)
     }
 
     func testMakeRecommendedReturnsMatchingBackend() throws {
