@@ -48,10 +48,13 @@ public enum BatchExecutionError: Error {
 extension QuantumCircuit {
 
     /// True when the circuit contains only unitary gates (no mid-circuit measure or reset).
+    ///
+    /// ``Gate/barrier`` and ``Gate/delay`` are identity on the unitary (noise-off) and do
+    /// **not** disqualify a circuit; engines may still apply idle noise on delay.
     public var isUnitaryOnly: Bool {
         gates.allSatisfy { gate in
             switch gate {
-            case .measure, .reset, .c_if, .barrier, .delay:
+            case .measure, .reset, .c_if:
                 return false
             case .initialize:
                 return false

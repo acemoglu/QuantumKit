@@ -51,6 +51,48 @@ public struct Layout: Sendable, Equatable, Codable {
         }
         return inverse
     }
+
+    /// Extends this layout to `logicalCount` by mapping new logical qubits onto unused
+    /// physical wires in `0..<physicalCount` (preferring lower indices).
+    ///
+    /// Used after ancilla growth (e.g. V-chain unroll) so routing does not keep a stale
+    /// pre-ancilla ``initialLayout``. Throws when the device has no free physicals.
+    public func extended(toLogicalCount logicalCount: Int, physicalCount: Int) throws -> Layout {
+        guard logicalCount >= logicalQubitCount else {
+            throw TranspilerError.invalidLayout(
+                reason: "cannot shrink layout from \(logicalQubitCount) to \(logicalCount) logical qubits"
+            )
+        }
+        if logicalCount == logicalQubitCount {
+            guard physicalQubitCount <= physicalCount else {
+                throw TranspilerError.circuitWiderThanDevice(
+                    circuitQubits: physicalQubitCount,
+                    deviceQubits: physicalCount
+                )
+            }
+            return self
+        }
+        guard physicalCount >= logicalCount else {
+            throw TranspilerError.circuitWiderThanDevice(
+                circuitQubits: logicalCount,
+                deviceQubits: physicalCount
+            )
+        }
+
+        var used = Set(logicalToPhysical)
+        var mapping = logicalToPhysical
+        for _ in logicalQubitCount..<logicalCount {
+            guard let physical = (0..<physicalCount).first(where: { !used.contains($0) }) else {
+                throw TranspilerError.circuitWiderThanDevice(
+                    circuitQubits: logicalCount,
+                    deviceQubits: physicalCount
+                )
+            }
+            used.insert(physical)
+            mapping.append(physical)
+        }
+        return try Layout(logicalToPhysical: mapping)
+    }
 }
 
 /// Mutable layout used while inserting SWAPs during routing.

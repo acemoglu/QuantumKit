@@ -37,6 +37,26 @@ public enum QuantumRNG: Sendable {
         }
     }
 
+    /// Next 64-bit value from the PRNG (or hardware entropy). Used by deterministic transpiler seeding.
+    public mutating func nextUInt64() -> UInt64 {
+        switch self {
+        case .hardware:
+            var bytes = [UInt8](repeating: 0, count: 8)
+            _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+            return bytes.withUnsafeBytes { $0.load(as: UInt64.self) }
+        case .seeded(let state):
+            let nextState = Self.splitMix64(state)
+            self = .seeded(nextState)
+            return nextState
+        }
+    }
+
+    /// Uniform integer in `0..<upperBound` (`upperBound` must be > 0).
+    public mutating func nextInt(upperBound: Int) -> Int {
+        precondition(upperBound > 0)
+        return Int(nextUInt64() % UInt64(upperBound))
+    }
+
     /// Maps 32 random bits to a uniformly distributed `Float` in the half-open range `[0, 1)`.
     ///
     /// `Float32` has a 24-bit significand, so the top 24 bits are scaled by `2⁻²⁴`. Every result is

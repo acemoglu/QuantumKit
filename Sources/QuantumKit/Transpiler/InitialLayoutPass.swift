@@ -6,21 +6,37 @@ import Foundation
 public struct InitialLayoutPass: CompilerPass, Sendable {
     public let layout: Layout
     public let physicalQubitCount: Int
+    /// When `true`, copies source instruction metadata onto remapped gates (1:1).
+    public let preserveInstructionMetadata: Bool
 
-    public init(layout: Layout, physicalQubitCount: Int? = nil) {
+    public init(
+        layout: Layout,
+        physicalQubitCount: Int? = nil,
+        preserveInstructionMetadata: Bool = false
+    ) {
         self.layout = layout
         self.physicalQubitCount = physicalQubitCount ?? max(layout.physicalQubitCount, layout.logicalQubitCount)
+        self.preserveInstructionMetadata = preserveInstructionMetadata
     }
 
     public func run(on circuit: QuantumCircuit) throws -> QuantumCircuit {
-        guard layout.logicalQubitCount == circuit.qubitCount else {
+        // Allow extending a narrower layout when the circuit grew (e.g. ancilla unroll).
+        let resolvedLayout: Layout
+        if layout.logicalQubitCount == circuit.qubitCount {
+            resolvedLayout = layout
+        } else if layout.logicalQubitCount < circuit.qubitCount {
+            resolvedLayout = try layout.extended(
+                toLogicalCount: circuit.qubitCount,
+                physicalCount: physicalQubitCount
+            )
+        } else {
             throw TranspilerError.invalidLayout(
-                reason: "layout logical width \(layout.logicalQubitCount) does not match circuit width \(circuit.qubitCount)"
+                reason: "layout logical width \(layout.logicalQubitCount) exceeds circuit width \(circuit.qubitCount)"
             )
         }
-        guard physicalQubitCount >= layout.physicalQubitCount else {
+        guard physicalQubitCount >= resolvedLayout.physicalQubitCount else {
             throw TranspilerError.circuitWiderThanDevice(
-                circuitQubits: layout.physicalQubitCount,
+                circuitQubits: resolvedLayout.physicalQubitCount,
                 deviceQubits: physicalQubitCount
             )
         }
@@ -36,11 +52,12 @@ public struct InitialLayoutPass: CompilerPass, Sendable {
             classicalRegisters: circuit.classicalRegisters
         )
 
-        for gate in circuit.gates {
+        for (index, gate) in circuit.gates.enumerated() {
             let mapped = try gate.remappingQubits { logical in
-                try layout.physical(forLogical: logical)
+                try resolvedLayout.physical(forLogical: logical)
             }
-            try remapped.apply(mapped)
+            let meta = preserveInstructionMetadata ? circuit.metadata(at: index) : nil
+            try remapped.apply(mapped, metadata: meta)
         }
 
         return remapped

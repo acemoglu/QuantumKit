@@ -19,8 +19,23 @@ enum GateDecomposition {
     private static let halfPi = pi / 2
     private static let quarterPi = pi / 4
 
+    /// Context for strategy-aware expansions (MCX / controlled synthesis + ancillas).
+    struct Context {
+        var controlledSynthesis: ControlledGateSynthesisStrategy = .ancillaFree
+        var ancillaAllocator: AncillaAllocator?
+
+        static let `default` = Context()
+    }
+
     /// One decomposition step: replaces `gate` with an equivalent shorter-list using simpler gates.
     static func expand(_ gate: Gate) throws -> [Gate] {
+        var context = Context.default
+        return try expand(gate, context: &context)
+    }
+
+    /// Strategy-aware expansion. Mutations to ``Context/ancillaAllocator`` are written back
+    /// through `context` so callers can reuse the same allocator across gates.
+    static func expand(_ gate: Gate, context: inout Context) throws -> [Gate] {
         switch gate {
         case .h(let target):
             return rzSxRz(target: target, pre: halfPi, post: halfPi)
@@ -106,7 +121,6 @@ enum GateDecomposition {
             return []
 
         case .barrier, .delay:
-            // Structural / timing ops — not expanded into unitaries.
             return [gate]
 
         case .dcx(let q1, let q2):
@@ -141,7 +155,6 @@ enum GateDecomposition {
             ]
 
         case .iswap(let q1, let q2):
-            // S⊗S · H⊗I · CX · CX · I⊗H  (up to global phase conventions)
             return [
                 .s(target: q1),
                 .s(target: q2),
@@ -152,7 +165,6 @@ enum GateDecomposition {
             ]
 
         case .ecr(let control, let target):
-            // ECR ≅ RZX(π/4) · X(control) · RZX(-π/4)
             let quarterPi = pi / 4
             return [
                 .h(target: target),
@@ -179,7 +191,7 @@ enum GateDecomposition {
             return ccx(control1: control1, control2: control2, target: target)
 
         case .mcx(let controls, let target):
-            return try mcx(controls: controls, target: target)
+            return try mcx(controls: controls, target: target, context: &context)
 
         case .mcz(let controls, let target):
             return [
@@ -227,11 +239,19 @@ enum GateDecomposition {
         _ gate: Gate,
         into basis: BasisGateSet
     ) throws -> [Gate] {
+        var context = Context.default
+        return try expandRecursively(gate, into: basis, context: &context)
+    }
+
+    static func expandRecursively(
+        _ gate: Gate,
+        into basis: BasisGateSet,
+        context: inout Context
+    ) throws -> [Gate] {
         if basis.contains(gate) {
             return [gate]
         }
 
-        // Structural ops pass through even when outside the unitary basis.
         switch gate {
         case .barrier, .delay:
             return [gate]
@@ -242,8 +262,8 @@ enum GateDecomposition {
         }
 
         var expanded: [Gate] = []
-        for replacement in try expand(gate) {
-            expanded.append(contentsOf: try expandRecursively(replacement, into: basis))
+        for replacement in try expand(gate, context: &context) {
+            expanded.append(contentsOf: try expandRecursively(replacement, into: basis, context: &context))
         }
 
         if expanded.isEmpty, case .id = gate {
@@ -264,7 +284,7 @@ enum GateDecomposition {
     }
 
     /// Standard Toffoli decomposition (H / T / CX ladder).
-    private static func ccx(control1: Int, control2: Int, target: Int) -> [Gate] {
+    static func ccx(control1: Int, control2: Int, target: Int) -> [Gate] {
         [
             .h(target: target),
             .cx(control: control2, target: target),
@@ -284,8 +304,11 @@ enum GateDecomposition {
         ]
     }
 
-    /// Ancilla-free MCX via H · multi-controlled-phase(π) · H.
-    private static func mcx(controls: [Int], target: Int) throws -> [Gate] {
+    private static func mcx(
+        controls: [Int],
+        target: Int,
+        context: inout Context
+    ) throws -> [Gate] {
         switch controls.count {
         case 0:
             return [.x(target: target)]
@@ -294,14 +317,90 @@ enum GateDecomposition {
         case 2:
             return ccx(control1: controls[0], control2: controls[1], target: target)
         default:
-            let pi = QFloatExpr(QFloat(Double.pi))
-            return try [.h(target: target)]
-                + mcp(theta: pi, controls: controls, target: target)
-                + [.h(target: target)]
+            switch context.controlledSynthesis {
+            case .ancillaFree:
+                let pi = QFloatExpr(QFloat(Double.pi))
+                return try [.h(target: target)]
+                    + mcp(theta: pi, controls: controls, target: target)
+                    + [.h(target: target)]
+            case .vChainAncilla:
+                guard var allocator = context.ancillaAllocator else {
+                    throw AncillaAllocationError.ancillaAllocationDisabled(strategy: .vChainAncilla)
+                }
+                let gates = try expandMCXWithAllocator(
+                    controls: controls,
+                    target: target,
+                    strategy: .vChainAncilla,
+                    allocator: &allocator
+                )
+                context.ancillaAllocator = allocator
+                return gates
+            }
         }
     }
 
-    /// Multi-controlled phase Cⁿ(P(θ)) via recursive demultiplexing (Barenco et al.).
+    /// Acquires / releases ancillas for one V-chain expansion.
+    static func expandMCXWithAllocator(
+        controls: [Int],
+        target: Int,
+        strategy: ControlledGateSynthesisStrategy,
+        allocator: inout AncillaAllocator,
+        reuseAncillas: Bool = true
+    ) throws -> [Gate] {
+        switch strategy {
+        case .ancillaFree:
+            var ctx = Context.default
+            ctx.controlledSynthesis = .ancillaFree
+            return try mcx(controls: controls, target: target, context: &ctx)
+        case .vChainAncilla:
+            switch controls.count {
+            case 0:
+                return [.x(target: target)]
+            case 1:
+                return [.cx(control: controls[0], target: target)]
+            case 2:
+                return ccx(control1: controls[0], control2: controls[1], target: target)
+            default:
+                let required = controls.count - 2
+                let ancillas = allocator.acquire(required)
+                defer {
+                    if reuseAncillas {
+                        allocator.release(ancillas)
+                    }
+                }
+                let n = controls.count
+                var gates: [Gate] = []
+                // Emit structured CCX so routing/unroll can expand; unitary checks use exact embed.
+                gates.append(.ccx(control1: controls[0], control2: controls[1], target: ancillas[0]))
+                if required > 1 {
+                    for i in 1..<required {
+                        gates.append(.ccx(
+                            control1: ancillas[i - 1],
+                            control2: controls[i + 1],
+                            target: ancillas[i]
+                        ))
+                    }
+                }
+                gates.append(.ccx(
+                    control1: ancillas[required - 1],
+                    control2: controls[n - 1],
+                    target: target
+                ))
+                if required > 1 {
+                    for i in stride(from: required - 1, through: 1, by: -1) {
+                        gates.append(.ccx(
+                            control1: ancillas[i - 1],
+                            control2: controls[i + 1],
+                            target: ancillas[i]
+                        ))
+                    }
+                }
+                gates.append(.ccx(control1: controls[0], control2: controls[1], target: ancillas[0]))
+                return gates
+            }
+        }
+    }
+
     private static func mcp(theta: QFloatExpr, controls: [Int], target: Int) throws -> [Gate] {
         switch controls.count {
         case 0:
@@ -320,7 +419,6 @@ enum GateDecomposition {
         }
     }
 
-    /// Whether `gate` must be expanded into primitive kernels before GPU encoding.
     static func needsExecutionExpansion(_ gate: Gate) -> Bool {
         switch gate {
         case .iswap, .ecr, .rxx, .ryy, .rzz, .dcx, .cswap, .id:

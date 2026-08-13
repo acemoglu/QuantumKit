@@ -316,6 +316,10 @@ enum CircuitUnitary {
         case .id:
             return UnitaryMatrix.identity(1 << qubitCount)
 
+        case .barrier, .delay:
+            // Structural / timing no-ops: identity on the unitary (noise applied separately).
+            return UnitaryMatrix.identity(1 << qubitCount)
+
         case .iswap, .ecr, .rxx, .ryy, .rzz, .dcx, .cswap:
             return try matrixFromDecomposition(gate, qubitCount: qubitCount)
 
@@ -398,7 +402,7 @@ enum CircuitUnitary {
                 controlMask: 0, target: target, qubitCount: qubitCount
             )
 
-        case .initialize, .measure, .reset, .c_if, .barrier, .delay:
+        case .initialize, .measure, .reset, .c_if:
             throw QuantumCircuitError.circuitNotUnitary
         }
     }

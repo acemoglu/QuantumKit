@@ -17,6 +17,8 @@ public struct QuantumCircuit {
     public let qubitCount: Int
     public let classicalRegisters: [ClassicalRegisterSpec]
     public private(set) var gates: [Gate] = []
+    /// Parallel metadata aligned with ``gates`` (same length). Execution ignores these entries.
+    public private(set) var instructionMetadata: [InstructionMetadata?] = []
 
     public init(qubitCount: Int, classicalRegisters: [ClassicalRegisterSpec] = []) throws {
         guard qubitCount > 0 else {
@@ -243,10 +245,44 @@ public struct QuantumCircuit {
         }
 
         gates.append(gate)
+        instructionMetadata.append(nil)
     }
 
     public mutating func apply(_ gate: Gate) throws {
         try applyValidated(gate)
+    }
+
+    /// Appends `gate` with optional non-semantic ``InstructionMetadata``.
+    public mutating func apply(_ gate: Gate, metadata: InstructionMetadata?) throws {
+        try applyValidated(gate)
+        instructionMetadata[instructionMetadata.count - 1] = metadata
+    }
+
+    /// Sets metadata for an existing instruction index without changing the gate.
+    public mutating func setInstructionMetadata(_ metadata: InstructionMetadata?, at index: Int) throws {
+        guard gates.indices.contains(index) else {
+            throw QuantumCircuitError.invalidAlgorithmParameter(
+                reason: "instruction metadata index \(index) is out of range 0..<\(gates.count)"
+            )
+        }
+        ensureMetadataLength()
+        instructionMetadata[index] = metadata
+    }
+
+    /// Returns metadata for `index`, or `nil` when unset / out of range.
+    public func metadata(at index: Int) -> InstructionMetadata? {
+        guard instructionMetadata.indices.contains(index) else { return nil }
+        return instructionMetadata[index]
+    }
+
+    mutating func ensureMetadataLength() {
+        if instructionMetadata.count < gates.count {
+            instructionMetadata.append(
+                contentsOf: Array(repeating: nil, count: gates.count - instructionMetadata.count)
+            )
+        } else if instructionMetadata.count > gates.count {
+            instructionMetadata.removeLast(instructionMetadata.count - gates.count)
+        }
     }
 
     /// The inverse (adjoint) circuit: applies each gate's adjoint in reverse order, so
@@ -273,6 +309,7 @@ extension QuantumCircuit: Codable {
         case qubitCount
         case classicalRegisters
         case gates
+        case instructionMetadata
     }
 
     public init(from decoder: any Decoder) throws {
@@ -284,6 +321,20 @@ extension QuantumCircuit: Codable {
         ) ?? []
         try self.init(qubitCount: qubitCount, classicalRegisters: classicalRegisters)
         gates = try container.decode([Gate].self, forKey: .gates)
+        instructionMetadata = try container.decodeIfPresent(
+            [InstructionMetadata?].self,
+            forKey: .instructionMetadata
+        ) ?? Array(repeating: nil, count: gates.count)
+        if instructionMetadata.count != gates.count {
+            // Tolerate older / partial payloads by padding or truncating to gate count.
+            if instructionMetadata.count < gates.count {
+                instructionMetadata.append(
+                    contentsOf: Array(repeating: nil, count: gates.count - instructionMetadata.count)
+                )
+            } else {
+                instructionMetadata = Array(instructionMetadata.prefix(gates.count))
+            }
+        }
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -293,5 +344,27 @@ extension QuantumCircuit: Codable {
             try container.encode(classicalRegisters, forKey: .classicalRegisters)
         }
         try container.encode(gates, forKey: .gates)
+        if instructionMetadata.contains(where: { $0 != nil }) {
+            try container.encode(instructionMetadata, forKey: .instructionMetadata)
+        }
+    }
+}
+
+extension QuantumCircuit {
+    /// Gate-count depth proxy: longest chain of overlapping qubit operations (delays count).
+    public var circuitDepth: Int {
+        var qubitTime = Array(repeating: 0, count: qubitCount)
+        var depth = 0
+        for gate in gates {
+            let qubits = gate.affectedQubits
+            let resolved = qubits.isEmpty ? Array(0..<qubitCount) : qubits
+            let start = resolved.map { qubitTime[$0] }.max() ?? 0
+            let finish = start + 1
+            for q in resolved where q >= 0 && q < qubitCount {
+                qubitTime[q] = finish
+            }
+            depth = max(depth, finish)
+        }
+        return depth
     }
 }
