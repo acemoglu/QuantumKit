@@ -64,13 +64,14 @@ public struct ReadoutConfusionMatrix: Sendable, Equatable, Codable {
     }
 
     /// Tensor product of identical single-qubit confusion on `qubitCount` qubits.
-    /// Uses the same LSB=qubit-0 convention as ``product(of:)``.
+    /// Uses ``QubitBitOrdering/engineLSB`` (same as ``product(of:)``).
     public static func independentBits(qubitCount: Int, p01: QFloat, p10: QFloat) throws -> ReadoutConfusionMatrix {
         guard qubitCount > 0 else { throw ReadoutConfusionError.emptyMatrix }
         return try product(of: Array(repeating: (p01: p01, p10: p10), count: qubitCount))
     }
 
-    /// Heterogeneous independent readout (C3): qubit 0 is LSB.
+    /// Heterogeneous independent readout (C3): qubit 0 is LSB
+    /// (``QubitBitOrdering/engineLSB``).
     ///
     /// Builds `… ⊗ M₁ ⊗ M₀` so computational bit `i` uses `qubits[i]`.
     public static func product(of qubits: [(p01: QFloat, p10: QFloat)]) throws -> ReadoutConfusionMatrix {

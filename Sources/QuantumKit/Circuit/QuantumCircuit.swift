@@ -321,6 +321,7 @@ extension QuantumCircuit: Equatable {
 extension QuantumCircuit: Codable {
 
     private enum CodingKeys: String, CodingKey {
+        case schemaVersion
         case qubitCount
         case classicalRegisters
         case gates
@@ -329,6 +330,9 @@ extension QuantumCircuit: Codable {
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        _ = try CircuitIRSchema.resolve(
+            try container.decodeIfPresent(Int.self, forKey: .schemaVersion)
+        )
         let qubitCount = try container.decode(Int.self, forKey: .qubitCount)
         let classicalRegisters = try container.decodeIfPresent(
             [ClassicalRegisterSpec].self,
@@ -354,6 +358,7 @@ extension QuantumCircuit: Codable {
 
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(CircuitIRSchema.current, forKey: .schemaVersion)
         try container.encode(qubitCount, forKey: .qubitCount)
         if !classicalRegisters.isEmpty {
             try container.encode(classicalRegisters, forKey: .classicalRegisters)

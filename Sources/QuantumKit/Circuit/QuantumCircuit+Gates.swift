@@ -320,7 +320,7 @@ extension QuantumCircuit {
     }
 
     /// Prepares a computational-basis product state |index⟩ on the full register
-    /// (qubit 0 = LSB of `index`).
+    /// (``QubitBitOrdering/engineLSB``: qubit 0 = LSB of `index`).
     @discardableResult
     public mutating func initializeComputationalBasis(_ index: Int) throws -> QuantumCircuit {
         let stateCount = 1 << qubitCount
@@ -337,8 +337,10 @@ extension QuantumCircuit {
         return try initialize(qubits: Array(0..<qubitCount), amplitudes: amplitudes)
     }
 
-    /// Prepares a computational-basis bitstring on the listed qubits (leftmost = highest index
-    /// in `bits`, matching MSB-first bitstring convention for that subset).
+    /// Prepares a computational-basis bitstring on the listed qubits.
+    ///
+    /// `bits` is ``QubitBitOrdering/bitstringMSB`` over the listed order: `bits[0]` is the
+    /// leftmost / highest-weight entry among `qubits` (same convention as public bitstring APIs).
     @discardableResult
     public mutating func initializeProductState(qubits: [Int], bits: [Int]) throws -> QuantumCircuit {
         guard qubits.count == bits.count else {

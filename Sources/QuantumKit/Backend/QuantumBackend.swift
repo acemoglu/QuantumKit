@@ -81,17 +81,19 @@ public struct QuantumResult: Sendable, Equatable {
         self.shotCounts = shotCounts
     }
 
-    /// MSB-first bitstring histogram when shots were requested.
+    /// Bitstring histogram when shots were requested (``QubitBitOrdering/bitstringMSB``).
+    /// Integer ``shotCounts`` keys use ``QubitBitOrdering/engineLSB``.
     public var bitstringCounts: [String: Int]? {
         shotCounts?.bitstringCounts(qubitCount: metadata.qubitCount)
     }
 
-    /// Hex-encoded outcome histogram (e.g. `"0x3"` for bitstring `11` on 2 qubits).
+    /// Hex-encoded outcome histogram for the packed ``engineLSB`` index
+    /// (e.g. `"0x3"` for bitstring `11` on 2 qubits).
     public var hexCounts: [String: Int]? {
         shotCounts?.hexCounts(qubitCount: metadata.qubitCount)
     }
 
-    /// Empirical probabilities from shot counts, when available.
+    /// Empirical probabilities from shot counts (``bitstringMSB`` keys), when available.
     public var probabilities: [String: QFloat]? {
         shotCounts?.probabilities(qubitCount: metadata.qubitCount)
     }

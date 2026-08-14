@@ -1,9 +1,13 @@
 import Foundation
 
 /// Histogram of measurement outcomes from repeated shots.
+///
+/// Integer keys in ``counts`` use ``QubitBitOrdering/engineLSB`` (qubit `k` = index bit `k`).
+/// ``bitstringCounts`` defaults to ``QubitBitOrdering/bitstringMSB`` for display keys.
 public struct ShotCounts: Sendable, Equatable {
 
     public let shots: Int
+    /// Engine-native outcome index → count (``QubitBitOrdering/engineLSB``).
     public let counts: [Int: Int]
 
     public init(shots: Int, counts: [Int: Int]) {
@@ -11,12 +15,30 @@ public struct ShotCounts: Sendable, Equatable {
         self.counts = counts
     }
 
-    /// Outcome counts keyed by bitstring (MSB-first, e.g. `"01"` for a 2-qubit result).
+    /// Outcome counts keyed by bitstring (``QubitBitOrdering/bitstringMSB``).
+    ///
+    /// Example: index `1` (qubit 0 excited) → `"01"` on 2 qubits.
     public func bitstringCounts(qubitCount: Int) -> [String: Int] {
-        bitstringCounts(qubits: Array(0..<qubitCount))
+        bitstringCounts(qubitCount: qubitCount, ordering: .bitstringDefault)
     }
 
-    /// Outcome counts keyed by bitstring in the order of `qubits` (left = first qubit).
+    /// Outcome counts keyed by bitstring under an explicit ``QubitBitOrdering``.
+    public func bitstringCounts(qubitCount: Int, ordering: QubitBitOrdering) -> [String: Int] {
+        var result: [String: Int] = [:]
+        result.reserveCapacity(counts.count)
+        for (index, count) in counts {
+            let key = (try? ordering.bitstring(forIndex: index, qubitCount: qubitCount))
+                ?? QubitBitOrdering.bitstringDefaultFallback(index: index, qubitCount: qubitCount)
+            result[key, default: 0] += count
+        }
+        return result
+    }
+
+    /// Outcome counts keyed by bitstring in the order of `qubits` (left = first listed qubit).
+    ///
+    /// For the common full-register case `qubits == 0..<n`, this matches ``bitstringMSB``
+    /// over the packed ``engineLSB`` index. Prefer ``bitstringCounts(qubitCount:ordering:)``
+    /// when the policy must be named explicitly.
     public func bitstringCounts(qubits: [Int]) -> [String: Int] {
         var result: [String: Int] = [:]
         result.reserveCapacity(counts.count)
@@ -26,7 +48,8 @@ public struct ShotCounts: Sendable, Equatable {
         return result
     }
 
-    /// Outcome counts keyed by hex strings (`"0x0"`, `"0x1"`, …) for the packed index.
+    /// Outcome counts keyed by hex strings (`"0x0"`, `"0x1"`, …) for the packed
+    /// ``QubitBitOrdering/engineLSB`` index.
     public func hexCounts(qubitCount: Int) -> [String: Int] {
         var result: [String: Int] = [:]
         result.reserveCapacity(counts.count)
@@ -37,10 +60,14 @@ public struct ShotCounts: Sendable, Equatable {
         return result
     }
 
-    /// Empirical frequencies from the histogram.
+    /// Empirical frequencies from the histogram (``bitstringMSB`` keys by default).
     public func probabilities(qubitCount: Int) -> [String: QFloat] {
+        probabilities(qubitCount: qubitCount, ordering: .bitstringDefault)
+    }
+
+    public func probabilities(qubitCount: Int, ordering: QubitBitOrdering) -> [String: QFloat] {
         guard shots > 0 else { return [:] }
-        let bitstrings = bitstringCounts(qubitCount: qubitCount)
+        let bitstrings = bitstringCounts(qubitCount: qubitCount, ordering: ordering)
         var result: [String: QFloat] = [:]
         result.reserveCapacity(bitstrings.count)
         for (key, count) in bitstrings {
@@ -50,11 +77,17 @@ public struct ShotCounts: Sendable, Equatable {
     }
 
     private static func bitstring(for index: Int, qubits: [Int]) -> String {
-        (0..<qubits.count)
-            .reversed()
-            .map { position in
-                ((index >> position) & 1) == 1 ? "1" : "0"
-            }
-            .joined()
+        // Historical subset helper: width = qubits.count, MSB-first over low `width` bits.
+        (try? QubitBitOrdering.bitstringMSB.bitstring(forIndex: index & ((1 << qubits.count) - 1), qubitCount: qubits.count))
+            ?? ""
+    }
+}
+
+extension QubitBitOrdering {
+    /// Non-throwing fallback for histogram formatting when index is somehow out of range.
+    fileprivate static func bitstringDefaultFallback(index: Int, qubitCount: Int) -> String {
+        let masked = index & ((1 << qubitCount) - 1)
+        return (try? bitstringMSB.bitstring(forIndex: masked, qubitCount: qubitCount))
+            ?? String(repeating: "0", count: qubitCount)
     }
 }

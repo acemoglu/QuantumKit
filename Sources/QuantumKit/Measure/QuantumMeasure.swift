@@ -10,7 +10,8 @@ import Metal
 
 public struct QuantumMeasurement {
 
-    /// The full complex state vector (amplitude `i` ↔ bitstring of `i`, qubit 0 = LSB).
+    /// The full complex state vector (amplitude index uses ``QubitBitOrdering/engineLSB``:
+    /// bit `k` ↔ qubit `k`, qubit 0 = LSB). Do not reinterpret without an explicit conversion.
     ///
     /// Reads `realBuffer`/`imagBuffer` directly from unified memory; the buffers are
     /// current as long as any preceding ``QuantumEngine`` execution has completed.
@@ -38,7 +39,8 @@ public struct QuantumMeasurement {
         return toBitArray(value: collapsedIndex, qubitCount: state.qubitCount)
     }
 
-    /// Born-rule probabilities for each computational basis state (index `i` ↔ bitstring of `i`).
+    /// Born-rule probabilities for each computational basis state
+    /// (``QubitBitOrdering/engineLSB`` index).
     public static func probabilities(state: StateVector, engine: QuantumEngine) throws -> [QFloat] {
         let byteCount = state.stateCount * MemoryLayout<QFloat>.stride
         guard let buffer = state.realBuffer.device.makeBuffer(length: byteCount, options: .storageModeShared) else {
@@ -285,12 +287,9 @@ public struct QuantumMeasurement {
     }
 
     static func toBitArray(value: Int, qubitCount: Int) -> [Int] {
-        var bits = [Int](repeating: 0, count: qubitCount)
-        for i in 0..<qubitCount {
-            bits[qubitCount - 1 - i] = (value & (1 << i)) != 0 ? 1 : 0
-        }
-        
-        return bits
+        // ``QubitBitOrdering/bitstringMSB`` array: index 0 = highest qubit.
+        (try? QubitBitOrdering.bitstringMSB.bits(forIndex: value, qubitCount: qubitCount))
+            ?? Array(repeating: 0, count: qubitCount)
     }
     
 }

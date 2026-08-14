@@ -8,7 +8,10 @@ public enum SamplerError: Error, Equatable {
 public struct SamplerResult: Sendable, Equatable {
     public let metadata: QuantumResultMetadata
     public let qubitCount: Int
-    /// MSB-first bitstring → probability (exact Born rule) or empirical frequency (shots).
+    /// Bitstring → probability (exact Born rule) or empirical frequency (shots).
+    ///
+    /// Keys use ``QubitBitOrdering/bitstringMSB`` (leftmost = qubit `n-1`). Integer
+    /// ``shotCounts`` keys remain ``QubitBitOrdering/engineLSB``.
     public let quasiProbabilities: [String: QFloat]
     /// Histogram when `shots` were requested; `nil` for exact distributions.
     public let shotCounts: ShotCounts?
@@ -314,16 +317,9 @@ private func makeBitstringProbabilities(
     result.reserveCapacity(probabilities.count)
 
     for (index, probability) in probabilities.enumerated() where probability != 0 {
-        result[bitstring(for: index, qubitCount: qubitCount)] = probability
+        let key = (try? QubitBitOrdering.bitstringMSB.bitstring(forIndex: index, qubitCount: qubitCount))
+            ?? String(repeating: "0", count: qubitCount)
+        result[key] = probability
     }
     return result
-}
-
-private func bitstring(for index: Int, qubitCount: Int) -> String {
-    (0..<qubitCount)
-        .reversed()
-        .map { position in
-            ((index >> position) & 1) == 1 ? "1" : "0"
-        }
-        .joined()
 }

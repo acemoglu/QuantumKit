@@ -61,18 +61,23 @@ public typealias Subcircuit = GateSequence
 
 extension GateSequence: Codable {
     private enum CodingKeys: String, CodingKey {
+        case schemaVersion
         case name
         case body
     }
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        _ = try CircuitIRSchema.resolve(
+            try container.decodeIfPresent(Int.self, forKey: .schemaVersion)
+        )
         name = try container.decodeIfPresent(String.self, forKey: .name)
         body = try container.decode(QuantumCircuit.self, forKey: .body)
     }
 
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(CircuitIRSchema.current, forKey: .schemaVersion)
         try container.encodeIfPresent(name, forKey: .name)
         try container.encode(body, forKey: .body)
     }
