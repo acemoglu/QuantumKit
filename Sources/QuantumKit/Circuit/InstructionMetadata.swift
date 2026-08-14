@@ -19,6 +19,10 @@ import Foundation
 /// **preserved**. Gates that cannot be lifted throw ``QuantumCircuitError/unsupportedControlledGate``
 /// instead of expanding into multiple instructions.
 ///
+/// **DAG IR (`DAGCircuit` round-trip / DAG-native passes):** circuit ↔ DAG conversion
+/// **preserves** metadata 1:1 on surviving nodes. Passes that delete nodes (e.g.
+/// ``IdleIdentityRemovalPass``) drop metadata of removed ops only.
+///
 /// **Transpile:** ``PassManager`` rebuilds gate lists and **strips** instruction metadata by
 /// default. Set ``TranspileOptions/preserveInstructionMetadata`` to retain metadata on
 /// identity-preserving remaps and non-expanding keep-paths (layout / route remaps of original
