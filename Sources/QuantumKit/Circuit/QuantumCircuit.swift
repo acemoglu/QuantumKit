@@ -5,17 +5,23 @@
 //  Created by Bugra Acemoglu on 13.06.2026.
 //
 
-public enum QuantumCircuitError: Error {
+public enum QuantumCircuitError: Error, Equatable {
     case invalidQubitCount(Int)
     case qubitIndexOutOfBounds(index: Int, qubitCount: Int)
     case invalidAlgorithmParameter(reason: String)
     case circuitNotUnitary
+    /// Qubit / classical-register map or width conflict during append / compose / tensor.
+    case invalidComposition(reason: String)
+    /// Gate cannot be lifted to a controlled form (non-unitary or no native controlled encoding).
+    case unsupportedControlledGate(reason: String)
 }
 
-public struct QuantumCircuit {
+public struct QuantumCircuit: Sendable {
 
-    public let qubitCount: Int
-    public let classicalRegisters: [ClassicalRegisterSpec]
+    /// Logical width; may grow under ``append`` / ``formTensor`` when maps require it.
+    public internal(set) var qubitCount: Int
+    /// Classical register declarations; may grow when appending / tensoring circuits with cregs.
+    public internal(set) var classicalRegisters: [ClassicalRegisterSpec]
     public private(set) var gates: [Gate] = []
     /// Parallel metadata aligned with ``gates`` (same length). Execution ignores these entries.
     public private(set) var instructionMetadata: [InstructionMetadata?] = []
@@ -300,6 +306,15 @@ public struct QuantumCircuit {
             try inverted.apply(gate.adjoint)
         }
         return inverted
+    }
+}
+
+extension QuantumCircuit: Equatable {
+    public static func == (lhs: QuantumCircuit, rhs: QuantumCircuit) -> Bool {
+        lhs.qubitCount == rhs.qubitCount
+            && lhs.classicalRegisters == rhs.classicalRegisters
+            && lhs.gates == rhs.gates
+            && lhs.instructionMetadata == rhs.instructionMetadata
     }
 }
 

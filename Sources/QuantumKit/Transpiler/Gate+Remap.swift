@@ -106,4 +106,171 @@ extension Gate {
             return .customUnitary(matrix: matrix, qubits: try qubits.map(map))
         }
     }
+
+    /// Rewrites classical-register indices on ``measure`` / ``c_if`` (nested `c_if` included).
+    public func remappingClassicalRegisters(_ map: (Int) throws -> Int) rethrows -> Gate {
+        switch self {
+        case .measure(let spec):
+            return .measure(
+                MeasureSpec(
+                    qubits: spec.qubits,
+                    classicalRegister: try map(spec.classicalRegister),
+                    classicalBitOffset: spec.classicalBitOffset
+                )
+            )
+        case .c_if(let classicalRegister, let expectedValue, let gate):
+            return .c_if(
+                classicalRegister: try map(classicalRegister),
+                expectedValue: expectedValue,
+                gate: try gate.remappingClassicalRegisters(map)
+            )
+        default:
+            return self
+        }
+    }
+
+    /// Lifts this gate to a controlled form with the given control qubits (applied when all are |1⟩).
+    ///
+    /// Returns a single gate. Throws ``QuantumCircuitError/unsupportedControlledGate`` for
+    /// non-unitary ops and for unitaries without a native controlled encoding in ``Gate``.
+    public func controlled(by controls: [Int]) throws -> Gate {
+        guard !controls.isEmpty else {
+            throw QuantumCircuitError.unsupportedControlledGate(
+                reason: "controlled lift requires at least one control qubit"
+            )
+        }
+        guard Set(controls).count == controls.count else {
+            throw QuantumCircuitError.unsupportedControlledGate(
+                reason: "control qubits must be distinct"
+            )
+        }
+        let targetQubits = affectedQubits
+        for control in controls {
+            if targetQubits.contains(control) {
+                throw QuantumCircuitError.unsupportedControlledGate(
+                    reason: "control qubit \(control) overlaps gate targets \(targetQubits)"
+                )
+            }
+        }
+
+        switch self {
+        case .measure:
+            throw QuantumCircuitError.unsupportedControlledGate(
+                reason: "measure cannot be controlled"
+            )
+        case .reset:
+            throw QuantumCircuitError.unsupportedControlledGate(
+                reason: "reset cannot be controlled"
+            )
+        case .c_if:
+            throw QuantumCircuitError.unsupportedControlledGate(
+                reason: "c_if cannot be controlled"
+            )
+        case .initialize:
+            throw QuantumCircuitError.unsupportedControlledGate(
+                reason: "initialize cannot be controlled"
+            )
+
+        case .id(let target):
+            // Controlled identity is still identity on the target.
+            return .id(target: target)
+
+        case .barrier(let qubits):
+            var combined = controls
+            for q in qubits where !combined.contains(q) {
+                combined.append(q)
+            }
+            return .barrier(qubits: combined)
+
+        case .delay(let duration, let qubit):
+            // Delay is scheduling metadata; leave it on the target qubit.
+            return .delay(duration: duration, qubit: qubit)
+
+        case .x(let target):
+            return Self.controlledX(controls: controls, target: target)
+
+        case .z(let target):
+            return Self.controlledZ(controls: controls, target: target)
+
+        case .cx(let existingControl, let target):
+            return Self.controlledX(controls: controls + [existingControl], target: target)
+
+        case .ccx(let c1, let c2, let target):
+            return Self.controlledX(controls: controls + [c1, c2], target: target)
+
+        case .mcx(let existing, let target):
+            return Self.controlledX(controls: controls + existing, target: target)
+
+        case .cz(let existingControl, let target):
+            return Self.controlledZ(controls: controls + [existingControl], target: target)
+
+        case .mcz(let existing, let target):
+            return Self.controlledZ(controls: controls + existing, target: target)
+
+        case .swap(let q1, let q2):
+            guard controls.count == 1 else {
+                throw QuantumCircuitError.unsupportedControlledGate(
+                    reason: "SWAP supports a single control (CSWAP); got \(controls.count)"
+                )
+            }
+            return .cswap(control: controls[0], q1: q1, q2: q2)
+
+        case .rx(let theta, let target):
+            guard controls.count == 1 else {
+                throw QuantumCircuitError.unsupportedControlledGate(
+                    reason: "rx supports a single control (crx); got \(controls.count)"
+                )
+            }
+            return .crx(theta: theta, control: controls[0], target: target)
+
+        case .ry(let theta, let target):
+            guard controls.count == 1 else {
+                throw QuantumCircuitError.unsupportedControlledGate(
+                    reason: "ry supports a single control (cry); got \(controls.count)"
+                )
+            }
+            return .cry(theta: theta, control: controls[0], target: target)
+
+        case .rz(let theta, let target):
+            guard controls.count == 1 else {
+                throw QuantumCircuitError.unsupportedControlledGate(
+                    reason: "rz supports a single control (crz); got \(controls.count)"
+                )
+            }
+            return .crz(theta: theta, control: controls[0], target: target)
+
+        case .p(let theta, let target):
+            guard controls.count == 1 else {
+                throw QuantumCircuitError.unsupportedControlledGate(
+                    reason: "p supports a single control (cp); got \(controls.count)"
+                )
+            }
+            return .cp(theta: theta, control: controls[0], target: target)
+
+        case .h, .y, .s, .t, .sdg, .tdg, .sx, .sxdg, .u,
+             .crx, .cry, .crz, .cp, .cswap, .iswap, .ecr, .rxx, .ryy, .rzz, .dcx,
+             .unitary1, .customUnitary:
+            throw QuantumCircuitError.unsupportedControlledGate(
+                reason: "no native controlled form for \(kind.rawValue)"
+            )
+        }
+    }
+
+    private static func controlledX(controls: [Int], target: Int) -> Gate {
+        switch controls.count {
+        case 1:
+            return .cx(control: controls[0], target: target)
+        case 2:
+            return .ccx(control1: controls[0], control2: controls[1], target: target)
+        default:
+            return .mcx(controls: controls, target: target)
+        }
+    }
+
+    private static func controlledZ(controls: [Int], target: Int) -> Gate {
+        if controls.count == 1 {
+            return .cz(control: controls[0], target: target)
+        }
+        return .mcz(controls: controls, target: target)
+    }
 }

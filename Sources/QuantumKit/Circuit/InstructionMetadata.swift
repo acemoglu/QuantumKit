@@ -5,12 +5,26 @@ import Foundation
 /// Labels and names do **not** affect unitary action or execution. Classical conditioning
 /// remains the ``Gate/c_if`` mechanism; `conditionNote` is documentation only.
 ///
-/// **Transpile policy:** ``PassManager`` rebuilds gate lists and **strips** instruction
-/// metadata by default. Set ``TranspileOptions/preserveInstructionMetadata`` to retain
-/// metadata on identity-preserving remaps and non-expanding keep-paths (layout / route
-/// remaps of original gates, basis gates already in the target set). Expanding passes
-/// (unroll, basis expansion, schedule delay insertion) still drop metadata because
-/// instruction indices no longer align 1:1. Inserted SWAPs always get `nil` metadata.
+/// ## Instruction-metadata policy (single source of truth)
+///
+/// Engines always ignore metadata; only gate lists matter for execution.
+///
+/// **Composition (`append` / `compose` / `tensor` / `formTensor`) and ``GateSequence`` /
+/// ``Subcircuit`` inlining:** each source gate is remapped 1:1 onto the destination.
+/// Metadata is **preserved** (copied with the remapped gate). There is no strip-on-compose
+/// path. Sequence inlining reuses circuit append and does not grow destination width when
+/// a qubit map is out of range (throws instead).
+///
+/// **`controlled`:** each liftable gate becomes one controlled gate (1:1), so metadata is
+/// **preserved**. Gates that cannot be lifted throw ``QuantumCircuitError/unsupportedControlledGate``
+/// instead of expanding into multiple instructions.
+///
+/// **Transpile:** ``PassManager`` rebuilds gate lists and **strips** instruction metadata by
+/// default. Set ``TranspileOptions/preserveInstructionMetadata`` to retain metadata on
+/// identity-preserving remaps and non-expanding keep-paths (layout / route remaps of original
+/// gates, basis gates already in the target set). Expanding passes (unroll, basis expansion,
+/// schedule delay insertion) still drop metadata because instruction indices no longer align
+/// 1:1. Inserted SWAPs always get `nil` metadata.
 public struct InstructionMetadata: Sendable, Equatable, Codable, Hashable {
     /// Optional canonical / display name (e.g. `"mcx"`, `"oracle"`).
     public var name: String?
