@@ -16,17 +16,27 @@ extension QuantumBackendFactory {
         qubitCount: Int? = nil,
         policy: SimulationPolicy = .default
     ) throws -> any QuantumBackend {
+        try requireBudgetedQubitCount(
+            qubitCount,
+            method: .statevector,
+            noise: nil,
+            policy: policy
+        )
         switch try resolveDevice(devicePreference, precision: policy.precision) {
         case .metal:
             return try StatevectorBackend(renormalizationInterval: renormalizationInterval)
         case .cpu:
-            if let qubitCount, qubitCount > policy.cpuStatevectorQubitLimit {
+            let limit = policy.cpuStatevectorQubitLimit
+            if let qubitCount, qubitCount > limit {
                 throw CPUEngineError.qubitCountExceedsLimit(
-                    max: policy.cpuStatevectorQubitLimit,
+                    max: limit,
                     requested: qubitCount
                 )
             }
-            return CPUStatevectorBackend(renormalizationInterval: renormalizationInterval)
+            return CPUStatevectorBackend(
+                renormalizationInterval: renormalizationInterval,
+                maxQubitCount: limit
+            )
         }
     }
 
@@ -37,17 +47,27 @@ extension QuantumBackendFactory {
         qubitCount: Int? = nil,
         policy: SimulationPolicy = .default
     ) throws -> any QuantumBackend {
+        try requireBudgetedQubitCount(
+            qubitCount,
+            method: .densityMatrix,
+            noise: nil,
+            policy: policy
+        )
         switch try resolveDevice(devicePreference, precision: policy.precision) {
         case .metal:
             return try DensityMatrixBackend(renormalizationInterval: renormalizationInterval)
         case .cpu:
-            if let qubitCount, qubitCount > policy.cpuDensityMatrixQubitLimit {
+            let limit = policy.cpuDensityMatrixQubitLimit
+            if let qubitCount, qubitCount > limit {
                 throw CPUEngineError.qubitCountExceedsLimit(
-                    max: policy.cpuDensityMatrixQubitLimit,
+                    max: limit,
                     requested: qubitCount
                 )
             }
-            return CPUDensityMatrixBackend(renormalizationInterval: renormalizationInterval)
+            return CPUDensityMatrixBackend(
+                renormalizationInterval: renormalizationInterval,
+                maxQubitCount: limit
+            )
         }
     }
 
@@ -89,17 +109,28 @@ extension QuantumBackendFactory {
 /// ``CPUStateVector``. Distinct per-shot states (as in ``run``) are safe across concurrent backends.
 public final class CPUStatevectorBackend: QuantumBackend, @unchecked Sendable {
     public let engine: CPUStatevectorEngine
+    /// Soft width cap from the constructing ``SimulationPolicy`` (≤ ``CPUStateVector/maxQubitCount``).
+    public let maxQubitCount: Int
     public var method: QuantumSimulationMethod { .statevector }
 
-    public init(renormalizationInterval: Int = 50) {
+    public init(
+        renormalizationInterval: Int = 50,
+        maxQubitCount: Int = CPUStateVector.maxQubitCount
+    ) {
         self.engine = CPUStatevectorEngine(renormalizationInterval: renormalizationInterval)
+        self.maxQubitCount = max(1, min(maxQubitCount, CPUStateVector.maxQubitCount))
     }
 
-    public init(engine: CPUStatevectorEngine) {
+    public init(
+        engine: CPUStatevectorEngine,
+        maxQubitCount: Int = CPUStateVector.maxQubitCount
+    ) {
         self.engine = engine
+        self.maxQubitCount = max(1, min(maxQubitCount, CPUStateVector.maxQubitCount))
     }
 
     public func run(circuit: QuantumCircuit, options: QuantumRunOptions = QuantumRunOptions()) throws -> QuantumResult {
+        try requireQubitCount(circuit.qubitCount)
         let started = DispatchTime.now()
         try circuit.requireFullyBound()
         var rng = makeCPURNG(seed: options.seed)
@@ -141,6 +172,12 @@ public final class CPUStatevectorBackend: QuantumBackend, @unchecked Sendable {
             execution: execution
         )
     }
+
+    func requireQubitCount(_ qubitCount: Int) throws {
+        if qubitCount > maxQubitCount {
+            throw CPUEngineError.qubitCountExceedsLimit(max: maxQubitCount, requested: qubitCount)
+        }
+    }
 }
 
 /// CPU density-matrix backend backed by ``CPUDensityMatrixEngine``.
@@ -149,17 +186,28 @@ public final class CPUStatevectorBackend: QuantumBackend, @unchecked Sendable {
 /// ``CPUDensityMatrix`` (``run`` allocates one per invocation).
 public final class CPUDensityMatrixBackend: QuantumBackend, @unchecked Sendable {
     public let engine: CPUDensityMatrixEngine
+    /// Soft width cap from the constructing ``SimulationPolicy`` (≤ ``CPUDensityMatrix/maxQubitCount``).
+    public let maxQubitCount: Int
     public var method: QuantumSimulationMethod { .densityMatrix }
 
-    public init(renormalizationInterval: Int = 50) {
+    public init(
+        renormalizationInterval: Int = 50,
+        maxQubitCount: Int = CPUDensityMatrix.maxQubitCount
+    ) {
         self.engine = CPUDensityMatrixEngine(renormalizationInterval: renormalizationInterval)
+        self.maxQubitCount = max(1, min(maxQubitCount, CPUDensityMatrix.maxQubitCount))
     }
 
-    public init(engine: CPUDensityMatrixEngine) {
+    public init(
+        engine: CPUDensityMatrixEngine,
+        maxQubitCount: Int = CPUDensityMatrix.maxQubitCount
+    ) {
         self.engine = engine
+        self.maxQubitCount = max(1, min(maxQubitCount, CPUDensityMatrix.maxQubitCount))
     }
 
     public func run(circuit: QuantumCircuit, options: QuantumRunOptions = QuantumRunOptions()) throws -> QuantumResult {
+        try requireQubitCount(circuit.qubitCount)
         let started = DispatchTime.now()
         try circuit.requireFullyBound()
         var rng = makeCPURNG(seed: options.seed)
@@ -199,6 +247,12 @@ public final class CPUDensityMatrixBackend: QuantumBackend, @unchecked Sendable 
             ),
             execution: execution
         )
+    }
+
+    func requireQubitCount(_ qubitCount: Int) throws {
+        if qubitCount > maxQubitCount {
+            throw CPUEngineError.qubitCountExceedsLimit(max: maxQubitCount, requested: qubitCount)
+        }
     }
 }
 

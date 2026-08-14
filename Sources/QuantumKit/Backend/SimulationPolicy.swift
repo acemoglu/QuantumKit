@@ -5,6 +5,8 @@ public enum SimulationPolicyError: Error, Equatable {
     case densityMatrixRequiredButTooWide(requested: Int, max: Int)
     case trajectoryRequiredButTooWide(requested: Int, max: Int)
     case estimatedMemoryExceedsBudget(estimated: Int, budget: Int)
+    /// ``maxPeakMemoryBytes`` is set but the factory call omitted ``qubitCount``.
+    case memoryBudgetRequiresQubitCount
 }
 
 /// Prefers Metal GPU engines when available, otherwise host CPU fallbacks.
@@ -28,10 +30,11 @@ public enum SimulationDeviceHint: String, Sendable, Equatable, Codable {
 public struct SimulationPolicy: Sendable, Equatable {
     public var statevectorQubitLimit: Int
     public var densityMatrixQubitLimit: Int
-    /// When noise has channels, prefer density-matrix if width fits.
+    /// When noise has channels, prefer density-matrix if width fits. When `false`, prefer
+    /// statevector unraveling whenever the noise is trajectory-compatible and SV fits.
     public var preferDensityMatrixWhenNoisy: Bool
-    /// When noisy width exceeds the DM limit (or DM is disabled) and noise is
-    /// trajectory-compatible, recommend ``QuantumSimulationMethod/trajectory``.
+    /// When noisy width exceeds the DM limit and noise is trajectory-compatible,
+    /// recommend ``QuantumSimulationMethod/trajectory`` (never while DM still fits).
     public var preferTrajectoryWhenDensityMatrixTooWide: Bool
     /// Metal vs CPU engine selection.
     public var devicePreference: SimulationDevicePreference
@@ -41,8 +44,13 @@ public struct SimulationPolicy: Sendable, Equatable {
     public var cpuDensityMatrixQubitLimit: Int
     /// Float32 (default / Metal) vs Float64 (CPU Double). See ``SimulationPrecision``.
     public var precision: SimulationPrecision
-    /// Optional hard cap on estimated peak memory; ``estimateResources`` / ``makeRecommended``
-    /// fail early when the footprint would exceed this budget.
+    /// Optional hard cap on estimated peak memory. ``estimateResources``, ``makeRecommended``,
+    /// and factory ``makeStatevector`` / ``makeDensityMatrix`` / ``makeTrajectory`` fail early
+    /// when a qubit count is provided and the footprint would exceed this budget.
+    /// Direct ``CPUStatevectorBackend`` / ``StatevectorBackend`` (and DM) constructors are
+    /// unconstrained; the factory + policy path is the budgeted API.
+    /// A non-`nil` budget without a `qubitCount:` argument throws
+    /// ``SimulationPolicyError/memoryBudgetRequiresQubitCount``.
     public var maxPeakMemoryBytes: Int?
     /// Default ensemble size used for trajectory resource / runtime heuristics.
     public var defaultTrajectoryShots: Int
@@ -126,33 +134,49 @@ extension QuantumBackendFactory {
             throw StateVectorError.invalidQubitCount(qubitCount)
         }
 
+        let device = try resolveDeviceHint(policy: policy)
+        // Width caps must match the device that will actually run. On CPU, also honor any
+        // tighter Metal-scale limits the caller set on the shared policy fields.
+        let dmLimit = device == .cpu
+            ? min(policy.cpuDensityMatrixQubitLimit, policy.densityMatrixQubitLimit)
+            : policy.densityMatrixQubitLimit
+        let svLimit = device == .cpu
+            ? min(policy.cpuStatevectorQubitLimit, policy.statevectorQubitLimit)
+            : policy.statevectorQubitLimit
+
         let noisy = noise?.hasAnyChannel == true
         let trajectoryCompatible = noise?.supportsTrajectorySimulation ?? true
-        let dmFits = qubitCount <= policy.densityMatrixQubitLimit
-        let svFits = qubitCount <= policy.statevectorQubitLimit
+        let dmFits = qubitCount <= dmLimit
+        let svFits = qubitCount <= svLimit
 
         if noisy {
             if policy.preferDensityMatrixWhenNoisy && dmFits {
                 return .densityMatrix
             }
-            if trajectoryCompatible
+            // Unraveling SV when the flag is off, SV fits, and noise is trajectory-compatible.
+            if !policy.preferDensityMatrixWhenNoisy && svFits && trajectoryCompatible {
+                return .statevector
+            }
+            // Trajectory only when DM cannot fit — never as a substitute while DM still fits.
+            if !dmFits
+                && policy.preferTrajectoryWhenDensityMatrixTooWide
+                && trajectoryCompatible
                 && svFits
-                && (policy.preferTrajectoryWhenDensityMatrixTooWide || !dmFits)
             {
                 return .trajectory
             }
             if dmFits {
                 return .densityMatrix
             }
-            if !trajectoryCompatible {
+            if !trajectoryCompatible || !policy.preferTrajectoryWhenDensityMatrixTooWide {
                 throw SimulationPolicyError.densityMatrixRequiredButTooWide(
                     requested: qubitCount,
-                    max: policy.densityMatrixQubitLimit
+                    max: dmLimit
                 )
             }
             throw SimulationPolicyError.trajectoryRequiredButTooWide(
                 requested: qubitCount,
-                max: policy.statevectorQubitLimit
+                max: svLimit
             )
         }
 
@@ -165,8 +189,8 @@ extension QuantumBackendFactory {
 
         throw SimulationPolicyError.qubitCountExceedsAllLimits(
             requested: qubitCount,
-            statevectorMax: policy.statevectorQubitLimit,
-            densityMatrixMax: policy.densityMatrixQubitLimit
+            statevectorMax: svLimit,
+            densityMatrixMax: dmLimit
         )
     }
 
@@ -205,25 +229,38 @@ extension QuantumBackendFactory {
                 renormalizationInterval: renormalizationInterval,
                 devicePreference: policy.devicePreference,
                 qubitCount: qubitCount,
-                policy: policy
+                policy: policy,
+                noise: noise
             )
         }
     }
 
     /// Builds a trajectory (SV Monte-Carlo ensemble) backend for the requested device preference.
+    ///
+    /// When `devicePreference` is omitted, ``SimulationPolicy/devicePreference`` is used.
+    /// Pass `noise` so the memory-budget check matches noisy (serial) vs noiseless (batchable)
+    /// trajectory peak estimates.
     public static func makeTrajectory(
         renormalizationInterval: Int = 50,
-        devicePreference: SimulationDevicePreference = .automatic,
+        devicePreference: SimulationDevicePreference? = nil,
         qubitCount: Int? = nil,
-        policy: SimulationPolicy = .default
+        policy: SimulationPolicy = .default,
+        noise: NoiseModel? = nil
     ) throws -> any QuantumBackend {
+        let resolvedPreference = devicePreference ?? policy.devicePreference
+        try requireBudgetedQubitCount(
+            qubitCount,
+            method: .trajectory,
+            noise: noise,
+            policy: policy
+        )
         let underlying = try makeStatevector(
             renormalizationInterval: renormalizationInterval,
-            devicePreference: devicePreference,
+            devicePreference: resolvedPreference,
             qubitCount: qubitCount,
             policy: policy
         )
-        return TrajectoryBackend(wrapping: underlying)
+        return try TrajectoryBackend(wrapping: underlying)
     }
 
     /// Estimates memory footprint, rough runtime, and recommended method without allocating buffers.
@@ -235,31 +272,21 @@ extension QuantumBackendFactory {
         shots: Int? = nil
     ) throws -> ResourceEstimate {
         let method = try recommendMethod(qubitCount: qubitCount, noise: noise, policy: policy)
-        let device = resolveDeviceHint(policy: policy)
-        let complexBytes = complexElementBytes(precision: policy.precision)
-        let dim = 1 << qubitCount
-
-        let stateBytes: Int
-        let peakBytes: Int
-        let trajShots: Int?
-        switch method {
-        case .statevector:
-            stateBytes = dim * complexBytes
-            // Scratch for gates / measurement CDF ≈ one extra statevector.
-            peakBytes = stateBytes * 2
-            trajShots = nil
-        case .densityMatrix:
-            stateBytes = dim * dim * complexBytes
-            // Real/imag scratch pair ≈ another full ρ.
-            peakBytes = stateBytes * 2
-            trajShots = nil
-        case .trajectory:
-            let ensemble = shots ?? policy.defaultTrajectoryShots
-            stateBytes = dim * complexBytes
-            // Peak is one working SV (+scratch); ensemble is sequential by default.
-            peakBytes = stateBytes * 2
-            trajShots = ensemble
-        }
+        let device = try resolveDeviceHint(policy: policy)
+        let dmLimit = device == .cpu
+            ? min(policy.cpuDensityMatrixQubitLimit, policy.densityMatrixQubitLimit)
+            : policy.densityMatrixQubitLimit
+        let svLimit = device == .cpu
+            ? min(policy.cpuStatevectorQubitLimit, policy.statevectorQubitLimit)
+            : policy.statevectorQubitLimit
+        let (stateBytes, peakBytes, trajShots) = peakMemoryBreakdown(
+            qubitCount: qubitCount,
+            method: method,
+            device: device,
+            noise: noise,
+            policy: policy,
+            shots: shots
+        )
 
         if let budget = policy.maxPeakMemoryBytes, peakBytes > budget {
             throw SimulationPolicyError.estimatedMemoryExceedsBudget(
@@ -284,20 +311,112 @@ extension QuantumBackendFactory {
             estimatedPeakMemoryBytes: peakBytes,
             estimatedRuntimeHintNanoseconds: runtimeHint,
             recommendedDevice: device,
-            statevectorLimit: policy.statevectorQubitLimit,
-            densityMatrixLimit: policy.densityMatrixQubitLimit,
+            statevectorLimit: svLimit,
+            densityMatrixLimit: dmLimit,
             assumedTrajectoryShots: trajShots
         )
     }
 
-    static func resolveDeviceHint(policy: SimulationPolicy) -> SimulationDeviceHint {
+    static func requireBudgetedQubitCount(
+        _ qubitCount: Int?,
+        method: QuantumSimulationMethod,
+        noise: NoiseModel?,
+        policy: SimulationPolicy,
+        shots: Int? = nil
+    ) throws {
+        guard policy.maxPeakMemoryBytes != nil else { return }
+        guard let qubitCount else {
+            throw SimulationPolicyError.memoryBudgetRequiresQubitCount
+        }
+        try enforceMemoryBudget(
+            qubitCount: qubitCount,
+            method: method,
+            noise: noise,
+            policy: policy,
+            shots: shots
+        )
+    }
+
+    static func enforceMemoryBudget(
+        qubitCount: Int,
+        method: QuantumSimulationMethod,
+        noise: NoiseModel?,
+        policy: SimulationPolicy,
+        shots: Int? = nil
+    ) throws {
+        guard let budget = policy.maxPeakMemoryBytes else { return }
+        let device = try resolveDeviceHint(policy: policy)
+        let (_, peakBytes, _) = peakMemoryBreakdown(
+            qubitCount: qubitCount,
+            method: method,
+            device: device,
+            noise: noise,
+            policy: policy,
+            shots: shots
+        )
+        if peakBytes > budget {
+            throw SimulationPolicyError.estimatedMemoryExceedsBudget(
+                estimated: peakBytes,
+                budget: budget
+            )
+        }
+    }
+
+    static func peakMemoryBreakdown(
+        qubitCount: Int,
+        method: QuantumSimulationMethod,
+        device: SimulationDeviceHint,
+        noise: NoiseModel?,
+        policy: SimulationPolicy,
+        shots: Int?
+    ) -> (stateBytes: Int, peakBytes: Int, trajShots: Int?) {
+        // CPU engines always store Double, even when policy.precision is the Metal default .float32.
+        let complexBytes = device == .cpu
+            ? 2 * MemoryLayout<Double>.stride
+            : complexElementBytes(precision: policy.precision)
+        let dim = 1 << qubitCount
+
+        switch method {
+        case .statevector:
+            let stateBytes = dim * complexBytes
+            return (stateBytes, stateBytes * 2, nil)
+        case .densityMatrix:
+            let stateBytes = dim * dim * complexBytes
+            return (stateBytes, stateBytes * 2, nil)
+        case .trajectory:
+            let ensemble = shots ?? policy.defaultTrajectoryShots
+            let stateBytes = dim * complexBytes
+            // Noisy evolution forces BatchSampleExecutor batchSize = 1; only charge a Metal
+            // StateVectorBatch pool when shots can actually be batched.
+            let forcesSerialShots =
+                (noise?.hasGateNoise == true)
+                || (noise?.hasPreparationNoise == true)
+                || (noise?.hasMeasurementChannelNoise == true)
+            let metalBatch: Int
+            if device == .metal && !forcesSerialShots {
+                metalBatch = min(ensemble, SampleCountOptions().batchSize)
+            } else {
+                metalBatch = 1
+            }
+            let peakBytes = stateBytes * (2 + max(metalBatch - 1, 0))
+            return (stateBytes, peakBytes, ensemble)
+        }
+    }
+
+    static func resolveDeviceHint(policy: SimulationPolicy) throws -> SimulationDeviceHint {
         if policy.precision == .float64 {
+            if policy.devicePreference == .metal {
+                throw SimulationPrecisionError.metalFloat64Unsupported
+            }
             return .cpu
         }
         switch policy.devicePreference {
         case .cpu:
             return .cpu
         case .metal:
+            guard MetalRuntime.isAvailable else {
+                throw QuantumEngineError.deviceNotFound
+            }
             return .metal
         case .automatic:
             return MetalRuntime.isAvailable ? .metal : .cpu

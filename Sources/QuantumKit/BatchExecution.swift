@@ -4,8 +4,8 @@ import Metal
 /// Options for repeated circuit execution (sampling).
 public struct SampleCountOptions: Sendable, Equatable {
 
-    /// How many independent runs to group per GPU submission. Ignored when gate noise or
-    /// mid-circuit measure/reset requires sequential execution.
+    /// How many independent runs to group per GPU submission. Ignored when evolution noise,
+    /// mid-circuit measure/reset, or host-applied unitaries require sequential execution.
     public var batchSize: Int
 
     public init(batchSize: Int = 32) {
@@ -84,6 +84,14 @@ extension QuantumCircuit {
         return true
     }
 
+    /// `true` when the circuit contains at least one ``Gate/delay``.
+    var containsDelay: Bool {
+        gates.contains { gate in
+            if case .delay = gate { return true }
+            return false
+        }
+    }
+
     var containsHostAppliedUnitaryGates: Bool {
         gates.contains { gate in
             switch gate {
@@ -99,6 +107,15 @@ extension QuantumCircuit {
 }
 
 enum BatchSampleExecutor {
+
+    /// Noise that must be applied during circuit evolution (not only at terminal readout).
+    static func requiresEvolutionNoise(_ noise: NoiseModel?, circuit: QuantumCircuit) -> Bool {
+        guard let noise else { return false }
+        if noise.hasGateNoise || noise.hasPreparationNoise || noise.hasMeasurementChannelNoise {
+            return true
+        }
+        return noise.hasIdleNoise && circuit.containsDelay
+    }
 
     static func runSampleCountsRNG(
         circuit: QuantumCircuit,
@@ -117,8 +134,8 @@ enum BatchSampleExecutor {
         var histogram: [Int: Int] = [:]
         histogram.reserveCapacity(min(shots, circuit.qubitCount > 0 ? 1 << circuit.qubitCount : 1))
 
-        let gateNoise = noise?.hasGateNoise == true
-        let canBatch = circuit.isUnitaryOnly && !gateNoise && !circuit.containsHostAppliedUnitaryGates
+        let evolutionNoise = requiresEvolutionNoise(noise, circuit: circuit)
+        let canBatch = circuit.isUnitaryOnly && !evolutionNoise && !circuit.containsHostAppliedUnitaryGates
         let batchSize = canBatch ? min(options.batchSize, shots) : 1
 
         let pool = try StateVectorBatch(qubitCount: circuit.qubitCount, device: device, capacity: batchSize)
@@ -147,7 +164,7 @@ enum BatchSampleExecutor {
                         circuit,
                         on: state,
                         rng: &rng,
-                        noise: gateNoise ? noise : nil,
+                        noise: evolutionNoise ? noise : nil,
                         cancellationCheck: cancellationCheck
                     )
                     let outcome = try engine.executeMeasurementCollapse(on: state, rng: &rng, noise: noise)

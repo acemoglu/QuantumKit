@@ -170,10 +170,19 @@ extension QuantumEngine {
     }
 
     func executeUnitaryGate(_ gate: Gate, on state: StateVector, gateCounter: inout Int) throws {
+        try executeUnitaryGate(gate, on: state, gateCounter: &gateCounter, renormalize: true)
+    }
+
+    func executeUnitaryGate(
+        _ gate: Gate,
+        on state: StateVector,
+        gateCounter: inout Int,
+        renormalize: Bool
+    ) throws {
         if GateDecomposition.needsExecutionExpansion(gate) {
             let pieces = try Self.expandForExecution(gate)
             guard !pieces.isEmpty else { return }
-            try flushUnitaryGates(pieces, on: state, gateCounter: &gateCounter)
+            try flushUnitaryGates(pieces, on: state, gateCounter: &gateCounter, renormalize: renormalize)
             return
         }
 
@@ -197,7 +206,7 @@ extension QuantumEngine {
 
         try encodeUnitaryGate(gate, encoder: computeEncoder, state: state)
         gateCounter += 1
-        if shouldRenormalize(afterAppliedGateCount: gateCounter) {
+        if renormalize, shouldRenormalize(afterAppliedGateCount: gateCounter) {
             let localScratch = try makeRenormalizationScratch(stateCount: state.stateCount)
             scratch = localScratch
             try encodeStateRenormalization(encoder: computeEncoder, state: state, scratch: localScratch)
@@ -224,17 +233,53 @@ extension QuantumEngine {
 
     func flushUnitaryGates(_ gates: [Gate], on state: StateVector) throws {
         var gateCounter = 0
-        try flushUnitaryGates(gates, on: state, gateCounter: &gateCounter)
+        try flushUnitaryGates(gates, on: state, gateCounter: &gateCounter, renormalize: true)
     }
 
     func flushUnitaryGates(_ gates: [Gate], on state: StateVector, gateCounter: inout Int) throws {
+        try flushUnitaryGates(gates, on: state, gateCounter: &gateCounter, renormalize: true)
+    }
+
+    func flushUnitaryGates(
+        _ gates: [Gate],
+        on state: StateVector,
+        gateCounter: inout Int,
+        renormalize: Bool
+    ) throws {
         guard !gates.isEmpty else { return }
 
-        guard let commandBuffer = commandQueue.makeCommandBuffer(),
-              let computeEncoder = commandBuffer.makeComputeCommandEncoder() else {
-            throw QuantumEngineError.commandBufferCreationFailed
+        // Host unitaries must not interleave with undrained GPU encodes in the same pass:
+        // commit + drain before each host apply, then continue GPU work on a fresh buffer.
+        var pendingGPU: [Gate] = []
+
+        func flushPendingGPU() throws {
+            guard !pendingGPU.isEmpty else { return }
+            guard let commandBuffer = commandQueue.makeCommandBuffer(),
+                  let computeEncoder = commandBuffer.makeComputeCommandEncoder() else {
+                throw QuantumEngineError.commandBufferCreationFailed
+            }
+            var scratch: RenormalizationScratch?
+            for piece in pendingGPU {
+                try encodeUnitaryGate(piece, encoder: computeEncoder, state: state)
+                gateCounter += 1
+                if renormalize, shouldRenormalize(afterAppliedGateCount: gateCounter) {
+                    if scratch == nil {
+                        scratch = try makeRenormalizationScratch(stateCount: state.stateCount)
+                    }
+                    if let scratch {
+                        try encodeStateRenormalization(encoder: computeEncoder, state: state, scratch: scratch)
+                    }
+                }
+            }
+            computeEncoder.endEncoding()
+            if let scratch {
+                releaseRenormalizationScratch(scratch, after: commandBuffer)
+            }
+            commandBuffer.commit()
+            // Host unitaries in this pass must see settled GPU writes.
+            try drainPipeline()
+            pendingGPU.removeAll(keepingCapacity: true)
         }
-        var scratch: RenormalizationScratch?
 
         for gate in gates {
             let expanded: [Gate]
@@ -246,35 +291,21 @@ extension QuantumEngine {
 
             for piece in expanded {
                 if case .unitary1(let matrix, let target) = piece {
+                    try flushPendingGPU()
                     try applyHost1QUnitary(matrix, target: target, on: state)
                     gateCounter += 1
                     continue
                 }
                 if case .customUnitary(let matrix, let qubits) = piece, qubits.count > 1 {
+                    try flushPendingGPU()
                     try applyHostCustomUnitary(matrix, qubits: qubits, on: state)
                     gateCounter += 1
                     continue
                 }
-                try encodeUnitaryGate(piece, encoder: computeEncoder, state: state)
-                gateCounter += 1
-                if shouldRenormalize(afterAppliedGateCount: gateCounter) {
-                    if scratch == nil {
-                        scratch = try makeRenormalizationScratch(stateCount: state.stateCount)
-                    }
-                    if let scratch {
-                        try encodeStateRenormalization(encoder: computeEncoder, state: state, scratch: scratch)
-                    }
-                }
+                pendingGPU.append(piece)
             }
         }
-
-        computeEncoder.endEncoding()
-        // Commit without blocking the CPU; recycle the scratch only once the GPU signals completion
-        // so the pool never hands an in-flight buffer to the next dispatch.
-        if let scratch {
-            releaseRenormalizationScratch(scratch, after: commandBuffer)
-        }
-        commandBuffer.commit()
+        try flushPendingGPU()
     }
 
     /// Packs a list of control qubit indices into a bitmask (bit `q` set ⟺ qubit `q` is a control).

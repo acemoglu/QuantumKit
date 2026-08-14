@@ -20,6 +20,8 @@ public final class CPUDensityMatrixEngine: @unchecked Sendable {
         return try executeRNG(circuit, on: density, rng: &rng, noise: noise)
     }
 
+    /// After ``CircuitExecutionCancellationError``, `density` is undefined and must not be reused;
+    /// allocate a fresh ``CPUDensityMatrix`` for any later run.
     public func executeRNG(
         _ circuit: QuantumCircuit,
         on density: CPUDensityMatrix,
@@ -39,10 +41,22 @@ public final class CPUDensityMatrixEngine: @unchecked Sendable {
 
         var measurementOutcomes = runState.measurementOutcomes
         var appliedGateCount = runState.appliedGateCount
+        var renormTick = runState.unitaryRenormCount ?? runState.appliedGateCount
         var classicalMemory = runState.classicalMemory
             ?? ClassicalMemory(registerWidths: circuit.classicalRegisters.map(\.bitCount))
 
-        func executeRuntimeGate(_ gate: Gate, at gateIndex: Int) throws {
+        func applyCircuitUnitary(_ gate: Gate) throws {
+            let pieces = try QuantumEngine.expandForExecution(gate)
+            for piece in pieces {
+                try applyExpandedUnitary(piece, on: density)
+                renormTick += 1
+                if renormalizationInterval > 0, renormTick % renormalizationInterval == 0 {
+                    renormalizeTrace(of: density)
+                }
+            }
+        }
+
+        func executeRuntimeGate(_ gate: Gate, at gateIndex: Int, countsTowardApplied: Bool = true) throws {
             switch gate {
             case .measure(let spec):
                 let bits = try applyMeasurement(
@@ -81,7 +95,7 @@ public final class CPUDensityMatrixEngine: @unchecked Sendable {
 
             case .c_if(let classicalRegister, let expectedValue, let conditionedGate):
                 if classicalMemory.value(ofRegister: classicalRegister) == expectedValue {
-                    try executeRuntimeGate(conditionedGate, at: gateIndex)
+                    try executeRuntimeGate(conditionedGate, at: gateIndex, countsTowardApplied: false)
                 }
 
             case .initialize(let qubits, let amplitudes):
@@ -91,15 +105,14 @@ public final class CPUDensityMatrixEngine: @unchecked Sendable {
                 }
 
             default:
-                try applyUnitaryGate(gate, on: density)
+                try applyCircuitUnitary(gate)
                 if let noise {
                     try applyNoiseChannels(after: gate, at: gateIndex, on: density, noise: noise)
                 }
             }
 
-            appliedGateCount += 1
-            if renormalizationInterval > 0, appliedGateCount % renormalizationInterval == 0 {
-                renormalizeTrace(of: density)
+            if countsTowardApplied {
+                appliedGateCount += 1
             }
         }
 
@@ -112,7 +125,8 @@ public final class CPUDensityMatrixEngine: @unchecked Sendable {
         return CircuitExecutionResult(
             measurementOutcomes: measurementOutcomes,
             classicalMemory: classicalMemory,
-            appliedGateCount: appliedGateCount
+            appliedGateCount: appliedGateCount,
+            unitaryRenormCount: renormTick
         )
     }
 
@@ -133,6 +147,31 @@ public final class CPUDensityMatrixEngine: @unchecked Sendable {
         if case .id = gate { return }
         if case .barrier = gate { return }
         if case .delay = gate { return }
+
+        // Native controlled-1Q, matching Metal DM encodeSingleQubitUnitary / CPU SV.
+        // CircuitUnitary's CRX sandwich and CP→CRZ are the wrong matrices.
+        if case .crx(let theta, let control, let target) = gate {
+            let half = Double(try theta.requireLiteral()) / 2.0
+            let c = cos(half)
+            let s = sin(half)
+            applyControlled1QUnitary(
+                on: density,
+                target: target,
+                controlMask: 1 << control,
+                matrix: [(c, 0), (0, -s), (0, -s), (c, 0)]
+            )
+            return
+        }
+        if case .cp(let theta, let control, let target) = gate {
+            let angle = Double(try theta.requireLiteral())
+            applyControlled1QUnitary(
+                on: density,
+                target: target,
+                controlMask: 1 << control,
+                matrix: [(1, 0), (0, 0), (0, 0), (cos(angle), sin(angle))]
+            )
+            return
+        }
 
         let unitary = try CircuitUnitary.matrix(for: gate, qubitCount: density.qubitCount)
         applyFullUnitary(unitary, on: density)
@@ -208,6 +247,72 @@ public final class CPUDensityMatrixEngine: @unchecked Sendable {
             }
         }
         applyFullUnitary(UnitaryMatrix(dimension: dim, elements: elements), on: density)
+    }
+
+    /// ρ → UρU† for a 2×2 on `target` when `(index & controlMask) == controlMask`.
+    /// Same control-mask convention as Metal DM and CPU SV (`1 << control`).
+    private func applyControlled1QUnitary(
+        on density: CPUDensityMatrix,
+        target: Int,
+        controlMask: Int,
+        matrix: [(re: Double, im: Double)]
+    ) {
+        let dim = density.stateCount
+        let bit = 1 << target
+        var tempRe = Array(repeating: 0.0, count: dim * dim)
+        var tempIm = Array(repeating: 0.0, count: dim * dim)
+
+        for row in 0..<dim {
+            let controlled = (row & controlMask) == controlMask
+            for column in 0..<dim {
+                if !controlled {
+                    tempRe[row * dim + column] = density.real[row * dim + column]
+                    tempIm[row * dim + column] = density.imag[row * dim + column]
+                    continue
+                }
+                let rowBit = (row & bit) != 0 ? 1 : 0
+                var sumRe = 0.0
+                var sumIm = 0.0
+                for b in 0...1 {
+                    let src = (row & ~bit) | (b << target)
+                    let u = matrix[rowBit * 2 + b]
+                    let rRe = density.real[src * dim + column]
+                    let rIm = density.imag[src * dim + column]
+                    sumRe += u.re * rRe - u.im * rIm
+                    sumIm += u.re * rIm + u.im * rRe
+                }
+                tempRe[row * dim + column] = sumRe
+                tempIm[row * dim + column] = sumIm
+            }
+        }
+
+        var outRe = Array(repeating: 0.0, count: dim * dim)
+        var outIm = Array(repeating: 0.0, count: dim * dim)
+        for row in 0..<dim {
+            for column in 0..<dim {
+                if (column & controlMask) != controlMask {
+                    outRe[row * dim + column] = tempRe[row * dim + column]
+                    outIm[row * dim + column] = tempIm[row * dim + column]
+                    continue
+                }
+                let colBit = (column & bit) != 0 ? 1 : 0
+                var sumRe = 0.0
+                var sumIm = 0.0
+                for b in 0...1 {
+                    let srcCol = (column & ~bit) | (b << target)
+                    let u = matrix[colBit * 2 + b]
+                    let uRe = u.re
+                    let uIm = -u.im
+                    let tRe = tempRe[row * dim + srcCol]
+                    let tIm = tempIm[row * dim + srcCol]
+                    sumRe += tRe * uRe - tIm * uIm
+                    sumIm += tRe * uIm + tIm * uRe
+                }
+                outRe[row * dim + column] = sumRe
+                outIm[row * dim + column] = sumIm
+            }
+        }
+        density.setMatrix(real: outRe, imag: outIm)
     }
 
     // MARK: - Kraus
@@ -364,7 +469,7 @@ public final class CPUDensityMatrixEngine: @unchecked Sendable {
         case .coherentUnitaryError(let axis, let angle, let probability):
             guard probability > 0, abs(angle) > 0 else { return }
             for qubit in qubits {
-                applyCoherentMixture(on: density, qubit: qubit, axis: axis, angle: Double(angle), probability: Double(probability))
+                try applyCoherentMixture(on: density, qubit: qubit, axis: axis, angle: Double(angle), probability: Double(probability))
             }
         case .idleThermalRelaxation(let t1, let t2):
             guard case .delay(let duration, _) = gate else { return }
@@ -373,7 +478,7 @@ public final class CPUDensityMatrixEngine: @unchecked Sendable {
             }
         case .correlatedPauli(let axis, let probability):
             guard qubits.count == 2, probability > 0 else { return }
-            applyCorrelatedPauli(
+            try applyCorrelatedPauli(
                 on: density,
                 qubitA: qubits[0],
                 qubitB: qubits[1],
@@ -417,7 +522,7 @@ public final class CPUDensityMatrixEngine: @unchecked Sendable {
             // (1-p)ρ + (p/3)(XρX+YρY+ZρZ)
             applyPauliMixture1Q(on: density, qubit: qubits[0], probability: Double(probability))
         case 2:
-            applyCorrelatedTwoQubitDepolarizing(
+            try applyCorrelatedTwoQubitDepolarizing(
                 on: density,
                 qubitA: qubits[0],
                 qubitB: qubits[1],
@@ -446,7 +551,7 @@ public final class CPUDensityMatrixEngine: @unchecked Sendable {
         qubitA: Int,
         qubitB: Int,
         probability p: Double
-    ) {
+    ) throws {
         // Exact channel via 16 Pauli branches is expensive on CPU; apply as
         // (1-p)ρ + (p/15) Σ_{P≠I} PρP using successive conjugations accumulated.
         let original = density.copy()
@@ -458,10 +563,10 @@ public final class CPUDensityMatrixEngine: @unchecked Sendable {
             let axisB = code % 4
             density.setMatrix(real: original.real, imag: original.imag)
             if let gateA = pauliGate(axis: axisA, on: qubitA) {
-                try? applyUnitaryGate(gateA, on: density)
+                try applyUnitaryGate(gateA, on: density)
             }
             if let gateB = pauliGate(axis: axisB, on: qubitB) {
-                try? applyUnitaryGate(gateB, on: density)
+                try applyUnitaryGate(gateB, on: density)
             }
             for index in 0..<density.elementCount {
                 accRe[index] += weight * density.real[index]
@@ -522,22 +627,17 @@ public final class CPUDensityMatrixEngine: @unchecked Sendable {
         axis: CoherentRotationAxis,
         angle: Double,
         probability p: Double
-    ) {
+    ) throws {
         let original = density.copy()
-        let kI = sqrt(max(0, 1 - p))
-        let kU = sqrt(max(0, p))
-        // (1-p)ρ branch
+        // (1-p)ρ + p UρU†
         var accRe = original.real.map { $0 * (1 - p) }
         var accIm = original.imag.map { $0 * (1 - p) }
-        // p UρU†
         density.setMatrix(real: original.real, imag: original.imag)
-        try? applyUnitaryGate(rotationGate(axis: axis, angle: QFloat(angle), target: qubit), on: density)
+        try applyUnitaryGate(rotationGate(axis: axis, angle: QFloat(angle), target: qubit), on: density)
         for index in 0..<density.elementCount {
             accRe[index] += p * density.real[index]
             accIm[index] += p * density.imag[index]
         }
-        _ = kI
-        _ = kU
         density.setMatrix(real: accRe, imag: accIm)
     }
 
@@ -547,7 +647,7 @@ public final class CPUDensityMatrixEngine: @unchecked Sendable {
         qubitB: Int,
         axis: CoherentRotationAxis,
         probability p: Double
-    ) {
+    ) throws {
         let original = density.copy()
         var accRe = original.real.map { $0 * (1 - p) }
         var accIm = original.imag.map { $0 * (1 - p) }
@@ -559,8 +659,8 @@ public final class CPUDensityMatrixEngine: @unchecked Sendable {
         case .y: gateA = .y(target: qubitA); gateB = .y(target: qubitB)
         case .z: gateA = .z(target: qubitA); gateB = .z(target: qubitB)
         }
-        try? applyUnitaryGate(gateA, on: density)
-        try? applyUnitaryGate(gateB, on: density)
+        try applyUnitaryGate(gateA, on: density)
+        try applyUnitaryGate(gateB, on: density)
         for index in 0..<density.elementCount {
             accRe[index] += p * density.real[index]
             accIm[index] += p * density.imag[index]

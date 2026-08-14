@@ -13,37 +13,54 @@ enum DensityMatrixShotSampler {
         engine: DensityMatrixEngine,
         shots: Int,
         rng: inout QuantumRNG,
-        noise: NoiseModel?
+        noise: NoiseModel?,
+        cancellationCheck: (() throws -> Void)? = nil
     ) throws -> ShotCounts {
         guard shots > 0 else {
             throw QuantumMeasurementError.invalidShotCount(shots)
         }
 
         if circuit.allowsPreparedDensityShotBatching(noise: noise) {
+            try cancellationCheck?()
             let density = try DensityMatrix(qubitCount: circuit.qubitCount, device: engine.device)
-            _ = try engine.executeRNG(circuit, on: density, rng: &rng, noise: noise)
+            _ = try engine.executeRNG(
+                circuit,
+                on: density,
+                rng: &rng,
+                noise: noise,
+                cancellationCheck: cancellationCheck
+            )
             let probabilities = engine.probabilities(of: density)
             return try sampleTerminalShots(
                 probabilities: probabilities,
                 shots: shots,
                 measuredQubitCount: circuit.qubitCount,
                 rng: &rng,
-                noise: noise
+                noise: noise,
+                cancellationCheck: cancellationCheck
             )
         }
 
         var histogram: [Int: Int] = [:]
         histogram.reserveCapacity(min(shots, 1 << circuit.qubitCount))
         for _ in 0..<shots {
+            try cancellationCheck?()
             let density = try DensityMatrix(qubitCount: circuit.qubitCount, device: engine.device)
-            _ = try engine.executeRNG(circuit, on: density, rng: &rng, noise: noise)
+            _ = try engine.executeRNG(
+                circuit,
+                on: density,
+                rng: &rng,
+                noise: noise,
+                cancellationCheck: cancellationCheck
+            )
             let probabilities = engine.probabilities(of: density)
             let single = try sampleTerminalShots(
                 probabilities: probabilities,
                 shots: 1,
                 measuredQubitCount: circuit.qubitCount,
                 rng: &rng,
-                noise: noise
+                noise: noise,
+                cancellationCheck: cancellationCheck
             )
             for (outcome, count) in single.counts {
                 histogram[outcome, default: 0] += count
@@ -58,35 +75,52 @@ enum DensityMatrixShotSampler {
         engine: CPUDensityMatrixEngine,
         shots: Int,
         rng: inout QuantumRNG,
-        noise: NoiseModel?
+        noise: NoiseModel?,
+        cancellationCheck: (() throws -> Void)? = nil
     ) throws -> ShotCounts {
         guard shots > 0 else {
             throw QuantumMeasurementError.invalidShotCount(shots)
         }
 
         if circuit.allowsPreparedDensityShotBatching(noise: noise) {
+            try cancellationCheck?()
             let density = try CPUDensityMatrix(qubitCount: circuit.qubitCount)
-            _ = try engine.executeRNG(circuit, on: density, rng: &rng, noise: noise)
+            _ = try engine.executeRNG(
+                circuit,
+                on: density,
+                rng: &rng,
+                noise: noise,
+                cancellationCheck: cancellationCheck
+            )
             return try sampleTerminalShots(
                 probabilities: density.probabilities(),
                 shots: shots,
                 measuredQubitCount: circuit.qubitCount,
                 rng: &rng,
-                noise: noise
+                noise: noise,
+                cancellationCheck: cancellationCheck
             )
         }
 
         var histogram: [Int: Int] = [:]
         histogram.reserveCapacity(min(shots, 1 << circuit.qubitCount))
         for _ in 0..<shots {
+            try cancellationCheck?()
             let density = try CPUDensityMatrix(qubitCount: circuit.qubitCount)
-            _ = try engine.executeRNG(circuit, on: density, rng: &rng, noise: noise)
+            _ = try engine.executeRNG(
+                circuit,
+                on: density,
+                rng: &rng,
+                noise: noise,
+                cancellationCheck: cancellationCheck
+            )
             let single = try sampleTerminalShots(
                 probabilities: density.probabilities(),
                 shots: 1,
                 measuredQubitCount: circuit.qubitCount,
                 rng: &rng,
-                noise: noise
+                noise: noise,
+                cancellationCheck: cancellationCheck
             )
             for (outcome, count) in single.counts {
                 histogram[outcome, default: 0] += count
@@ -101,13 +135,56 @@ enum DensityMatrixShotSampler {
         shots: Int,
         measuredQubitCount: Int,
         rng: inout QuantumRNG,
-        noise: NoiseModel?
+        noise: NoiseModel?,
+        cancellationCheck: (() throws -> Void)? = nil
     ) throws -> ShotCounts {
+        // Cooperative cancel between CDF draws for large shot batches.
+        if let cancellationCheck, shots > 1 {
+            var histogram: [Int: Int] = [:]
+            histogram.reserveCapacity(min(shots, probabilities.count))
+            let chunk = max(1, min(shots, 256))
+            var completed = 0
+            while completed < shots {
+                try cancellationCheck()
+                let n = min(chunk, shots - completed)
+                let partial = try QuantumMeasurement.buildHistogram(
+                    from: probabilities,
+                    shots: n,
+                    rng: &rng
+                )
+                for (outcome, count) in partial.counts {
+                    histogram[outcome, default: 0] += count
+                }
+                completed += n
+            }
+            let base = ShotCounts(shots: shots, counts: histogram)
+            return try applyReadoutFlips(
+                base: base,
+                measuredQubitCount: measuredQubitCount,
+                rng: &rng,
+                noise: noise
+            )
+        }
+
         let base = try QuantumMeasurement.buildHistogram(
             from: probabilities,
             shots: shots,
             rng: &rng
         )
+        return try applyReadoutFlips(
+            base: base,
+            measuredQubitCount: measuredQubitCount,
+            rng: &rng,
+            noise: noise
+        )
+    }
+
+    private static func applyReadoutFlips(
+        base: ShotCounts,
+        measuredQubitCount: Int,
+        rng: inout QuantumRNG,
+        noise: NoiseModel?
+    ) throws -> ShotCounts {
         guard let noise, noise.appliesReadoutError else {
             return base
         }
@@ -124,7 +201,7 @@ enum DensityMatrixShotSampler {
                 histogram[flipped, default: 0] += 1
             }
         }
-        return ShotCounts(shots: shots, counts: histogram)
+        return ShotCounts(shots: base.shots, counts: histogram)
     }
 
     /// Estimates ⟨Z…⟩ (or a Pauli string after basis change) from terminal shot counts.

@@ -1,19 +1,38 @@
 import Foundation
 
+public enum TrajectoryBackendError: Error, Equatable {
+    /// Ensemble semantics require a positive ``QuantumRunOptions/shots`` count.
+    case shotsRequired
+    /// ``TrajectoryBackend`` can only wrap Metal or CPU statevector backends.
+    case unsupportedUnderlyingBackend
+}
+
 /// Monte-Carlo statevector trajectory ensemble backend.
 ///
 /// Wraps a statevector engine (Metal or CPU) and tags results as
 /// ``QuantumSimulationMethod/trajectory``. Rejects localized gate noise and
 /// ``MeasurementMode/dephasingOnly`` — the same constraints as SV engines.
 ///
+/// ``run(circuit:options:)`` **requires** ``QuantumRunOptions/shots``; a single
+/// unraveling path is not a mixed-state trajectory result. Use
+/// ``averageProbabilities(circuit:trajectories:seed:noise:)`` for explicit ensembles
+/// without a histogram.
+///
 /// Thread-safety: same as the wrapped statevector backend (distinct per-shot states).
 public final class TrajectoryBackend: QuantumBackend, @unchecked Sendable {
     public var method: QuantumSimulationMethod { .trajectory }
+    /// Device of the wrapped statevector backend, not merely whether Metal exists on the host.
+    public var deviceName: String {
+        if metal != nil {
+            return MetalRuntime.deviceName ?? "Metal"
+        }
+        return "CPU"
+    }
 
     private let metal: StatevectorBackend?
     private let cpu: CPUStatevectorBackend?
 
-    public init(wrapping backend: any QuantumBackend) {
+    public init(wrapping backend: any QuantumBackend) throws {
         if let metal = backend as? StatevectorBackend {
             self.metal = metal
             self.cpu = nil
@@ -24,7 +43,7 @@ public final class TrajectoryBackend: QuantumBackend, @unchecked Sendable {
             self.metal = nested.metal
             self.cpu = nested.cpu
         } else {
-            preconditionFailure("TrajectoryBackend requires a statevector backend")
+            throw TrajectoryBackendError.unsupportedUnderlyingBackend
         }
     }
 
@@ -40,38 +59,21 @@ public final class TrajectoryBackend: QuantumBackend, @unchecked Sendable {
 
     public func run(circuit: QuantumCircuit, options: QuantumRunOptions = QuantumRunOptions()) throws -> QuantumResult {
         try validateTrajectoryNoise(options.noise)
+        guard let shots = options.shots, shots > 0 else {
+            throw TrajectoryBackendError.shotsRequired
+        }
         let started = DispatchTime.now()
         try circuit.requireFullyBound()
 
         if let metal {
-            if let shots = options.shots {
-                var rng = makeRNG(seed: options.seed)
-                let counts = try QuantumMeasurement.runSampleCountsRNG(
-                    circuit: circuit,
-                    engine: metal.engine,
-                    shots: shots,
-                    rng: &rng,
-                    noise: options.noise,
-                    options: options.sampleOptions
-                )
-                return QuantumResult(
-                    metadata: makeMetadata(
-                        circuit: circuit,
-                        options: options,
-                        started: started,
-                        method: .trajectory
-                    ),
-                    shotCounts: counts
-                )
-            }
-
-            let state = try StateVector(qubitCount: circuit.qubitCount)
             var rng = makeRNG(seed: options.seed)
-            let execution = try metal.engine.executeRNG(
-                circuit,
-                on: state,
+            let counts = try QuantumMeasurement.runSampleCountsRNG(
+                circuit: circuit,
+                engine: metal.engine,
+                shots: shots,
                 rng: &rng,
-                noise: options.noise
+                noise: options.noise,
+                options: options.sampleOptions
             )
             return QuantumResult(
                 metadata: makeMetadata(
@@ -80,15 +82,14 @@ public final class TrajectoryBackend: QuantumBackend, @unchecked Sendable {
                     started: started,
                     method: .trajectory
                 ),
-                execution: execution
+                shotCounts: counts
             )
         }
 
         guard let cpu else {
-            preconditionFailure("TrajectoryBackend missing underlying engine")
+            throw TrajectoryBackendError.unsupportedUnderlyingBackend
         }
 
-        // Reuse CPU SV shot / execute paths, then retag metadata as trajectory.
         let underlying = try cpu.run(circuit: circuit, options: options)
         return QuantumResult(
             metadata: QuantumResultMetadata(
@@ -105,7 +106,7 @@ public final class TrajectoryBackend: QuantumBackend, @unchecked Sendable {
                     options: options
                 )
             ),
-            execution: underlying.execution,
+            execution: nil,
             shotCounts: underlying.shotCounts
         )
     }
@@ -149,6 +150,72 @@ public final class TrajectoryBackend: QuantumBackend, @unchecked Sendable {
 
         let scale = Double(trajectories)
         return sums.map { QFloat($0 / scale) }
+    }
+
+    /// Async shot ensemble with cooperative cancellation between shots / gates.
+    public func runAsync(
+        circuit: QuantumCircuit,
+        options: QuantumRunOptions = QuantumRunOptions()
+    ) async throws -> QuantumResult {
+        try CircuitCancellation.mapCancellation {
+            try self.runCancellable(circuit: circuit, options: options)
+        }
+    }
+
+    func runCancellable(
+        circuit: QuantumCircuit,
+        options: QuantumRunOptions
+    ) throws -> QuantumResult {
+        try validateTrajectoryNoise(options.noise)
+        guard let shots = options.shots, shots > 0 else {
+            throw TrajectoryBackendError.shotsRequired
+        }
+        let started = DispatchTime.now()
+        try circuit.requireFullyBound()
+
+        if let metal {
+            var rng = makeRNG(seed: options.seed)
+            let counts = try QuantumMeasurement.runSampleCountsRNG(
+                circuit: circuit,
+                engine: metal.engine,
+                shots: shots,
+                rng: &rng,
+                noise: options.noise,
+                options: options.sampleOptions,
+                cancellationCheck: { try CircuitCancellation.check() }
+            )
+            return QuantumResult(
+                metadata: makeMetadata(
+                    circuit: circuit,
+                    options: options,
+                    started: started,
+                    method: .trajectory
+                ),
+                shotCounts: counts
+            )
+        }
+
+        guard let cpu else {
+            throw TrajectoryBackendError.unsupportedUnderlyingBackend
+        }
+        let underlying = try cpu.runCancellable(circuit: circuit, options: options)
+        return QuantumResult(
+            metadata: QuantumResultMetadata(
+                method: .trajectory,
+                seed: options.seed,
+                deviceName: "CPU",
+                wallClockNanoseconds: DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds,
+                qubitCount: circuit.qubitCount,
+                gateCount: circuit.gates.count,
+                noiseSnapshot: options.noise,
+                pipelineHash: PipelineFingerprint.hash(
+                    circuit: circuit,
+                    method: .trajectory,
+                    options: options
+                )
+            ),
+            shotCounts: underlying.shotCounts
+        )
     }
 
     private func validateTrajectoryNoise(_ noise: NoiseModel?) throws {

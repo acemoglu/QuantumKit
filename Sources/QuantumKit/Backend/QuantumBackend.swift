@@ -110,12 +110,26 @@ public protocol QuantumBackend: Sendable {
 
 /// Factory helpers for the supported simulation backends.
 public enum QuantumBackendFactory {
-    public static func makeStatevector(renormalizationInterval: Int = 50) throws -> StatevectorBackend {
-        try StatevectorBackend(renormalizationInterval: renormalizationInterval)
+    /// Metal when a GPU is available, otherwise CPU (``SimulationDevicePreference/automatic``).
+    ///
+    /// For explicit device selection or a memory budget, use
+    /// ``makeStatevector(renormalizationInterval:devicePreference:qubitCount:policy:)``.
+    public static func makeStatevector(renormalizationInterval: Int = 50) throws -> any QuantumBackend {
+        try makeStatevector(
+            renormalizationInterval: renormalizationInterval,
+            devicePreference: .automatic
+        )
     }
 
-    public static func makeDensityMatrix(renormalizationInterval: Int = 50) throws -> DensityMatrixBackend {
-        try DensityMatrixBackend(renormalizationInterval: renormalizationInterval)
+    /// Metal when a GPU is available, otherwise CPU (``SimulationDevicePreference/automatic``).
+    ///
+    /// For explicit device selection or a memory budget, use
+    /// ``makeDensityMatrix(renormalizationInterval:devicePreference:qubitCount:policy:)``.
+    public static func makeDensityMatrix(renormalizationInterval: Int = 50) throws -> any QuantumBackend {
+        try makeDensityMatrix(
+            renormalizationInterval: renormalizationInterval,
+            devicePreference: .automatic
+        )
     }
 }
 

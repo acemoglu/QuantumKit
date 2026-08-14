@@ -7,6 +7,9 @@ extension QuantumEngine {
             throw QuantumEngineError.functionNotFound("unitary1 matrix must contain 4 elements")
         }
 
+        // Host reads shared Metal buffers; drain any in-flight GPU writes first.
+        try drainPipeline()
+
         let realPointer = state.realBuffer.contents().assumingMemoryBound(to: QFloat.self)
         let imagPointer = state.imagBuffer.contents().assumingMemoryBound(to: QFloat.self)
         let bit = 1 << target
@@ -79,6 +82,9 @@ extension QuantumEngine {
                 "customUnitary matrix must contain \(dimension * dimension) elements for \(qubits.count) qubits"
             )
         }
+
+        // Host reads shared Metal buffers; drain any in-flight GPU writes first.
+        try drainPipeline()
 
         let realPointer = state.realBuffer.contents().assumingMemoryBound(to: QFloat.self)
         let imagPointer = state.imagBuffer.contents().assumingMemoryBound(to: QFloat.self)

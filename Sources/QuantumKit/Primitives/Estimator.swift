@@ -4,6 +4,8 @@ public enum EstimatorError: Error, Equatable {
     case unsupportedBackend
     case invalidShotCount(Int)
     case invalidPrecision(QFloat)
+    /// Trajectory expectations are ensemble estimates; set ``EstimatorOptions/shots`` or ``QuantumRunOptions/shots``.
+    case shotsRequiredForTrajectory
 }
 
 /// Options for ``Estimator`` beyond the shared ``QuantumRunOptions``.
@@ -64,10 +66,11 @@ public struct EstimatorResult: Sendable, Equatable {
 
 /// High-level primitive for evaluating ⟨ψ|H|ψ⟩ (or Tr(ρH)) after circuit evolution.
 ///
-/// Exact path: GPU Pauli kernels on ``StatevectorBackend`` and Tr(ρH) on
-/// ``DensityMatrixBackend``.
+/// Exact path: GPU Pauli kernels on ``StatevectorBackend`` / ``DensityMatrixBackend``, and
+/// host Double paths on ``CPUStatevectorBackend`` / ``CPUDensityMatrixBackend``.
 /// Shot path (``EstimatorOptions/shots`` / ``precision``): Pauli-basis sampling on
-/// statevector, density-matrix (prepared-ρ batching), and trajectory backends.
+/// statevector, density-matrix (prepared-ρ batching), CPU, and trajectory backends.
+/// Trajectory requires shots (no exact mixed-state path).
 public struct Estimator: Sendable {
     public init() {}
 
@@ -114,10 +117,26 @@ public struct Estimator: Sendable {
                 engine: densityBackend.engine,
                 options: options
             )
-        } else if let trajectory = backend as? TrajectoryBackend {
-            // Exact path for a single trajectory is not a mixed-state expectation; require shots.
-            _ = trajectory
-            throw EstimatorError.unsupportedBackend
+        } else if let cpuSV = backend as? CPUStatevectorBackend {
+            method = .statevector
+            deviceName = "CPU"
+            value = try estimateExactCPU(
+                circuit: circuit,
+                hamiltonian: hamiltonian,
+                engine: cpuSV.engine,
+                options: options
+            )
+        } else if let cpuDM = backend as? CPUDensityMatrixBackend {
+            method = .densityMatrix
+            deviceName = "CPU"
+            value = try estimateExactCPU(
+                circuit: circuit,
+                hamiltonian: hamiltonian,
+                engine: cpuDM.engine,
+                options: options
+            )
+        } else if backend is TrajectoryBackend {
+            throw EstimatorError.shotsRequiredForTrajectory
         } else {
             throw EstimatorError.unsupportedBackend
         }
@@ -158,6 +177,30 @@ public struct Estimator: Sendable {
         var rng = makePrimitiveRNG(seed: options.seed)
         _ = try engine.executeRNG(circuit, on: density, rng: &rng, noise: options.noise)
         return try hamiltonian.expectation(density: density, engine: engine)
+    }
+
+    private func estimateExactCPU(
+        circuit: QuantumCircuit,
+        hamiltonian: Hamiltonian,
+        engine: CPUStatevectorEngine,
+        options: QuantumRunOptions
+    ) throws -> QFloat {
+        let state = try CPUStateVector(qubitCount: circuit.qubitCount)
+        var rng = makePrimitiveRNG(seed: options.seed)
+        _ = try engine.executeRNG(circuit, on: state, rng: &rng, noise: options.noise)
+        return try hamiltonian.expectation(state: state)
+    }
+
+    private func estimateExactCPU(
+        circuit: QuantumCircuit,
+        hamiltonian: Hamiltonian,
+        engine: CPUDensityMatrixEngine,
+        options: QuantumRunOptions
+    ) throws -> QFloat {
+        let density = try CPUDensityMatrix(qubitCount: circuit.qubitCount)
+        var rng = makePrimitiveRNG(seed: options.seed)
+        _ = try engine.executeRNG(circuit, on: density, rng: &rng, noise: options.noise)
+        return try hamiltonian.expectation(density: density)
     }
 
     private func estimateShots(
@@ -227,18 +270,35 @@ public struct Estimator: Sendable {
             }
         } else if let trajectory = backend as? TrajectoryBackend {
             method = .trajectory
-            deviceName = MetalRuntime.isAvailable ? MetalRuntime.deviceName : "CPU"
+            deviceName = trajectory.deviceName
             // Trajectory shot estimates reuse the wrapped backend via run + Z parity on counts.
-            for term in hamiltonian.terms {
+            for (termIndex, term) in hamiltonian.terms.enumerated() {
                 let (mean, secondMoment) = try PauliShotEstimator.estimateTermTrajectory(
                     circuit: circuit,
                     term: term,
                     backend: trajectory,
                     shots: shots,
                     seedBase: options.seed,
+                    termIndex: termIndex,
                     rng: &rng,
                     noise: options.noise,
                     sampleOptions: options.sampleOptions
+                )
+                total += term.coefficient * mean
+                let termVar = max(0, secondMoment - mean * mean)
+                varianceAccumulator += term.coefficient * term.coefficient * termVar
+            }
+        } else if let cpuSV = backend as? CPUStatevectorBackend {
+            method = .statevector
+            deviceName = "CPU"
+            for term in hamiltonian.terms {
+                let (mean, secondMoment) = try PauliShotEstimator.estimateTermCPU(
+                    circuit: circuit,
+                    term: term,
+                    engine: cpuSV.engine,
+                    shots: shots,
+                    rng: &rng,
+                    noise: options.noise
                 )
                 total += term.coefficient * mean
                 let termVar = max(0, secondMoment - mean * mean)
@@ -351,6 +411,7 @@ enum PauliShotEstimator {
         backend: TrajectoryBackend,
         shots: Int,
         seedBase: UInt64?,
+        termIndex: Int = 0,
         rng: inout QuantumRNG,
         noise: NoiseModel?,
         sampleOptions: SampleCountOptions
@@ -361,7 +422,8 @@ enum PauliShotEstimator {
         }
 
         let measureCircuit = try basisChangedCircuit(circuit: circuit, term: term, support: support)
-        let seed = seedBase ?? UInt64(rng.nextUnitDouble() * Double(UInt64.max))
+        // Advance per Hamiltonian term so multi-term estimates stay independent.
+        let seed = (seedBase ?? UInt64(rng.nextUnitDouble() * Double(UInt64.max))) &+ UInt64(termIndex)
         let result = try backend.run(
             circuit: measureCircuit,
             options: QuantumRunOptions(
@@ -373,6 +435,39 @@ enum PauliShotEstimator {
         )
         let counts = result.shotCounts ?? ShotCounts(shots: shots, counts: [:])
         return moments(from: counts, qubits: support, shots: shots)
+    }
+
+    static func estimateTermCPU(
+        circuit: QuantumCircuit,
+        term: PauliTerm,
+        engine: CPUStatevectorEngine,
+        shots: Int,
+        rng: inout QuantumRNG,
+        noise: NoiseModel?
+    ) throws -> (mean: QFloat, secondMoment: QFloat) {
+        let support = term.paulis.keys.filter { term.paulis[$0] != .i }.sorted()
+        if support.isEmpty {
+            return (1, 1)
+        }
+
+        let measureCircuit = try basisChangedCircuit(circuit: circuit, term: term, support: support)
+        var histogram: [Int: Int] = [:]
+        for _ in 0..<shots {
+            let state = try CPUStateVector(qubitCount: measureCircuit.qubitCount)
+            _ = try engine.executeRNG(measureCircuit, on: state, rng: &rng, noise: noise)
+            let outcome = try engine.measureCollapse(
+                on: state,
+                qubits: Array(0..<measureCircuit.qubitCount),
+                rng: &rng,
+                noise: noise
+            )
+            histogram[outcome, default: 0] += 1
+        }
+        return moments(
+            from: ShotCounts(shots: shots, counts: histogram),
+            qubits: support,
+            shots: shots
+        )
     }
 
     private static func basisChangedCircuit(

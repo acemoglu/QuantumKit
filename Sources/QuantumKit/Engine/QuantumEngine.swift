@@ -496,6 +496,9 @@ public final class QuantumEngine: @unchecked Sendable {
         }
     }
 
+    /// After ``CircuitExecutionCancellationError``, `state` is undefined and must not be reused;
+    /// allocate a fresh ``StateVector`` for any later run. The Metal command queue is drained
+    /// before this returns (success, cancel, or other error).
     @discardableResult
     public func executeRNG(
         _ circuit: QuantumCircuit,
@@ -527,14 +530,22 @@ public final class QuantumEngine: @unchecked Sendable {
         let noiseEnabled = noise?.hasGateNoise == true
         var measurementOutcomes = runState.measurementOutcomes
         var pendingUnitaryGates: [Gate] = []
-        var unitaryGateCounter = runState.appliedGateCount
+        // Top-level instruction tally shared with CPU engines for resume / CircuitCheckpoint.
+        var appliedGateCount = runState.appliedGateCount
+        // Unitary-piece counter drives GPU renorm cadence (expanded gates may be many pieces).
+        var renormCounter = runState.unitaryRenormCount ?? runState.appliedGateCount
         var classicalMemory = runState.classicalMemory
             ?? ClassicalMemory(
             registerWidths: circuit.classicalRegisters.map(\.bitCount)
         )
 
         func flushPendingUnitaryGates() throws {
-            try flushUnitaryGates(pendingUnitaryGates, on: state, gateCounter: &unitaryGateCounter)
+            try flushUnitaryGates(
+                pendingUnitaryGates,
+                on: state,
+                gateCounter: &renormCounter,
+                renormalize: true
+            )
             pendingUnitaryGates.removeAll(keepingCapacity: true)
         }
 
@@ -566,7 +577,7 @@ public final class QuantumEngine: @unchecked Sendable {
             }
         }
 
-        func executeRuntimeGate(_ gate: Gate) throws {
+        func executeRuntimeGate(_ gate: Gate, countsTowardApplied: Bool = true) throws {
             switch gate {
             case .measure(let spec):
                 try flushPendingUnitaryGates()
@@ -599,7 +610,12 @@ public final class QuantumEngine: @unchecked Sendable {
                 try executeResetQubit(on: state, qubit: qubit, rng: &rng)
                 if let noise, noise.resetErrorProbability > 0,
                    rng.nextUnitFloat() < noise.resetErrorProbability {
-                    try executeUnitaryGate(.x(target: qubit), on: state, gateCounter: &unitaryGateCounter)
+                    try executeUnitaryGate(
+                        .x(target: qubit),
+                        on: state,
+                        gateCounter: &renormCounter,
+                        renormalize: true
+                    )
                 }
 
             case .barrier:
@@ -634,35 +650,62 @@ public final class QuantumEngine: @unchecked Sendable {
             case .c_if(let classicalRegister, let expectedValue, let conditionedGate):
                 try flushPendingUnitaryGates()
                 if classicalMemory.value(ofRegister: classicalRegister) == expectedValue {
-                    try executeRuntimeGate(conditionedGate)
+                    // Nested body is not a top-level circuit instruction.
+                    try executeRuntimeGate(conditionedGate, countsTowardApplied: false)
                 }
 
             case .unitary1:
                 try flushPendingUnitaryGates()
-                try executeUnitaryGate(gate, on: state, gateCounter: &unitaryGateCounter)
+                try executeUnitaryGate(
+                    gate,
+                    on: state,
+                    gateCounter: &renormCounter,
+                    renormalize: true
+                )
+                try applyNoise(after: gate)
 
             case .initialize(let qubits, let amplitudes):
                 try flushPendingUnitaryGates()
+                // initialize writes shared Metal buffers on the host.
+                try drainPipeline()
                 try state.initialize(qubits: qubits, amplitudes: amplitudes)
                 if let noise, noise.preparationErrorProbability > 0 {
                     for qubit in qubits where rng.nextUnitFloat() < noise.preparationErrorProbability {
-                        try executeUnitaryGate(.x(target: qubit), on: state, gateCounter: &unitaryGateCounter)
+                        try executeUnitaryGate(
+                            .x(target: qubit),
+                            on: state,
+                            gateCounter: &renormCounter,
+                            renormalize: true
+                        )
                     }
                 }
 
             case .customUnitary(let matrix, let qubits) where qubits.count > 1:
                 try flushPendingUnitaryGates()
                 try applyHostCustomUnitary(matrix, qubits: qubits, on: state)
-                unitaryGateCounter += 1
+                renormCounter += 1
+                if shouldRenormalize(afterAppliedGateCount: renormCounter) {
+                    try normalizeState(on: state)
+                }
+                try applyNoise(after: gate)
 
             default:
-                if noiseEnabled, let noise {
+                if noiseEnabled {
                     try flushPendingUnitaryGates()
-                    try executeUnitaryGate(gate, on: state, gateCounter: &unitaryGateCounter)
+                    try executeUnitaryGate(
+                        gate,
+                        on: state,
+                        gateCounter: &renormCounter,
+                        renormalize: true
+                    )
                     try applyNoise(after: gate)
                 } else {
                     pendingUnitaryGates.append(gate)
                 }
+            }
+
+            if countsTowardApplied {
+                appliedGateCount += 1
             }
         }
 
@@ -679,7 +722,8 @@ public final class QuantumEngine: @unchecked Sendable {
         return CircuitExecutionResult(
             measurementOutcomes: measurementOutcomes,
             classicalMemory: classicalMemory,
-            appliedGateCount: unitaryGateCounter
+            appliedGateCount: appliedGateCount,
+            unitaryRenormCount: renormCounter
         )
     }
 

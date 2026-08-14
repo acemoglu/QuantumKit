@@ -21,6 +21,8 @@ public final class CPUStatevectorEngine: @unchecked Sendable {
         return try executeRNG(circuit, on: state, rng: &rng, noise: noise)
     }
 
+    /// After ``CircuitExecutionCancellationError``, `state` is undefined and must not be reused;
+    /// allocate a fresh ``CPUStateVector`` for any later run.
     public func executeRNG(
         _ circuit: QuantumCircuit,
         on state: CPUStateVector,
@@ -48,6 +50,8 @@ public final class CPUStatevectorEngine: @unchecked Sendable {
         let noiseEnabled = noise?.hasGateNoise == true
         var measurementOutcomes = runState.measurementOutcomes
         var appliedGateCount = runState.appliedGateCount
+        // Includes nested c_if bodies so renorm cadence matches a continuous run.
+        var renormTick = runState.unitaryRenormCount ?? runState.appliedGateCount
         var classicalMemory = runState.classicalMemory
             ?? ClassicalMemory(registerWidths: circuit.classicalRegisters.map(\.bitCount))
 
@@ -74,7 +78,18 @@ public final class CPUStatevectorEngine: @unchecked Sendable {
             }
         }
 
-        func executeRuntimeGate(_ gate: Gate) throws {
+        func applyCircuitUnitary(_ gate: Gate) throws {
+            let pieces = try QuantumEngine.expandForExecution(gate)
+            for piece in pieces {
+                try applyExpandedUnitary(piece, on: state)
+                renormTick += 1
+                if renormalizationInterval > 0, renormTick % renormalizationInterval == 0 {
+                    try normalize(state)
+                }
+            }
+        }
+
+        func executeRuntimeGate(_ gate: Gate, countsTowardApplied: Bool = true) throws {
             switch gate {
             case .measure(let spec):
                 if let noise, noise.measurementDephasingProbability > 0 {
@@ -103,7 +118,7 @@ public final class CPUStatevectorEngine: @unchecked Sendable {
                 try resetQubit(on: state, qubit: qubit, rng: &rng)
                 if let noise, noise.resetErrorProbability > 0,
                    rng.nextUnitFloat() < noise.resetErrorProbability {
-                    try applyUnitaryGate(.x(target: qubit), on: state)
+                    try applyCircuitUnitary(.x(target: qubit))
                 }
 
             case .barrier:
@@ -126,27 +141,26 @@ public final class CPUStatevectorEngine: @unchecked Sendable {
 
             case .c_if(let classicalRegister, let expectedValue, let conditionedGate):
                 if classicalMemory.value(ofRegister: classicalRegister) == expectedValue {
-                    try executeRuntimeGate(conditionedGate)
+                    try executeRuntimeGate(conditionedGate, countsTowardApplied: false)
                 }
 
             case .initialize(let qubits, let amplitudes):
                 try state.initialize(qubits: qubits, amplitudes: amplitudes)
                 if let noise, noise.preparationErrorProbability > 0 {
                     for qubit in qubits where rng.nextUnitFloat() < noise.preparationErrorProbability {
-                        try applyUnitaryGate(.x(target: qubit), on: state)
+                        try applyCircuitUnitary(.x(target: qubit))
                     }
                 }
 
             default:
-                try applyUnitaryGate(gate, on: state)
+                try applyCircuitUnitary(gate)
                 if noiseEnabled {
                     try applyNoise(after: gate)
                 }
             }
 
-            appliedGateCount += 1
-            if renormalizationInterval > 0, appliedGateCount % renormalizationInterval == 0 {
-                try normalize(state)
+            if countsTowardApplied {
+                appliedGateCount += 1
             }
         }
 
@@ -159,7 +173,8 @@ public final class CPUStatevectorEngine: @unchecked Sendable {
         return CircuitExecutionResult(
             measurementOutcomes: measurementOutcomes,
             classicalMemory: classicalMemory,
-            appliedGateCount: appliedGateCount
+            appliedGateCount: appliedGateCount,
+            unitaryRenormCount: renormTick
         )
     }
 
@@ -173,34 +188,276 @@ public final class CPUStatevectorEngine: @unchecked Sendable {
     }
 
     private func applyExpandedUnitary(_ gate: Gate, on state: CPUStateVector) throws {
-        if case .customUnitary(let matrix, let qubits) = gate, qubits.count > 1 {
-            try applyCustomUnitary(matrix: matrix, qubits: qubits, on: state)
-            return
-        }
-        if case .id = gate { return }
-        if case .barrier = gate { return }
-        if case .delay = gate { return }
+        switch gate {
+        case .customUnitary(let matrix, let qubits):
+            if qubits.count == 1, let target = qubits.first {
+                try apply1QMatrix(matrix, target: target, on: state)
+            } else {
+                try applyCustomUnitary(matrix: matrix, qubits: qubits, on: state)
+            }
 
-        let unitary = try CircuitUnitary.matrix(for: gate, qubitCount: state.qubitCount)
-        applyFullUnitary(unitary, on: state)
+        case .unitary1(let matrix, let target):
+            try apply1QMatrix(matrix, target: target, on: state)
+
+        case .id, .barrier, .delay:
+            return
+
+        case .h(let target):
+            let v = 1.0 / sqrt(2.0)
+            apply1Q(u00: (v, 0), u01: (v, 0), u10: (v, 0), u11: (-v, 0), target: target, on: state)
+
+        case .x(let target):
+            applyPauliX(target: target, on: state)
+
+        case .y(let target):
+            apply1Q(u00: (0, 0), u01: (0, -1), u10: (0, 1), u11: (0, 0), target: target, on: state)
+
+        case .z(let target):
+            applyPhaseOnBit(target: target, re: -1, im: 0, on: state)
+
+        case .s(let target):
+            applyPhaseOnBit(target: target, re: 0, im: 1, on: state)
+
+        case .sdg(let target):
+            applyPhaseOnBit(target: target, re: 0, im: -1, on: state)
+
+        case .t(let target):
+            let v = 1.0 / sqrt(2.0)
+            applyPhaseOnBit(target: target, re: v, im: v, on: state)
+
+        case .tdg(let target):
+            let v = 1.0 / sqrt(2.0)
+            applyPhaseOnBit(target: target, re: v, im: -v, on: state)
+
+        case .sx(let target):
+            apply1Q(
+                u00: (0.5, 0.5), u01: (0.5, -0.5),
+                u10: (0.5, -0.5), u11: (0.5, 0.5),
+                target: target, on: state
+            )
+
+        case .sxdg(let target):
+            apply1Q(
+                u00: (0.5, -0.5), u01: (0.5, 0.5),
+                u10: (0.5, 0.5), u11: (0.5, -0.5),
+                target: target, on: state
+            )
+
+        case .p(let theta, let target):
+            let angle = Double(try theta.requireLiteral())
+            applyPhaseOnBit(target: target, re: cos(angle), im: sin(angle), on: state)
+
+        case .rx(let theta, let target):
+            try applyRotation(.x, theta: theta, target: target, on: state)
+
+        case .ry(let theta, let target):
+            try applyRotation(.y, theta: theta, target: target, on: state)
+
+        case .rz(let theta, let target):
+            try applyRotation(.z, theta: theta, target: target, on: state)
+
+        case .u(let theta, let phi, let lambda, let target):
+            let thetaV = Double(try theta.requireLiteral())
+            let phiV = Double(try phi.requireLiteral())
+            let lambdaV = Double(try lambda.requireLiteral())
+            let half = thetaV / 2.0
+            let c = cos(half)
+            let s = sin(half)
+            apply1Q(
+                u00: (c, 0),
+                u01: (-s * cos(lambdaV), -s * sin(lambdaV)),
+                u10: (s * cos(phiV), s * sin(phiV)),
+                u11: (c * cos(phiV + lambdaV), c * sin(phiV + lambdaV)),
+                target: target,
+                on: state
+            )
+
+        case .cx(let control, let target):
+            applyControlledX(controlMask: 1 << control, target: target, on: state)
+
+        case .cz(let control, let target):
+            applyPhaseOnMask(mask: (1 << control) | (1 << target), re: -1, im: 0, on: state)
+
+        case .swap(let q1, let q2):
+            applySwap(q1: q1, q2: q2, on: state)
+
+        case .ccx(let control1, let control2, let target):
+            applyControlledX(controlMask: (1 << control1) | (1 << control2), target: target, on: state)
+
+        case .mcx(let controls, let target):
+            let mask = controls.reduce(0) { $0 | (1 << $1) }
+            applyControlledX(controlMask: mask, target: target, on: state)
+
+        case .mcz(let controls, let target):
+            let mask = controls.reduce(0) { $0 | (1 << $1) } | (1 << target)
+            applyPhaseOnMask(mask: mask, re: -1, im: 0, on: state)
+
+        case .crx(let theta, let control, let target):
+            try applyControlledRotation(.x, theta: theta, controlMask: 1 << control, target: target, on: state)
+
+        case .cry(let theta, let control, let target):
+            try applyControlledRotation(.y, theta: theta, controlMask: 1 << control, target: target, on: state)
+
+        case .crz(let theta, let control, let target):
+            try applyControlledRotation(.z, theta: theta, controlMask: 1 << control, target: target, on: state)
+
+        case .cp(let theta, let control, let target):
+            let angle = Double(try theta.requireLiteral())
+            applyPhaseOnMask(
+                mask: (1 << control) | (1 << target),
+                re: cos(angle),
+                im: sin(angle),
+                on: state
+            )
+
+        default:
+            throw CPUEngineError.unsupportedOnCPU(
+                reason: "CPU statevector apply has no subspace kernel for \(gate)"
+            )
+        }
     }
 
-    private func applyFullUnitary(_ unitary: UnitaryMatrix, on state: CPUStateVector) {
-        let dim = state.stateCount
-        var outReal = Array(repeating: 0.0, count: dim)
-        var outImag = Array(repeating: 0.0, count: dim)
-        for row in 0..<dim {
-            var sumRe = 0.0
-            var sumIm = 0.0
-            for column in 0..<dim {
-                let u = unitary[row, column]
-                let inRe = state.real[column]
-                let inIm = state.imag[column]
-                sumRe += u.re * inRe - u.im * inIm
-                sumIm += u.re * inIm + u.im * inRe
-            }
-            outReal[row] = sumRe
-            outImag[row] = sumIm
+    private enum CPURotationAxis {
+        case x, y, z
+    }
+
+    private func applyRotation(
+        _ axis: CPURotationAxis,
+        theta: QFloatExpr,
+        target: Int,
+        on state: CPUStateVector
+    ) throws {
+        try applyControlledRotation(axis, theta: theta, controlMask: 0, target: target, on: state)
+    }
+
+    private func applyControlledRotation(
+        _ axis: CPURotationAxis,
+        theta: QFloatExpr,
+        controlMask: Int,
+        target: Int,
+        on state: CPUStateVector
+    ) throws {
+        let half = Double(try theta.requireLiteral()) / 2.0
+        let c = cos(half)
+        let s = sin(half)
+        switch axis {
+        case .x:
+            apply1Q(
+                u00: (c, 0), u01: (0, -s),
+                u10: (0, -s), u11: (c, 0),
+                target: target, on: state, controlMask: controlMask
+            )
+        case .y:
+            apply1Q(
+                u00: (c, 0), u01: (-s, 0),
+                u10: (s, 0), u11: (c, 0),
+                target: target, on: state, controlMask: controlMask
+            )
+        case .z:
+            apply1Q(
+                u00: (cos(half), -sin(half)), u01: (0, 0),
+                u10: (0, 0), u11: (cos(half), sin(half)),
+                target: target, on: state, controlMask: controlMask
+            )
+        }
+    }
+
+    private func apply1QMatrix(_ matrix: [ComplexAmplitude], target: Int, on state: CPUStateVector) throws {
+        guard matrix.count == 4 else {
+            throw CPUEngineError.unsupportedOnCPU(reason: "1-qubit matrix must contain 4 elements")
+        }
+        apply1Q(
+            u00: (Double(matrix[0].real), Double(matrix[0].imaginary)),
+            u01: (Double(matrix[1].real), Double(matrix[1].imaginary)),
+            u10: (Double(matrix[2].real), Double(matrix[2].imaginary)),
+            u11: (Double(matrix[3].real), Double(matrix[3].imaginary)),
+            target: target,
+            on: state
+        )
+    }
+
+    private func apply1Q(
+        u00: (Double, Double),
+        u01: (Double, Double),
+        u10: (Double, Double),
+        u11: (Double, Double),
+        target: Int,
+        on state: CPUStateVector,
+        controlMask: Int = 0
+    ) {
+        let bit = 1 << target
+        var outReal = state.real
+        var outImag = state.imag
+        for index in 0..<state.stateCount {
+            let partner = index ^ bit
+            if index > partner { continue }
+            if controlMask != 0, (index & controlMask) != controlMask { continue }
+
+            let aRe = state.real[index]
+            let aIm = state.imag[index]
+            let bRe = state.real[partner]
+            let bIm = state.imag[partner]
+
+            outReal[index] = u00.0 * aRe - u00.1 * aIm + u01.0 * bRe - u01.1 * bIm
+            outImag[index] = u00.0 * aIm + u00.1 * aRe + u01.0 * bIm + u01.1 * bRe
+            outReal[partner] = u10.0 * aRe - u10.1 * aIm + u11.0 * bRe - u11.1 * bIm
+            outImag[partner] = u10.0 * aIm + u10.1 * aRe + u11.0 * bIm + u11.1 * bRe
+        }
+        state.setAmplitudes(real: outReal, imag: outImag)
+    }
+
+    private func applyPauliX(target: Int, on state: CPUStateVector) {
+        applyControlledX(controlMask: 0, target: target, on: state)
+    }
+
+    private func applyControlledX(controlMask: Int, target: Int, on state: CPUStateVector) {
+        let bit = 1 << target
+        var outReal = state.real
+        var outImag = state.imag
+        for index in 0..<state.stateCount {
+            let partner = index ^ bit
+            if index > partner { continue }
+            if controlMask != 0, (index & controlMask) != controlMask { continue }
+            outReal[index] = state.real[partner]
+            outImag[index] = state.imag[partner]
+            outReal[partner] = state.real[index]
+            outImag[partner] = state.imag[index]
+        }
+        state.setAmplitudes(real: outReal, imag: outImag)
+    }
+
+    private func applyPhaseOnBit(target: Int, re: Double, im: Double, on state: CPUStateVector) {
+        applyPhaseOnMask(mask: 1 << target, re: re, im: im, on: state)
+    }
+
+    private func applyPhaseOnMask(mask: Int, re: Double, im: Double, on state: CPUStateVector) {
+        var outReal = state.real
+        var outImag = state.imag
+        for index in 0..<state.stateCount where (index & mask) == mask {
+            let inRe = state.real[index]
+            let inIm = state.imag[index]
+            outReal[index] = re * inRe - im * inIm
+            outImag[index] = re * inIm + im * inRe
+        }
+        state.setAmplitudes(real: outReal, imag: outImag)
+    }
+
+    private func applySwap(q1: Int, q2: Int, on state: CPUStateVector) {
+        if q1 == q2 { return }
+        let bitA = 1 << q1
+        let bitB = 1 << q2
+        var outReal = state.real
+        var outImag = state.imag
+        for index in 0..<state.stateCount {
+            let a = (index & bitA) != 0
+            let b = (index & bitB) != 0
+            guard a != b else { continue }
+            let partner = index ^ bitA ^ bitB
+            if index > partner { continue }
+            outReal[index] = state.real[partner]
+            outImag[index] = state.imag[partner]
+            outReal[partner] = state.real[index]
+            outImag[partner] = state.imag[index]
         }
         state.setAmplitudes(real: outReal, imag: outImag)
     }

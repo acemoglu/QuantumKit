@@ -148,4 +148,112 @@ extension QuantumKitTests {
     func testMetalRuntimeAvailabilityMatchesDeviceProbe() {
         XCTAssertEqual(MetalRuntime.isAvailable, makeDevice() != nil)
     }
+
+    func testCPUStatevectorSixQubitParityVersusDensityMatrix() throws {
+        var circuit = try QuantumCircuit(qubitCount: 6)
+        for qubit in 0..<6 {
+            try circuit.h(qubit)
+            try circuit.rz(theta: QFloat(0.17 * Double(qubit + 1)), qubit)
+        }
+        for qubit in 0..<5 {
+            try circuit.cx(qubit, qubit + 1)
+        }
+        try circuit.rz(theta: QFloat(0.31), 2)
+        try circuit.cx(5, 0)
+        try circuit.h(3)
+        XCTAssertGreaterThanOrEqual(circuit.gates.count, 20)
+
+        let svEngine = CPUStatevectorEngine()
+        let sv = try CPUStateVector(qubitCount: 6)
+        _ = try svEngine.execute(circuit, on: sv)
+        let svProbs = sv.probabilitiesDouble()
+
+        let dmEngine = CPUDensityMatrixEngine()
+        let dm = try CPUDensityMatrix(qubitCount: 6)
+        _ = try dmEngine.execute(circuit, on: dm)
+        let dmProbs = dm.probabilitiesDouble()
+
+        XCTAssertEqual(svProbs.count, dmProbs.count)
+        for index in svProbs.indices {
+            XCTAssertEqual(svProbs[index], dmProbs[index], accuracy: 1e-10)
+        }
+
+        let creg = try ClassicalRegisterSpec(bitCount: 1)
+        var measured = try QuantumCircuit(qubitCount: 6, classicalRegisters: [creg])
+        for gate in circuit.gates {
+            try measured.apply(gate)
+        }
+        try measured.measure(qubits: [0], classicalRegister: 0)
+        let measuredState = try CPUStateVector(qubitCount: 6)
+        var rng: QuantumRNG = .seeded(7)
+        _ = try svEngine.executeRNG(measured, on: measuredState, rng: &rng)
+        let measuredNorm = measuredState.probabilitiesDouble().reduce(0, +)
+        XCTAssertEqual(measuredNorm, 1.0, accuracy: 1e-12)
+    }
+
+    func testCPUStatevectorEightQubitCompletesWithoutFullMatrix() throws {
+        var circuit = try QuantumCircuit(qubitCount: 8)
+        for qubit in 0..<8 {
+            try circuit.h(qubit)
+        }
+        for qubit in 0..<7 {
+            try circuit.cx(qubit, qubit + 1)
+            try circuit.rz(theta: QFloat(0.05), qubit)
+        }
+        let engine = CPUStatevectorEngine()
+        let state = try CPUStateVector(qubitCount: 8)
+        let started = DispatchTime.now()
+        _ = try engine.execute(circuit, on: state)
+        let elapsedNS = DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds
+        // A dense 2^8×2^8 apply-per-gate would be far slower; subspace apply should finish quickly.
+        XCTAssertLessThan(elapsedNS, 2_000_000_000)
+        let total = state.probabilitiesDouble().reduce(0, +)
+        XCTAssertEqual(total, 1.0, accuracy: 1e-12)
+    }
+
+    func testCPUDensityMatrixCRXMatchesStatevector() throws {
+        // CRX(π) with control |0⟩ must leave the target; CircuitUnitary's RZ sandwich did not.
+        var idle = try QuantumCircuit(qubitCount: 2)
+        try idle.crx(theta: QFloat(Double.pi), control: 0, target: 1)
+        let idleDM = try CPUDensityMatrix(qubitCount: 2)
+        _ = try CPUDensityMatrixEngine().execute(idle, on: idleDM)
+        XCTAssertEqual(idleDM.probabilitiesDouble()[0], 1.0, accuracy: 1e-10)
+
+        var circuit = try QuantumCircuit(qubitCount: 2)
+        try circuit.x(0)
+        try circuit.crx(theta: QFloat(Double.pi), control: 0, target: 1)
+
+        let sv = try CPUStateVector(qubitCount: 2)
+        _ = try CPUStatevectorEngine().execute(circuit, on: sv)
+        let dm = try CPUDensityMatrix(qubitCount: 2)
+        _ = try CPUDensityMatrixEngine().execute(circuit, on: dm)
+
+        let svProbs = sv.probabilitiesDouble()
+        let dmProbs = dm.probabilitiesDouble()
+        for index in 0..<4 {
+            XCTAssertEqual(svProbs[index], dmProbs[index], accuracy: 1e-10)
+        }
+        XCTAssertEqual(dmProbs[3], 1.0, accuracy: 1e-10)
+    }
+
+    func testCPUDensityMatrixCPPiMatchesCZ() throws {
+        var circuit = try QuantumCircuit(qubitCount: 2)
+        try circuit.x(0)
+        try circuit.h(1)
+        try circuit.cp(theta: QFloat(Double.pi), control: 0, target: 1)
+        try circuit.h(1)
+
+        let sv = try CPUStateVector(qubitCount: 2)
+        _ = try CPUStatevectorEngine().execute(circuit, on: sv)
+        let dm = try CPUDensityMatrix(qubitCount: 2)
+        _ = try CPUDensityMatrixEngine().execute(circuit, on: dm)
+
+        let svProbs = sv.probabilitiesDouble()
+        let dmProbs = dm.probabilitiesDouble()
+        for index in 0..<4 {
+            XCTAssertEqual(svProbs[index], dmProbs[index], accuracy: 1e-10)
+        }
+        // x(0)·H(1)·CP(π)·H(1) ≡ CZ on |1⟩|+⟩ → |11⟩
+        XCTAssertEqual(dmProbs[3], 1.0, accuracy: 1e-10)
+    }
 }

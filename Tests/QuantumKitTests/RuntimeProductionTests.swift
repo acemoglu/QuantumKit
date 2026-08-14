@@ -112,6 +112,56 @@ extension QuantumKitTests {
         }
     }
 
+    func testCPUResumeRenormCadenceMatchesFullRun() throws {
+        let creg = try ClassicalRegisterSpec(bitCount: 1)
+        var circuit = try QuantumCircuit(qubitCount: 2, classicalRegisters: [creg])
+        try circuit.h(0)
+        try circuit.measure(qubits: [0], classicalRegister: 0)
+        try circuit.cx(0, 1)
+        try circuit.c_if(classicalRegister: 0, equals: 1, x: 1)
+        try circuit.rz(theta: QFloat(0.4), 1)
+
+        let engine = CPUStatevectorEngine(renormalizationInterval: 2)
+        let seed: UInt64 = 4242
+
+        let fullState = try CPUStateVector(qubitCount: 2)
+        var fullRNG: QuantumRNG = .seeded(seed)
+        let full = try engine.executeRNG(circuit, on: fullState, rng: &fullRNG)
+
+        let splitAt = 2
+        let partialState = try CPUStateVector(qubitCount: 2)
+        var partialRNG: QuantumRNG = .seeded(seed)
+        let first = try engine.executeRNG(
+            circuit,
+            on: partialState,
+            rng: &partialRNG,
+            runState: CircuitRunState(toInstruction: splitAt)
+        )
+        XCTAssertEqual(first.appliedGateCount, splitAt)
+        XCTAssertEqual(first.unitaryRenormCount, 1)
+
+        let checkpoint = CircuitCheckpoint.make(nextInstructionIndex: splitAt, from: first)
+        let snap = partialState.snapshot()
+        partialState.resetToZero()
+        try partialState.restore(from: snap)
+        let second = try engine.executeRNG(
+            circuit,
+            on: partialState,
+            rng: &partialRNG,
+            runState: .resume(from: checkpoint)
+        )
+
+        XCTAssertEqual(second.appliedGateCount, full.appliedGateCount)
+        XCTAssertEqual(second.unitaryRenormCount, full.unitaryRenormCount)
+        XCTAssertEqual(full.appliedGateCount, circuit.gates.count)
+        XCTAssertLessThan(full.unitaryRenormCount ?? 0, full.appliedGateCount)
+        let fullProbs = fullState.probabilitiesDouble()
+        let splitProbs = partialState.probabilitiesDouble()
+        for index in 0..<4 {
+            XCTAssertEqual(fullProbs[index], splitProbs[index], accuracy: 1e-12)
+        }
+    }
+
     func testMetalResumeMatchesFullRunWhenAvailable() throws {
         guard MetalRuntime.isAvailable else {
             throw XCTSkip("Metal device unavailable")
@@ -199,6 +249,15 @@ extension QuantumKitTests {
         } catch is CancellationError {
             XCTFail("CancellationError should be mapped to CircuitExecutionCancellationError")
         }
+
+        var freshCircuit = try QuantumCircuit(qubitCount: 3)
+        try freshCircuit.h(0)
+        try freshCircuit.cx(0, 1)
+        try freshCircuit.cx(1, 2)
+        let fresh = try CPUStateVector(qubitCount: 3)
+        var rng: QuantumRNG = .seeded(2)
+        _ = try CPUStatevectorEngine().executeRNG(freshCircuit, on: fresh, rng: &rng)
+        XCTAssertEqual(fresh.probabilitiesDouble().reduce(0, +), 1.0, accuracy: 1e-12)
     }
 
     func testConcurrentCPUEnginesOnDistinctStates() throws {
@@ -307,6 +366,148 @@ extension QuantumKitTests {
         let after = try QuantumMeasurement.probabilities(state: state, engine: engine)
         for index in 0..<4 {
             XCTAssertEqual(before[index], after[index], accuracy: 1e-6)
+        }
+    }
+
+    func testAppliedGateCountCountsInstructionsCPU() throws {
+        let creg = try ClassicalRegisterSpec(bitCount: 1)
+        var circuit = try QuantumCircuit(qubitCount: 1, classicalRegisters: [creg])
+        try circuit.h(0)
+        try circuit.measure(qubits: [0], classicalRegister: 0)
+        try circuit.barrier([0])
+        try circuit.id(0)
+
+        let engine = CPUStatevectorEngine()
+        let state = try CPUStateVector(qubitCount: 1)
+        var rng: QuantumRNG = .seeded(1)
+        let result = try engine.executeRNG(circuit, on: state, rng: &rng)
+        XCTAssertEqual(result.appliedGateCount, circuit.gates.count)
+    }
+
+    func testAppliedGateCountDoesNotDoubleCountCIFBody() throws {
+        let creg = try ClassicalRegisterSpec(bitCount: 1)
+        var circuit = try QuantumCircuit(qubitCount: 1, classicalRegisters: [creg])
+        try circuit.x(0)
+        try circuit.measure(qubits: [0], classicalRegister: 0)
+        try circuit.c_if(classicalRegister: 0, equals: 1, x: 0)
+
+        let engine = CPUStatevectorEngine()
+        let state = try CPUStateVector(qubitCount: 1)
+        var rng: QuantumRNG = .seeded(1)
+        let result = try engine.executeRNG(circuit, on: state, rng: &rng)
+        XCTAssertEqual(result.appliedGateCount, circuit.gates.count)
+        XCTAssertEqual(result.unitaryRenormCount, 2)
+
+        let dmEngine = CPUDensityMatrixEngine()
+        let density = try CPUDensityMatrix(qubitCount: 1)
+        var dmRNG: QuantumRNG = .seeded(1)
+        let dmResult = try dmEngine.executeRNG(circuit, on: density, rng: &dmRNG)
+        XCTAssertEqual(dmResult.appliedGateCount, circuit.gates.count)
+        XCTAssertEqual(dmResult.unitaryRenormCount, 2)
+    }
+
+    func testMetalDensityMatrixRenormCountsUnitaryPiecesOnly() throws {
+        guard MetalRuntime.isAvailable else {
+            throw XCTSkip("Metal device unavailable")
+        }
+        let creg = try ClassicalRegisterSpec(bitCount: 1)
+        var circuit = try QuantumCircuit(qubitCount: 1, classicalRegisters: [creg])
+        try circuit.h(0)
+        try circuit.measure(qubits: [0], classicalRegister: 0)
+        try circuit.x(0)
+
+        let engine = try DensityMatrixEngine()
+        let density = try DensityMatrix(qubitCount: 1, device: engine.device)
+        var rng: QuantumRNG = .seeded(1)
+        let result = try engine.executeRNG(circuit, on: density, rng: &rng)
+        XCTAssertEqual(result.appliedGateCount, circuit.gates.count)
+        // H and X are unitary pieces; measure is not.
+        XCTAssertEqual(result.unitaryRenormCount, 2)
+
+        let cpu = CPUDensityMatrixEngine()
+        let cpuDensity = try CPUDensityMatrix(qubitCount: 1)
+        var cpuRNG: QuantumRNG = .seeded(1)
+        let cpuResult = try cpu.executeRNG(circuit, on: cpuDensity, rng: &cpuRNG)
+        XCTAssertEqual(result.unitaryRenormCount, cpuResult.unitaryRenormCount)
+        XCTAssertEqual(result.appliedGateCount, cpuResult.appliedGateCount)
+    }
+
+    func testMetalHostUnitaryAfterGPUGatesWhenAvailable() throws {
+        guard MetalRuntime.isAvailable else {
+            throw XCTSkip("Metal device unavailable")
+        }
+        let engine = try QuantumEngine()
+        let state = try StateVector(qubitCount: 1, device: engine.device)
+        var circuit = try QuantumCircuit(qubitCount: 1)
+        try circuit.h(0)
+        let identity = [
+            ComplexAmplitude(real: 1, imaginary: 0),
+            ComplexAmplitude(real: 0, imaginary: 0),
+            ComplexAmplitude(real: 0, imaginary: 0),
+            ComplexAmplitude(real: 1, imaginary: 0),
+        ]
+        try circuit.unitary1(matrix: identity, target: 0)
+
+        var rng: QuantumRNG = .seeded(42)
+        _ = try engine.executeRNG(circuit, on: state, rng: &rng)
+        let probs = try QuantumMeasurement.probabilities(state: state, engine: engine)
+        XCTAssertEqual(probs[0], 0.5, accuracy: 1e-5)
+        XCTAssertEqual(probs[1], 0.5, accuracy: 1e-5)
+    }
+
+    func testCPUEstimatorExactMatchesAnalyticZ() throws {
+        var circuit = try QuantumCircuit(qubitCount: 1)
+        try circuit.h(0)
+        let backend = CPUStatevectorBackend()
+        let ham = try Hamiltonian(PauliTerm(coefficient: 1, label: "Z0"))
+        let result = try Estimator().run(
+            circuit: circuit,
+            hamiltonian: ham,
+            backend: backend,
+            options: QuantumRunOptions(seed: 1)
+        )
+        XCTAssertEqual(result.value, 0, accuracy: 1e-5)
+        XCTAssertEqual(result.metadata.deviceName, "CPU")
+    }
+
+    func testCPUTrajectoryEstimatorDeviceNameIsCPU() throws {
+        let backend = try QuantumBackendFactory.makeTrajectory(
+            devicePreference: .cpu,
+            qubitCount: 1
+        )
+        XCTAssertTrue(backend is TrajectoryBackend)
+        var circuit = try QuantumCircuit(qubitCount: 1)
+        try circuit.h(0)
+        let ham = try Hamiltonian(PauliTerm(coefficient: 1, label: "Z0"))
+        let result = try Estimator().run(
+            circuit: circuit,
+            hamiltonian: ham,
+            backend: backend,
+            options: QuantumRunOptions(seed: 1),
+            estimatorOptions: EstimatorOptions(shots: 32)
+        )
+        XCTAssertEqual(result.metadata.deviceName, "CPU")
+        XCTAssertEqual(result.metadata.method, .trajectory)
+    }
+
+    func testCPUDensityMatrixAsyncShotsMatchSync() async throws {
+        var circuit = try QuantumCircuit(qubitCount: 1)
+        try circuit.h(0)
+        let backend = CPUDensityMatrixBackend()
+        let options = QuantumRunOptions(seed: 7, shots: 512)
+        let sync = try backend.run(circuit: circuit, options: options)
+        let asyncResult = try await backend.runAsync(circuit: circuit, options: options)
+        XCTAssertEqual(sync.shotCounts?.shots, 512)
+        XCTAssertEqual(asyncResult.shotCounts?.shots, 512)
+        XCTAssertEqual(sync.shotCounts?.counts, asyncResult.shotCounts?.counts)
+    }
+
+    func testFactoryParameterlessHonorsAutomaticDevice() throws {
+        let backend = try QuantumBackendFactory.makeStatevector()
+        if MetalRuntime.isAvailable {
+            XCTAssertTrue(backend is StatevectorBackend)
+        } else {
+            XCTAssertTrue(backend is CPUStatevectorBackend)
         }
     }
 }

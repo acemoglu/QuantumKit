@@ -78,6 +78,9 @@ public final class DensityMatrixEngine: @unchecked Sendable {
     /// RNG-injectable open-system execution supporting `swap`, mid-circuit `measure`, and `reset`
     /// in addition to unitary evolution and noise channels. Returns the classical outcomes of each
     /// `measure` gate in circuit order, mirroring ``QuantumEngine/executeRNG(_:on:rng:noise:)``.
+    /// After ``CircuitExecutionCancellationError``, `density` is undefined and must not be reused;
+    /// allocate a fresh ``DensityMatrix`` for any later run. The Metal command queue is drained
+    /// before this returns.
     @discardableResult
     public func executeRNG(
         _ circuit: QuantumCircuit,
@@ -120,12 +123,20 @@ public final class DensityMatrixEngine: @unchecked Sendable {
 
         var measurementOutcomes = runState.measurementOutcomes
         var appliedGateCount = runState.appliedGateCount
+        var renormTick = runState.unitaryRenormCount ?? runState.appliedGateCount
         var classicalMemory = runState.classicalMemory
             ?? ClassicalMemory(
             registerWidths: circuit.classicalRegisters.map(\.bitCount)
         )
 
-        func executeRuntimeGate(_ gate: Gate, at gateIndex: Int) throws {
+        func tickUnitaryPiece() throws {
+            renormTick += 1
+            if shouldRenormalize(afterAppliedGateCount: renormTick) {
+                try renormalizeTrace(of: density)
+            }
+        }
+
+        func executeRuntimeGate(_ gate: Gate, at gateIndex: Int, countsTowardApplied: Bool = true) throws {
             switch gate {
             case .measure(let spec):
                 let bits = try applyMeasurement(
@@ -208,14 +219,16 @@ public final class DensityMatrixEngine: @unchecked Sendable {
                         scratchImag: scratchImag
                     )
                 }
+                try tickUnitaryPiece()
 
             case .c_if(let classicalRegister, let expectedValue, let conditionedGate):
                 if classicalMemory.value(ofRegister: classicalRegister) == expectedValue {
                     // Conditioned body reuses the enclosing instruction index for C7 targeting.
-                    try executeRuntimeGate(conditionedGate, at: gateIndex)
+                    try executeRuntimeGate(conditionedGate, at: gateIndex, countsTowardApplied: false)
                 }
 
             case .initialize(let qubits, let amplitudes):
+                try drainPipeline()
                 try density.initialize(qubits: qubits, amplitudes: amplitudes)
                 if let noise {
                     try applyPointNoiseChannels(
@@ -244,9 +257,14 @@ public final class DensityMatrixEngine: @unchecked Sendable {
                         scratchImag: scratchImag
                     )
                 }
+                try tickUnitaryPiece()
 
             default:
-                try applyUnitaryGate(gate, on: density, scratchReal: scratchReal, scratchImag: scratchImag)
+                let pieces = try QuantumEngine.expandForExecution(gate)
+                for piece in pieces {
+                    try applyUnitaryGate(piece, on: density, scratchReal: scratchReal, scratchImag: scratchImag)
+                    try tickUnitaryPiece()
+                }
                 if let noise {
                     try applyNoiseChannels(
                         after: gate,
@@ -259,9 +277,8 @@ public final class DensityMatrixEngine: @unchecked Sendable {
                 }
             }
 
-            appliedGateCount += 1
-            if shouldRenormalize(afterAppliedGateCount: appliedGateCount) {
-                try renormalizeTrace(of: density)
+            if countsTowardApplied {
+                appliedGateCount += 1
             }
         }
 
@@ -277,7 +294,8 @@ public final class DensityMatrixEngine: @unchecked Sendable {
         return CircuitExecutionResult(
             measurementOutcomes: measurementOutcomes,
             classicalMemory: classicalMemory,
-            appliedGateCount: appliedGateCount
+            appliedGateCount: appliedGateCount,
+            unitaryRenormCount: renormTick
         )
     }
 
@@ -1647,6 +1665,9 @@ extension DensityMatrixEngine {
     ) throws {
         let subDimension = 1 << qubits.count
         guard matrix.count == subDimension * subDimension else { return }
+
+        // Host reads shared Metal ρ buffers; drain in-flight GPU writes first.
+        try drainPipeline()
 
         let dimension = density.stateCount
         let targetMask = qubits.reduce(0) { $0 | (1 << $1) }

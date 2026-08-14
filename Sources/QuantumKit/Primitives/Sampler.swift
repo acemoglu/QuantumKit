@@ -233,25 +233,20 @@ public struct Sampler: Sendable {
         backend: TrajectoryBackend,
         options: QuantumRunOptions
     ) throws -> SamplerResult {
-        let started = DispatchTime.now()
-        let result = try backend.run(circuit: circuit, options: options)
-        if let counts = result.shotCounts, let shots = options.shots {
-            let bitstrings = counts.bitstringCounts(qubitCount: circuit.qubitCount)
-            let quasiProbabilities = bitstrings.mapValues { QFloat($0) / QFloat(shots) }
-            return SamplerResult(
-                metadata: result.metadata,
-                qubitCount: circuit.qubitCount,
-                quasiProbabilities: quasiProbabilities,
-                shotCounts: counts
-            )
+        guard options.shots != nil else {
+            throw TrajectoryBackendError.shotsRequired
         }
-
-        // Single trajectory: fall back to empty/identity distribution metadata only.
-        _ = started
+        let result = try backend.run(circuit: circuit, options: options)
+        guard let counts = result.shotCounts, let shots = options.shots else {
+            throw TrajectoryBackendError.shotsRequired
+        }
+        let bitstrings = counts.bitstringCounts(qubitCount: circuit.qubitCount)
+        let quasiProbabilities = bitstrings.mapValues { QFloat($0) / QFloat(shots) }
         return SamplerResult(
             metadata: result.metadata,
             qubitCount: circuit.qubitCount,
-            quasiProbabilities: [:]
+            quasiProbabilities: quasiProbabilities,
+            shotCounts: counts
         )
     }
 
