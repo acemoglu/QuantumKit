@@ -150,6 +150,8 @@ enum BatchSampleExecutor {
                 for state in activeStates {
                     state.resetToZero()
                 }
+                // No per-gate host samples: one GPU submit for the batch. Phase `sample`
+                // wraps this call; ``SimulationProfile/gateTimings`` stays nil.
                 try engine.executeUnitaryBatch(circuit, on: activeStates)
 
                 for state in activeStates {

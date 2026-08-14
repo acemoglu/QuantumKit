@@ -6,6 +6,7 @@ import Foundation
 /// string form (not raw `JSONEncoder` defaults) so identical inputs always match.
 public enum PipelineFingerprint {
     /// Hex digest over version, method, seed, shots, circuit structure, and noise snapshot.
+    /// ``QuantumRunOptions/profiling`` is omitted: telemetry must not change reproducibility identity.
     public static func hash(
         circuit: QuantumCircuit,
         method: QuantumSimulationMethod,

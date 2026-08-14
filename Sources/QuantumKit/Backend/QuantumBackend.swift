@@ -15,17 +15,21 @@ public struct QuantumRunOptions: Sendable, Equatable {
     /// When set, the backend samples terminal measurement outcomes instead of only evolving state.
     public var shots: Int?
     public var sampleOptions: SampleCountOptions
+    /// Host-side telemetry. Default off; enabling it must not change shot histograms or amplitudes.
+    public var profiling: SimulationProfilingOptions
 
     public init(
         noise: NoiseModel? = nil,
         seed: UInt64? = nil,
         shots: Int? = nil,
-        sampleOptions: SampleCountOptions = SampleCountOptions()
+        sampleOptions: SampleCountOptions = SampleCountOptions(),
+        profiling: SimulationProfilingOptions = .disabled
     ) {
         self.noise = noise
         self.seed = seed
         self.shots = shots
         self.sampleOptions = sampleOptions
+        self.profiling = profiling
     }
 }
 
@@ -41,6 +45,8 @@ public struct QuantumResultMetadata: Codable, Sendable, Equatable {
     public let noiseSnapshot: NoiseModel?
     /// SHA-256 hex digest of circuit + run options (version, method, seed, shots, noise).
     public let pipelineHash: String?
+    /// Present when ``QuantumRunOptions/profiling`` is enabled. Nil otherwise.
+    public let profile: SimulationProfile?
 
     public init(
         quantumKitVersion: String = QuantumKitInfo.version,
@@ -51,7 +57,8 @@ public struct QuantumResultMetadata: Codable, Sendable, Equatable {
         qubitCount: Int,
         gateCount: Int,
         noiseSnapshot: NoiseModel?,
-        pipelineHash: String? = nil
+        pipelineHash: String? = nil,
+        profile: SimulationProfile? = nil
     ) {
         self.quantumKitVersion = quantumKitVersion
         self.method = method
@@ -62,6 +69,7 @@ public struct QuantumResultMetadata: Codable, Sendable, Equatable {
         self.gateCount = gateCount
         self.noiseSnapshot = noiseSnapshot
         self.pipelineHash = pipelineHash
+        self.profile = profile
     }
 }
 
@@ -102,6 +110,9 @@ public struct QuantumResult: Sendable, Equatable {
     public var memorySlots: [Int]? {
         execution.map { $0.classicalMemory.memorySlots }
     }
+
+    /// Host-side telemetry when ``QuantumRunOptions/profiling`` was enabled.
+    public var profile: SimulationProfile? { metadata.profile }
 }
 
 /// Common entry point for state-vector and density-matrix simulation backends.
@@ -153,19 +164,60 @@ public final class StatevectorBackend: QuantumBackend, @unchecked Sendable {
     }
 
     public func run(circuit: QuantumCircuit, options: QuantumRunOptions = QuantumRunOptions()) throws -> QuantumResult {
+        try executeRun(circuit: circuit, options: options, cancellationCheck: nil)
+    }
+
+    func runCancellable(circuit: QuantumCircuit, options: QuantumRunOptions) throws -> QuantumResult {
+        try executeRun(
+            circuit: circuit,
+            options: options,
+            cancellationCheck: { try CircuitCancellation.check() }
+        )
+    }
+
+    func executeRun(
+        circuit: QuantumCircuit,
+        options: QuantumRunOptions,
+        cancellationCheck: (() throws -> Void)?
+    ) throws -> QuantumResult {
         let started = DispatchTime.now()
         try circuit.requireFullyBound()
+        return try SimulationProfiling.usingRecorder(for: options) {
+            if let shots = options.shots {
+                var rng = makeRNG(seed: options.seed)
+                let counts = try SimulationProfiling.timePhase("sample") {
+                    try QuantumMeasurement.runSampleCountsRNG(
+                        circuit: circuit,
+                        engine: engine,
+                        shots: shots,
+                        rng: &rng,
+                        noise: options.noise,
+                        options: options.sampleOptions,
+                        cancellationCheck: cancellationCheck
+                    )
+                }
 
-        if let shots = options.shots {
-            var rng = makeRNG(seed: options.seed)
-            let counts = try QuantumMeasurement.runSampleCountsRNG(
-                circuit: circuit,
-                engine: engine,
-                shots: shots,
-                rng: &rng,
-                noise: options.noise,
-                options: options.sampleOptions
-            )
+                return QuantumResult(
+                    metadata: makeMetadata(
+                        circuit: circuit,
+                        options: options,
+                        started: started
+                    ),
+                    shotCounts: counts
+                )
+            }
+
+            let execution = try SimulationProfiling.timePhase("evolve") {
+                let state = try StateVector(qubitCount: circuit.qubitCount)
+                var rng = makeRNG(seed: options.seed)
+                return try engine.executeRNG(
+                    circuit,
+                    on: state,
+                    rng: &rng,
+                    noise: options.noise,
+                    cancellationCheck: cancellationCheck
+                )
+            }
 
             return QuantumResult(
                 metadata: makeMetadata(
@@ -173,27 +225,9 @@ public final class StatevectorBackend: QuantumBackend, @unchecked Sendable {
                     options: options,
                     started: started
                 ),
-                shotCounts: counts
+                execution: execution
             )
         }
-
-        let state = try StateVector(qubitCount: circuit.qubitCount)
-        var rng = makeRNG(seed: options.seed)
-        let execution = try engine.executeRNG(
-            circuit,
-            on: state,
-            rng: &rng,
-            noise: options.noise
-        )
-
-        return QuantumResult(
-            metadata: makeMetadata(
-                circuit: circuit,
-                options: options,
-                started: started
-            ),
-            execution: execution
-        )
     }
 }
 
@@ -214,18 +248,60 @@ public final class DensityMatrixBackend: QuantumBackend, @unchecked Sendable {
     }
 
     public func run(circuit: QuantumCircuit, options: QuantumRunOptions = QuantumRunOptions()) throws -> QuantumResult {
+        try executeRun(circuit: circuit, options: options, cancellationCheck: nil)
+    }
+
+    func runCancellable(circuit: QuantumCircuit, options: QuantumRunOptions) throws -> QuantumResult {
+        try executeRun(
+            circuit: circuit,
+            options: options,
+            cancellationCheck: { try CircuitCancellation.check() }
+        )
+    }
+
+    func executeRun(
+        circuit: QuantumCircuit,
+        options: QuantumRunOptions,
+        cancellationCheck: (() throws -> Void)?
+    ) throws -> QuantumResult {
         let started = DispatchTime.now()
         try circuit.requireFullyBound()
-        var rng = makeRNG(seed: options.seed)
+        return try SimulationProfiling.usingRecorder(for: options) {
+            var rng = makeRNG(seed: options.seed)
 
-        if let shots = options.shots {
-            let counts = try DensityMatrixShotSampler.runSampleCountsRNG(
-                circuit: circuit,
-                engine: engine,
-                shots: shots,
-                rng: &rng,
-                noise: options.noise
-            )
+            if let shots = options.shots {
+                let counts = try SimulationProfiling.timePhase("sample") {
+                    try DensityMatrixShotSampler.runSampleCountsRNG(
+                        circuit: circuit,
+                        engine: engine,
+                        shots: shots,
+                        rng: &rng,
+                        noise: options.noise,
+                        cancellationCheck: cancellationCheck
+                    )
+                }
+                return QuantumResult(
+                    metadata: makeMetadata(
+                        circuit: circuit,
+                        options: options,
+                        started: started,
+                        method: .densityMatrix
+                    ),
+                    shotCounts: counts
+                )
+            }
+
+            let execution = try SimulationProfiling.timePhase("evolve") {
+                let density = try DensityMatrix(qubitCount: circuit.qubitCount)
+                return try engine.executeRNG(
+                    circuit,
+                    on: density,
+                    rng: &rng,
+                    noise: options.noise,
+                    cancellationCheck: cancellationCheck
+                )
+            }
+
             return QuantumResult(
                 metadata: makeMetadata(
                     circuit: circuit,
@@ -233,27 +309,9 @@ public final class DensityMatrixBackend: QuantumBackend, @unchecked Sendable {
                     started: started,
                     method: .densityMatrix
                 ),
-                shotCounts: counts
+                execution: execution
             )
         }
-
-        let density = try DensityMatrix(qubitCount: circuit.qubitCount)
-        let execution = try engine.executeRNG(
-            circuit,
-            on: density,
-            rng: &rng,
-            noise: options.noise
-        )
-
-        return QuantumResult(
-            metadata: makeMetadata(
-                circuit: circuit,
-                options: options,
-                started: started,
-                method: .densityMatrix
-            ),
-            execution: execution
-        )
     }
 }
 
@@ -268,17 +326,26 @@ func makeMetadata(
     circuit: QuantumCircuit,
     options: QuantumRunOptions,
     started: DispatchTime,
-    method: QuantumSimulationMethod = .statevector
+    method: QuantumSimulationMethod = .statevector,
+    deviceName: String? = nil,
+    isCPU: Bool = false
 ) -> QuantumResultMetadata {
     let elapsed = DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds
     return QuantumResultMetadata(
         method: method,
         seed: options.seed,
-        deviceName: MetalRuntime.deviceName,
+        deviceName: deviceName ?? MetalRuntime.deviceName,
         wallClockNanoseconds: elapsed,
         qubitCount: circuit.qubitCount,
         gateCount: circuit.gates.count,
         noiseSnapshot: options.noise,
-        pipelineHash: PipelineFingerprint.hash(circuit: circuit, method: method, options: options)
+        pipelineHash: PipelineFingerprint.hash(circuit: circuit, method: method, options: options),
+        profile: SimulationProfiling.finishProfile(
+            options: options,
+            circuit: circuit,
+            method: method,
+            isCPU: isCPU,
+            elapsed: elapsed
+        )
     )
 }

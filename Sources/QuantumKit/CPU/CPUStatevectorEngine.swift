@@ -164,9 +164,19 @@ public final class CPUStatevectorEngine: @unchecked Sendable {
             }
         }
 
+        let profiler = SimulationProfiling.gateRecorder
+        if profiler != nil {
+            profiler?.markGateInstrumentationStarted()
+        }
         for index in instructionRange {
             try cancellationCheck?()
-            try executeRuntimeGate(circuit.gates[index])
+            if let profiler {
+                try profiler.timeGate(index: index) {
+                    try executeRuntimeGate(circuit.gates[index])
+                }
+            } else {
+                try executeRuntimeGate(circuit.gates[index])
+            }
         }
         try normalize(state)
 

@@ -174,6 +174,24 @@ public struct AdjointDifferentiator: Sendable {
         backend: StatevectorBackend,
         options: QuantumRunOptions = QuantumRunOptions()
     ) throws -> GradientResult {
+        try SimulationProfiling.usingRecorder(for: options) {
+            try runInstrumented(
+                circuit: circuit,
+                hamiltonian: hamiltonian,
+                parameters: parameters,
+                backend: backend,
+                options: options
+            )
+        }
+    }
+
+    private func runInstrumented(
+        circuit: QuantumCircuit,
+        hamiltonian: Hamiltonian,
+        parameters: [String: QFloat],
+        backend: StatevectorBackend,
+        options: QuantumRunOptions
+    ) throws -> GradientResult {
         let started = DispatchTime.now()
 
         let parameterNames = circuit.referencedParameters.sorted()
@@ -206,49 +224,49 @@ public struct AdjointDifferentiator: Sendable {
         }
 
         let engine = backend.engine
-        let psiState = try StateVector(qubitCount: circuit.qubitCount)
-        var rng = makePrimitiveRNG(seed: options.seed)
-        _ = try engine.executeRNG(boundCircuit, on: psiState, rng: &rng, noise: nil)
+        let payload = try SimulationProfiling.timePhase("gradient") { () -> (QFloat, [ParameterGradient]) in
+            let psiState = try StateVector(qubitCount: circuit.qubitCount)
+            var rng = makePrimitiveRNG(seed: options.seed)
+            _ = try engine.executeRNG(boundCircuit, on: psiState, rng: &rng, noise: nil)
 
-        var psi = QuantumMeasurement.amplitudes(state: psiState)
-        let expectationValue = try hamiltonian.expectation(state: psiState, engine: engine)
-        var lambda = AmplitudeAlgebra.applyHamiltonian(hamiltonian, to: psi)
+            var psi = QuantumMeasurement.amplitudes(state: psiState)
+            let expectationValue = try hamiltonian.expectation(state: psiState, engine: engine)
+            var lambda = AmplitudeAlgebra.applyHamiltonian(hamiltonian, to: psi)
 
-        var gradientsByName: [String: QFloat] = [:]
-        for name in parameterNames {
-            gradientsByName[name] = 0
-        }
-
-        for (symbolicGate, boundGate) in zip(symbolicGates, boundCircuit.gates).reversed() {
-            // Move |ψ⟩ back through U†.
-            try engine.executeUnitaryGate(boundGate.adjoint, on: psiState)
-            psi = QuantumMeasurement.amplitudes(state: psiState)
-
-            if let trainable = symbolicGate.adjointTrainable() {
-                var generated = psi
-                AmplitudeAlgebra.applyPauli(
-                    trainable.generator.pauli,
-                    target: trainable.generator.target,
-                    to: &generated
-                )
-                // U = exp(-i θ G / 2) ⇒ ∂⟨H⟩/∂θ = Im(⟨λ|G|ψ⟩) with |ψ⟩ before U and |λ⟩ after U.
-                let bracket = AmplitudeAlgebra.innerProduct(lambda, generated)
-                let contribution = bracket.imaginary * trainable.sensitivity.scale
-                gradientsByName[trainable.sensitivity.name, default: 0] += contribution
+            var gradientsByName: [String: QFloat] = [:]
+            for name in parameterNames {
+                gradientsByName[name] = 0
             }
 
-            // Move |λ⟩ back through U†. λ = H|ψ⟩ is generally unnormalized.
-            let lambdaState = try StateVector(qubitCount: circuit.qubitCount)
-            try lambdaState.replaceAmplitudesUnchecked(lambda)
-            try engine.executeUnitaryGate(boundGate.adjoint, on: lambdaState)
-            lambda = QuantumMeasurement.amplitudes(state: lambdaState)
-        }
+            for (symbolicGate, boundGate) in zip(symbolicGates, boundCircuit.gates).reversed() {
+                try engine.executeUnitaryGate(boundGate.adjoint, on: psiState)
+                psi = QuantumMeasurement.amplitudes(state: psiState)
 
-        let parameterGradients = parameterNames.map { name in
-            ParameterGradient(
-                parameter: QuantumParameter(name),
-                gradient: gradientsByName[name] ?? 0
-            )
+                if let trainable = symbolicGate.adjointTrainable() {
+                    var generated = psi
+                    AmplitudeAlgebra.applyPauli(
+                        trainable.generator.pauli,
+                        target: trainable.generator.target,
+                        to: &generated
+                    )
+                    let bracket = AmplitudeAlgebra.innerProduct(lambda, generated)
+                    let contribution = bracket.imaginary * trainable.sensitivity.scale
+                    gradientsByName[trainable.sensitivity.name, default: 0] += contribution
+                }
+
+                let lambdaState = try StateVector(qubitCount: circuit.qubitCount)
+                try lambdaState.replaceAmplitudesUnchecked(lambda)
+                try engine.executeUnitaryGate(boundGate.adjoint, on: lambdaState)
+                lambda = QuantumMeasurement.amplitudes(state: lambdaState)
+            }
+
+            let parameterGradients = parameterNames.map { name in
+                ParameterGradient(
+                    parameter: QuantumParameter(name),
+                    gradient: gradientsByName[name] ?? 0
+                )
+            }
+            return (expectationValue, parameterGradients)
         }
 
         let elapsed = DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds
@@ -259,12 +277,20 @@ public struct AdjointDifferentiator: Sendable {
             wallClockNanoseconds: elapsed,
             qubitCount: circuit.qubitCount,
             gateCount: circuit.gates.count,
-            noiseSnapshot: options.noise
+            noiseSnapshot: options.noise,
+            // ``StatevectorBackend`` is Metal-only.
+            profile: SimulationProfiling.finishProfile(
+                options: options,
+                circuit: circuit,
+                method: .statevector,
+                isCPU: false,
+                elapsed: elapsed
+            )
         )
 
         return GradientResult(
-            expectationValue: expectationValue,
-            parameterGradients: parameterGradients,
+            expectationValue: payload.0,
+            parameterGradients: payload.1,
             circuitEvaluations: 1,
             metadata: metadata
         )

@@ -709,6 +709,11 @@ public final class QuantumEngine: @unchecked Sendable {
             }
         }
 
+        // Metal SV pending-flushes unitaries after this loop, then `drainPipeline`. Timing each
+        // instruction would sample `append` rather than encode+wait, so this engine never records
+        // per-gate samples (`gateTimings` stays nil). Backend `evolve` / `sample` phases wrap
+        // executeRNG and therefore include the flush+drain already paid here. Do not add extra
+        // waits when profiling is on.
         for index in instructionRange {
             try cancellationCheck?()
             try executeRuntimeGate(circuit.gates[index])

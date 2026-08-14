@@ -116,9 +116,19 @@ public final class CPUDensityMatrixEngine: @unchecked Sendable {
             }
         }
 
+        let profiler = SimulationProfiling.gateRecorder
+        if profiler != nil {
+            profiler?.markGateInstrumentationStarted()
+        }
         for gateIndex in instructionRange {
             try cancellationCheck?()
-            try executeRuntimeGate(circuit.gates[gateIndex], at: gateIndex)
+            if let profiler {
+                try profiler.timeGate(index: gateIndex) {
+                    try executeRuntimeGate(circuit.gates[gateIndex], at: gateIndex)
+                }
+            } else {
+                try executeRuntimeGate(circuit.gates[gateIndex], at: gateIndex)
+            }
         }
         renormalizeTrace(of: density)
 

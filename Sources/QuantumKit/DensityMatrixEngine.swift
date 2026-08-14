@@ -282,9 +282,19 @@ public final class DensityMatrixEngine: @unchecked Sendable {
             }
         }
 
+        let profiler = SimulationProfiling.gateRecorder
+        if profiler != nil {
+            profiler?.markGateInstrumentationStarted()
+        }
         for gateIndex in instructionRange {
             try cancellationCheck?()
-            try executeRuntimeGate(circuit.gates[gateIndex], at: gateIndex)
+            if let profiler {
+                try profiler.timeGate(index: gateIndex) {
+                    try executeRuntimeGate(circuit.gates[gateIndex], at: gateIndex)
+                }
+            } else {
+                try executeRuntimeGate(circuit.gates[gateIndex], at: gateIndex)
+            }
         }
 
         // Every gate/channel above is committed without blocking the CPU. Drain the serial queue

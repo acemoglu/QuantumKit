@@ -150,66 +150,6 @@ extension CPUStatevectorBackend {
             try self.runCancellable(circuit: circuit, options: options)
         }
     }
-
-    func runCancellable(
-        circuit: QuantumCircuit,
-        options: QuantumRunOptions
-    ) throws -> QuantumResult {
-        try requireQubitCount(circuit.qubitCount)
-        let started = DispatchTime.now()
-        try circuit.requireFullyBound()
-        var rng = makeCPURNG(seed: options.seed)
-
-        if let shots = options.shots {
-            guard shots > 0 else { throw QuantumMeasurementError.invalidShotCount(shots) }
-            var histogram: [Int: Int] = [:]
-            for _ in 0..<shots {
-                try CircuitCancellation.check()
-                let state = try CPUStateVector(qubitCount: circuit.qubitCount)
-                _ = try engine.executeRNG(
-                    circuit,
-                    on: state,
-                    rng: &rng,
-                    noise: options.noise,
-                    cancellationCheck: { try CircuitCancellation.check() }
-                )
-                let outcome = try engine.measureCollapse(
-                    on: state,
-                    qubits: Array(0..<circuit.qubitCount),
-                    rng: &rng,
-                    noise: options.noise
-                )
-                histogram[outcome, default: 0] += 1
-            }
-            return QuantumResult(
-                metadata: makeCPUMetadata(
-                    circuit: circuit,
-                    options: options,
-                    started: started,
-                    method: .statevector
-                ),
-                shotCounts: ShotCounts(shots: shots, counts: histogram)
-            )
-        }
-
-        let state = try CPUStateVector(qubitCount: circuit.qubitCount)
-        let execution = try engine.executeRNG(
-            circuit,
-            on: state,
-            rng: &rng,
-            noise: options.noise,
-            cancellationCheck: { try CircuitCancellation.check() }
-        )
-        return QuantumResult(
-            metadata: makeCPUMetadata(
-                circuit: circuit,
-                options: options,
-                started: started,
-                method: .statevector
-            ),
-            execution: execution
-        )
-    }
 }
 
 extension CPUDensityMatrixBackend {
@@ -220,54 +160,6 @@ extension CPUDensityMatrixBackend {
         try CircuitCancellation.mapCancellation {
             try self.runCancellable(circuit: circuit, options: options)
         }
-    }
-
-    func runCancellable(
-        circuit: QuantumCircuit,
-        options: QuantumRunOptions
-    ) throws -> QuantumResult {
-        try requireQubitCount(circuit.qubitCount)
-        let started = DispatchTime.now()
-        try circuit.requireFullyBound()
-        var rng = makeCPURNG(seed: options.seed)
-
-        if let shots = options.shots {
-            let counts = try DensityMatrixShotSampler.runSampleCountsRNG(
-                circuit: circuit,
-                engine: engine,
-                shots: shots,
-                rng: &rng,
-                noise: options.noise,
-                cancellationCheck: { try CircuitCancellation.check() }
-            )
-            return QuantumResult(
-                metadata: makeCPUMetadata(
-                    circuit: circuit,
-                    options: options,
-                    started: started,
-                    method: .densityMatrix
-                ),
-                shotCounts: counts
-            )
-        }
-
-        let density = try CPUDensityMatrix(qubitCount: circuit.qubitCount)
-        let execution = try engine.executeRNG(
-            circuit,
-            on: density,
-            rng: &rng,
-            noise: options.noise,
-            cancellationCheck: { try CircuitCancellation.check() }
-        )
-        return QuantumResult(
-            metadata: makeCPUMetadata(
-                circuit: circuit,
-                options: options,
-                started: started,
-                method: .densityMatrix
-            ),
-            execution: execution
-        )
     }
 }
 
@@ -280,45 +172,6 @@ extension StatevectorBackend {
             try self.runCancellable(circuit: circuit, options: options)
         }
     }
-
-    func runCancellable(
-        circuit: QuantumCircuit,
-        options: QuantumRunOptions
-    ) throws -> QuantumResult {
-        let started = DispatchTime.now()
-        try circuit.requireFullyBound()
-
-        if let shots = options.shots {
-            var rng = makeRNG(seed: options.seed)
-            let counts = try QuantumMeasurement.runSampleCountsRNG(
-                circuit: circuit,
-                engine: engine,
-                shots: shots,
-                rng: &rng,
-                noise: options.noise,
-                options: options.sampleOptions,
-                cancellationCheck: { try CircuitCancellation.check() }
-            )
-            return QuantumResult(
-                metadata: makeMetadata(circuit: circuit, options: options, started: started),
-                shotCounts: counts
-            )
-        }
-
-        let state = try StateVector(qubitCount: circuit.qubitCount)
-        var rng = makeRNG(seed: options.seed)
-        let execution = try engine.executeRNG(
-            circuit,
-            on: state,
-            rng: &rng,
-            noise: options.noise,
-            cancellationCheck: { try CircuitCancellation.check() }
-        )
-        return QuantumResult(
-            metadata: makeMetadata(circuit: circuit, options: options, started: started),
-            execution: execution
-        )
-    }
 }
 
 extension DensityMatrixBackend {
@@ -329,52 +182,5 @@ extension DensityMatrixBackend {
         try CircuitCancellation.mapCancellation {
             try self.runCancellable(circuit: circuit, options: options)
         }
-    }
-
-    func runCancellable(
-        circuit: QuantumCircuit,
-        options: QuantumRunOptions
-    ) throws -> QuantumResult {
-        let started = DispatchTime.now()
-        try circuit.requireFullyBound()
-        var rng = makeRNG(seed: options.seed)
-
-        if let shots = options.shots {
-            let counts = try DensityMatrixShotSampler.runSampleCountsRNG(
-                circuit: circuit,
-                engine: engine,
-                shots: shots,
-                rng: &rng,
-                noise: options.noise,
-                cancellationCheck: { try CircuitCancellation.check() }
-            )
-            return QuantumResult(
-                metadata: makeMetadata(
-                    circuit: circuit,
-                    options: options,
-                    started: started,
-                    method: .densityMatrix
-                ),
-                shotCounts: counts
-            )
-        }
-
-        let density = try DensityMatrix(qubitCount: circuit.qubitCount)
-        let execution = try engine.executeRNG(
-            circuit,
-            on: density,
-            rng: &rng,
-            noise: options.noise,
-            cancellationCheck: { try CircuitCancellation.check() }
-        )
-        return QuantumResult(
-            metadata: makeMetadata(
-                circuit: circuit,
-                options: options,
-                started: started,
-                method: .densityMatrix
-            ),
-            execution: execution
-        )
     }
 }

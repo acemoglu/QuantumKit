@@ -81,78 +81,94 @@ public struct Estimator: Sendable {
         options: QuantumRunOptions = QuantumRunOptions(),
         estimatorOptions: EstimatorOptions = .exact
     ) throws -> EstimatorResult {
-        let started = DispatchTime.now()
-        let resolvedShots = try estimatorOptions.resolvedShots() ?? options.shots
+        try SimulationProfiling.usingRecorder(for: options) {
+            let started = DispatchTime.now()
+            let resolvedShots = try estimatorOptions.resolvedShots() ?? options.shots
+            // Nested under Gradient (etc.): exact path still records user-circuit gates on the
+            // outer recorder; shot path suppresses gate samples (basis-changed circuits).
+            // Do not emit an orphan "estimate" phase or a mid-run finishProfile snapshot.
+            let nested = SimulationProfiling.isNestedUnderOuterRecorder
 
-        if let shots = resolvedShots {
-            return try estimateShots(
-                circuit: circuit,
-                hamiltonian: hamiltonian,
-                backend: backend,
-                options: options,
-                shots: shots,
-                started: started
+            if let shots = resolvedShots {
+                return try estimateShots(
+                    circuit: circuit,
+                    hamiltonian: hamiltonian,
+                    backend: backend,
+                    options: options,
+                    shots: shots,
+                    started: started,
+                    nestedUnderOuterRecorder: nested
+                )
+            }
+
+            let estimateBody = { () -> (QFloat, QuantumSimulationMethod, String?) in
+                if let statevectorBackend = backend as? StatevectorBackend {
+                    let value = try estimateExact(
+                        circuit: circuit,
+                        hamiltonian: hamiltonian,
+                        engine: statevectorBackend.engine,
+                        options: options
+                    )
+                    return (value, .statevector, MetalRuntime.deviceName)
+                }
+                if let densityBackend = backend as? DensityMatrixBackend {
+                    let value = try estimateExact(
+                        circuit: circuit,
+                        hamiltonian: hamiltonian,
+                        engine: densityBackend.engine,
+                        options: options
+                    )
+                    return (value, .densityMatrix, MetalRuntime.deviceName)
+                }
+                if let cpuSV = backend as? CPUStatevectorBackend {
+                    let value = try estimateExactCPU(
+                        circuit: circuit,
+                        hamiltonian: hamiltonian,
+                        engine: cpuSV.engine,
+                        options: options
+                    )
+                    return (value, .statevector, "CPU")
+                }
+                if let cpuDM = backend as? CPUDensityMatrixBackend {
+                    let value = try estimateExactCPU(
+                        circuit: circuit,
+                        hamiltonian: hamiltonian,
+                        engine: cpuDM.engine,
+                        options: options
+                    )
+                    return (value, .densityMatrix, "CPU")
+                }
+                if backend is TrajectoryBackend {
+                    throw EstimatorError.shotsRequiredForTrajectory
+                }
+                throw EstimatorError.unsupportedBackend
+            }
+            let boxed = try nested
+                ? estimateBody()
+                : SimulationProfiling.timePhase("estimate", estimateBody)
+
+            let elapsed = DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds
+            let metadata = QuantumResultMetadata(
+                method: boxed.1,
+                seed: options.seed,
+                deviceName: boxed.2,
+                wallClockNanoseconds: elapsed,
+                qubitCount: circuit.qubitCount,
+                gateCount: circuit.gates.count,
+                noiseSnapshot: options.noise,
+                profile: nested
+                    ? nil
+                    : SimulationProfiling.finishProfile(
+                        options: options,
+                        circuit: circuit,
+                        method: boxed.1,
+                        isCPU: boxed.2 == "CPU",
+                        elapsed: elapsed
+                    )
             )
+
+            return EstimatorResult(value: boxed.0, metadata: metadata)
         }
-
-        let value: QFloat
-        let method: QuantumSimulationMethod
-        let deviceName: String?
-
-        if let statevectorBackend = backend as? StatevectorBackend {
-            method = .statevector
-            deviceName = MetalRuntime.deviceName
-            value = try estimateExact(
-                circuit: circuit,
-                hamiltonian: hamiltonian,
-                engine: statevectorBackend.engine,
-                options: options
-            )
-        } else if let densityBackend = backend as? DensityMatrixBackend {
-            method = .densityMatrix
-            deviceName = MetalRuntime.deviceName
-            value = try estimateExact(
-                circuit: circuit,
-                hamiltonian: hamiltonian,
-                engine: densityBackend.engine,
-                options: options
-            )
-        } else if let cpuSV = backend as? CPUStatevectorBackend {
-            method = .statevector
-            deviceName = "CPU"
-            value = try estimateExactCPU(
-                circuit: circuit,
-                hamiltonian: hamiltonian,
-                engine: cpuSV.engine,
-                options: options
-            )
-        } else if let cpuDM = backend as? CPUDensityMatrixBackend {
-            method = .densityMatrix
-            deviceName = "CPU"
-            value = try estimateExactCPU(
-                circuit: circuit,
-                hamiltonian: hamiltonian,
-                engine: cpuDM.engine,
-                options: options
-            )
-        } else if backend is TrajectoryBackend {
-            throw EstimatorError.shotsRequiredForTrajectory
-        } else {
-            throw EstimatorError.unsupportedBackend
-        }
-
-        let elapsed = DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds
-        let metadata = QuantumResultMetadata(
-            method: method,
-            seed: options.seed,
-            deviceName: deviceName,
-            wallClockNanoseconds: elapsed,
-            qubitCount: circuit.qubitCount,
-            gateCount: circuit.gates.count,
-            noiseSnapshot: options.noise
-        )
-
-        return EstimatorResult(value: value, metadata: metadata)
     }
 
     private func estimateExact(
@@ -209,119 +225,143 @@ public struct Estimator: Sendable {
         backend: any QuantumBackend,
         options: QuantumRunOptions,
         shots: Int,
-        started: DispatchTime
+        started: DispatchTime,
+        nestedUnderOuterRecorder: Bool
     ) throws -> EstimatorResult {
         guard shots > 0 else { throw EstimatorError.invalidShotCount(shots) }
 
-        var rng = makePrimitiveRNG(seed: options.seed)
-        var total: QFloat = 0
-        var varianceAccumulator: QFloat = 0
-        let method: QuantumSimulationMethod
-        let deviceName: String?
+        let shotsBody = { () -> (QFloat, QFloat, QuantumSimulationMethod, String?) in
+            var rng = makePrimitiveRNG(seed: options.seed)
+            var total: QFloat = 0
+            var varianceAccumulator: QFloat = 0
+            let method: QuantumSimulationMethod
+            let deviceName: String?
 
-        if let statevectorBackend = backend as? StatevectorBackend {
-            method = .statevector
-            deviceName = MetalRuntime.deviceName
-            for term in hamiltonian.terms {
-                let (mean, secondMoment) = try PauliShotEstimator.estimateTerm(
-                    circuit: circuit,
-                    term: term,
-                    engine: statevectorBackend.engine,
-                    shots: shots,
-                    rng: &rng,
-                    noise: options.noise,
-                    sampleOptions: options.sampleOptions
-                )
-                total += term.coefficient * mean
-                let termVar = max(0, secondMoment - mean * mean)
-                varianceAccumulator += term.coefficient * term.coefficient * termVar
+            if let statevectorBackend = backend as? StatevectorBackend {
+                method = .statevector
+                deviceName = MetalRuntime.deviceName
+                for term in hamiltonian.terms {
+                    let (mean, secondMoment) = try PauliShotEstimator.estimateTerm(
+                        circuit: circuit,
+                        term: term,
+                        engine: statevectorBackend.engine,
+                        shots: shots,
+                        rng: &rng,
+                        noise: options.noise,
+                        sampleOptions: options.sampleOptions
+                    )
+                    total += term.coefficient * mean
+                    let termVar = max(0, secondMoment - mean * mean)
+                    varianceAccumulator += term.coefficient * term.coefficient * termVar
+                }
+            } else if let densityBackend = backend as? DensityMatrixBackend {
+                method = .densityMatrix
+                deviceName = MetalRuntime.deviceName
+                for term in hamiltonian.terms {
+                    let (mean, secondMoment) = try PauliShotEstimator.estimateTerm(
+                        circuit: circuit,
+                        term: term,
+                        engine: densityBackend.engine,
+                        shots: shots,
+                        rng: &rng,
+                        noise: options.noise
+                    )
+                    total += term.coefficient * mean
+                    let termVar = max(0, secondMoment - mean * mean)
+                    varianceAccumulator += term.coefficient * term.coefficient * termVar
+                }
+            } else if let cpuDensity = backend as? CPUDensityMatrixBackend {
+                method = .densityMatrix
+                deviceName = "CPU"
+                for term in hamiltonian.terms {
+                    let (mean, secondMoment) = try PauliShotEstimator.estimateTerm(
+                        circuit: circuit,
+                        term: term,
+                        engine: cpuDensity.engine,
+                        shots: shots,
+                        rng: &rng,
+                        noise: options.noise
+                    )
+                    total += term.coefficient * mean
+                    let termVar = max(0, secondMoment - mean * mean)
+                    varianceAccumulator += term.coefficient * term.coefficient * termVar
+                }
+            } else if let trajectory = backend as? TrajectoryBackend {
+                method = .trajectory
+                deviceName = trajectory.deviceName
+                for (termIndex, term) in hamiltonian.terms.enumerated() {
+                    let (mean, secondMoment) = try PauliShotEstimator.estimateTermTrajectory(
+                        circuit: circuit,
+                        term: term,
+                        backend: trajectory,
+                        shots: shots,
+                        seedBase: options.seed,
+                        termIndex: termIndex,
+                        rng: &rng,
+                        noise: options.noise,
+                        sampleOptions: options.sampleOptions
+                    )
+                    total += term.coefficient * mean
+                    let termVar = max(0, secondMoment - mean * mean)
+                    varianceAccumulator += term.coefficient * term.coefficient * termVar
+                }
+            } else if let cpuSV = backend as? CPUStatevectorBackend {
+                method = .statevector
+                deviceName = "CPU"
+                for term in hamiltonian.terms {
+                    let (mean, secondMoment) = try PauliShotEstimator.estimateTermCPU(
+                        circuit: circuit,
+                        term: term,
+                        engine: cpuSV.engine,
+                        shots: shots,
+                        rng: &rng,
+                        noise: options.noise
+                    )
+                    total += term.coefficient * mean
+                    let termVar = max(0, secondMoment - mean * mean)
+                    varianceAccumulator += term.coefficient * term.coefficient * termVar
+                }
+            } else {
+                throw EstimatorError.unsupportedBackend
             }
-        } else if let densityBackend = backend as? DensityMatrixBackend {
-            method = .densityMatrix
-            deviceName = MetalRuntime.deviceName
-            for term in hamiltonian.terms {
-                let (mean, secondMoment) = try PauliShotEstimator.estimateTerm(
-                    circuit: circuit,
-                    term: term,
-                    engine: densityBackend.engine,
-                    shots: shots,
-                    rng: &rng,
-                    noise: options.noise
-                )
-                total += term.coefficient * mean
-                let termVar = max(0, secondMoment - mean * mean)
-                varianceAccumulator += term.coefficient * term.coefficient * termVar
-            }
-        } else if let cpuDensity = backend as? CPUDensityMatrixBackend {
-            method = .densityMatrix
-            deviceName = "CPU"
-            for term in hamiltonian.terms {
-                let (mean, secondMoment) = try PauliShotEstimator.estimateTerm(
-                    circuit: circuit,
-                    term: term,
-                    engine: cpuDensity.engine,
-                    shots: shots,
-                    rng: &rng,
-                    noise: options.noise
-                )
-                total += term.coefficient * mean
-                let termVar = max(0, secondMoment - mean * mean)
-                varianceAccumulator += term.coefficient * term.coefficient * termVar
-            }
-        } else if let trajectory = backend as? TrajectoryBackend {
-            method = .trajectory
-            deviceName = trajectory.deviceName
-            // Trajectory shot estimates reuse the wrapped backend via run + Z parity on counts.
-            for (termIndex, term) in hamiltonian.terms.enumerated() {
-                let (mean, secondMoment) = try PauliShotEstimator.estimateTermTrajectory(
-                    circuit: circuit,
-                    term: term,
-                    backend: trajectory,
-                    shots: shots,
-                    seedBase: options.seed,
-                    termIndex: termIndex,
-                    rng: &rng,
-                    noise: options.noise,
-                    sampleOptions: options.sampleOptions
-                )
-                total += term.coefficient * mean
-                let termVar = max(0, secondMoment - mean * mean)
-                varianceAccumulator += term.coefficient * term.coefficient * termVar
-            }
-        } else if let cpuSV = backend as? CPUStatevectorBackend {
-            method = .statevector
-            deviceName = "CPU"
-            for term in hamiltonian.terms {
-                let (mean, secondMoment) = try PauliShotEstimator.estimateTermCPU(
-                    circuit: circuit,
-                    term: term,
-                    engine: cpuSV.engine,
-                    shots: shots,
-                    rng: &rng,
-                    noise: options.noise
-                )
-                total += term.coefficient * mean
-                let termVar = max(0, secondMoment - mean * mean)
-                varianceAccumulator += term.coefficient * term.coefficient * termVar
-            }
-        } else {
-            throw EstimatorError.unsupportedBackend
+            return (total, varianceAccumulator, method, deviceName)
         }
+        // Never timeGate the basis-changed measure circuit into this (or an outer) recorder.
+        let suppressedShotsBody = {
+            try SimulationProfiling.withGateRecordingSuppressed(shotsBody)
+        }
+        let boxed = try nestedUnderOuterRecorder
+            ? suppressedShotsBody()
+            : SimulationProfiling.timePhase("estimate", suppressedShotsBody)
 
-        let standardError = sqrt(varianceAccumulator / QFloat(shots))
+        let standardError = sqrt(boxed.1 / QFloat(shots))
         let elapsed = DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds
+        // Shot paths evolve a basis-changed measure circuit; do not publish those
+        // indices as the user circuit's ``gateTimings``.
         let metadata = QuantumResultMetadata(
-            method: method,
+            method: boxed.2,
             seed: options.seed,
-            deviceName: deviceName,
+            deviceName: boxed.3,
             wallClockNanoseconds: elapsed,
             qubitCount: circuit.qubitCount,
             gateCount: circuit.gates.count,
-            noiseSnapshot: options.noise
+            noiseSnapshot: options.noise,
+            profile: nestedUnderOuterRecorder
+                ? nil
+                : SimulationProfiling.finishProfile(
+                    options: options,
+                    circuit: circuit,
+                    method: boxed.2,
+                    isCPU: boxed.3 == "CPU",
+                    elapsed: elapsed,
+                    effectiveShots: shots,
+                    // Basis-changed measure circuits are not the user circuit.
+                    includeGateTimings: false
+                )
         )
 
         return EstimatorResult(
-            value: total,
+            value: boxed.0,
             metadata: metadata,
             shots: shots,
             standardError: standardError
