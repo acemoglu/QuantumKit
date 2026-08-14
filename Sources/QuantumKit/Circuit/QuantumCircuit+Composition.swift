@@ -210,7 +210,7 @@ extension QuantumCircuit {
         return (0..<mapLength).map { $0 + offset }
     }
 
-    private static func maxClassicalRegisterIndex(in gate: Gate) -> Int {
+    static func maxClassicalRegisterIndex(in gate: Gate) -> Int {
         switch gate {
         case .measure(let spec):
             return spec.classicalRegister

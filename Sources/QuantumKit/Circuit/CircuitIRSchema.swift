@@ -11,6 +11,12 @@ import Foundation
 /// tag on the next encode. Explicit `schemaVersion` values other than ``current``
 /// (including future versions) throw ``CircuitIRError/unsupportedSchemaVersion``.
 ///
+/// **Validation:** decode rebuilds the circuit via ``QuantumCircuit/apply(_:metadata:)``.
+/// Out-of-range qubits, undeclared classical registers, and an `instructionMetadata`
+/// array whose length does not match `gates` throw ``CircuitIRError`` (no silent
+/// truncate / pad of a present metadata payload). Omitting `instructionMetadata`
+/// remains valid and means all-`nil` metadata.
+///
 /// This contract does not change in-memory engine bit ordering; see ``QubitBitOrdering``.
 public enum CircuitIRSchema: Sendable {
     /// Schema version written by current encoders and required (or implied) on decode.
@@ -34,4 +40,8 @@ public enum CircuitIRSchema: Sendable {
 public enum CircuitIRError: Error, Equatable, Sendable {
     /// Payload declared a `schemaVersion` this library cannot read.
     case unsupportedSchemaVersion(found: Int, supported: Int)
+    /// Present `instructionMetadata` length does not match `gates`.
+    case metadataLengthMismatch(metadataCount: Int, gateCount: Int)
+    /// Gate list failed validation (qubit OOB, undeclared classical register, …).
+    case invalidCircuit(reason: String)
 }

@@ -339,19 +339,39 @@ extension QuantumCircuit: Codable {
             forKey: .classicalRegisters
         ) ?? []
         try self.init(qubitCount: qubitCount, classicalRegisters: classicalRegisters)
-        gates = try container.decode([Gate].self, forKey: .gates)
-        instructionMetadata = try container.decodeIfPresent(
-            [InstructionMetadata?].self,
-            forKey: .instructionMetadata
-        ) ?? Array(repeating: nil, count: gates.count)
-        if instructionMetadata.count != gates.count {
-            // Tolerate older / partial payloads by padding or truncating to gate count.
-            if instructionMetadata.count < gates.count {
-                instructionMetadata.append(
-                    contentsOf: Array(repeating: nil, count: gates.count - instructionMetadata.count)
+
+        let decodedGates = try container.decode([Gate].self, forKey: .gates)
+        let decodedMetadata: [InstructionMetadata?]?
+        if container.contains(.instructionMetadata) {
+            let metadata = try container.decode([InstructionMetadata?].self, forKey: .instructionMetadata)
+            guard metadata.count == decodedGates.count else {
+                throw CircuitIRError.metadataLengthMismatch(
+                    metadataCount: metadata.count,
+                    gateCount: decodedGates.count
                 )
-            } else {
-                instructionMetadata = Array(instructionMetadata.prefix(gates.count))
+            }
+            decodedMetadata = metadata
+        } else {
+            decodedMetadata = nil
+        }
+
+        for (index, gate) in decodedGates.enumerated() {
+            let maxCReg = Self.maxClassicalRegisterIndex(in: gate)
+            if maxCReg >= 0, maxCReg >= classicalRegisters.count {
+                throw CircuitIRError.invalidCircuit(
+                    reason: "gate \(index) references classical register \(maxCReg) but circuit declares \(classicalRegisters.count) registers"
+                )
+            }
+            do {
+                if let decodedMetadata {
+                    try apply(gate, metadata: decodedMetadata[index])
+                } else {
+                    try apply(gate)
+                }
+            } catch let error as CircuitIRError {
+                throw error
+            } catch {
+                throw CircuitIRError.invalidCircuit(reason: String(describing: error))
             }
         }
     }

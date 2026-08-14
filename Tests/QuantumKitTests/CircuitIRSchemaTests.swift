@@ -125,4 +125,90 @@ extension QuantumKitTests {
             XCTAssertEqual(supported, 1)
         }
     }
+
+    func testQuantumCircuitRejectsOutOfRangeQubitOnDecode() throws {
+        let payload = Data(
+            #"""
+            {
+              "schemaVersion": 1,
+              "qubitCount": 1,
+              "gates": [{ "type": "x", "target": 3 }]
+            }
+            """#.utf8
+        )
+
+        XCTAssertThrowsError(try JSONDecoder().decode(QuantumCircuit.self, from: payload)) { error in
+            guard case CircuitIRError.invalidCircuit = error else {
+                return XCTFail("expected invalidCircuit, got \(error)")
+            }
+        }
+    }
+
+    func testQuantumCircuitRejectsMetadataLengthMismatch() throws {
+        let tooLong = Data(
+            #"""
+            {
+              "schemaVersion": 1,
+              "qubitCount": 1,
+              "gates": [{ "type": "x", "target": 0 }],
+              "instructionMetadata": [
+                { "label": "a" },
+                { "label": "b" }
+              ]
+            }
+            """#.utf8
+        )
+        XCTAssertThrowsError(try JSONDecoder().decode(QuantumCircuit.self, from: tooLong)) { error in
+            guard case CircuitIRError.metadataLengthMismatch(let metadataCount, let gateCount) = error else {
+                return XCTFail("expected metadataLengthMismatch, got \(error)")
+            }
+            XCTAssertEqual(metadataCount, 2)
+            XCTAssertEqual(gateCount, 1)
+        }
+
+        let tooShort = Data(
+            #"""
+            {
+              "schemaVersion": 1,
+              "qubitCount": 1,
+              "gates": [
+                { "type": "x", "target": 0 },
+                { "type": "h", "target": 0 }
+              ],
+              "instructionMetadata": [{ "label": "only-one" }]
+            }
+            """#.utf8
+        )
+        XCTAssertThrowsError(try JSONDecoder().decode(QuantumCircuit.self, from: tooShort)) { error in
+            guard case CircuitIRError.metadataLengthMismatch(let metadataCount, let gateCount) = error else {
+                return XCTFail("expected metadataLengthMismatch, got \(error)")
+            }
+            XCTAssertEqual(metadataCount, 1)
+            XCTAssertEqual(gateCount, 2)
+        }
+    }
+
+    func testQuantumCircuitRejectsUndeclaredClassicalRegister() throws {
+        let payload = Data(
+            #"""
+            {
+              "schemaVersion": 1,
+              "qubitCount": 1,
+              "gates": [{
+                "type": "measure",
+                "qubits": [0],
+                "classicalRegister": 0,
+                "classicalBitOffset": 0
+              }]
+            }
+            """#.utf8
+        )
+
+        XCTAssertThrowsError(try JSONDecoder().decode(QuantumCircuit.self, from: payload)) { error in
+            guard case CircuitIRError.invalidCircuit(let reason) = error else {
+                return XCTFail("expected invalidCircuit, got \(error)")
+            }
+            XCTAssertTrue(reason.contains("classical register"))
+        }
+    }
 }

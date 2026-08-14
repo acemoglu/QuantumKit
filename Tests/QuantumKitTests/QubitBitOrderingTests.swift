@@ -62,6 +62,19 @@ extension QuantumKitTests {
         XCTAssertEqual(lsb["01"], 6)
     }
 
+    func testShotCountsQubitsOverloadAggregatesPackedMSB() throws {
+        // Historical packed-index helper: width = qubits.count, MSB of low bits.
+        // Prefer bitstringCounts(qubitCount:ordering:). Colliding keys must sum.
+        let overlapping = ShotCounts(shots: 5, counts: [1: 2, 5: 3]) // low 2 bits of both are 01
+        XCTAssertEqual(overlapping.bitstringCounts(qubits: [0, 1])["01"], 5)
+
+        let aligned = ShotCounts(shots: 10, counts: [1: 4, 2: 6])
+        XCTAssertEqual(
+            aligned.bitstringCounts(qubits: Array(0..<2)),
+            aligned.bitstringCounts(qubitCount: 2, ordering: .bitstringMSB)
+        )
+    }
+
     func testReadoutConfusionProductUsesEngineLSB() throws {
         // Distinct flip rates: qubit 0 (LSB) vs qubit 1.
         let matrix = try ReadoutConfusionMatrix.product(of: [

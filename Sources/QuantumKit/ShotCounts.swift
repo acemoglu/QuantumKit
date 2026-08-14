@@ -34,16 +34,20 @@ public struct ShotCounts: Sendable, Equatable {
         return result
     }
 
-    /// Outcome counts keyed by bitstring in the order of `qubits` (left = first listed qubit).
+    /// Outcome counts keyed by bitstring in historical packed-index order.
     ///
-    /// For the common full-register case `qubits == 0..<n`, this matches ``bitstringMSB``
-    /// over the packed ``engineLSB`` index. Prefer ``bitstringCounts(qubitCount:ordering:)``
-    /// when the policy must be named explicitly.
+    /// **Unsafe / historical:** this overload does **not** permute by the listed qubit
+    /// identities. It formats the low `qubits.count` bits of each integer key as
+    /// ``QubitBitOrdering/bitstringMSB`` (left = high bit of that packed index).
+    /// Colliding keys are summed. Prefer ``bitstringCounts(qubitCount:ordering:)`` when
+    /// the policy must be named. For `qubits == 0..<n` this matches ``bitstringMSB`` on a
+    /// full-register ``engineLSB`` index.
     public func bitstringCounts(qubits: [Int]) -> [String: Int] {
         var result: [String: Int] = [:]
         result.reserveCapacity(counts.count)
         for (index, count) in counts {
-            result[Self.bitstring(for: index, qubits: qubits)] = count
+            let key = Self.bitstring(for: index, qubits: qubits)
+            result[key, default: 0] += count
         }
         return result
     }

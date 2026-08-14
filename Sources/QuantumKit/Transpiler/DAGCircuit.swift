@@ -40,6 +40,14 @@ public enum DAGCircuitError: Error, Equatable, Sendable {
 /// Nodes are gates (plus optional ``InstructionMetadata``). Edges capture qubit-wire and
 /// classical-register dependencies: an edge `A → B` means `A` must execute before `B`.
 ///
+/// **Classical hazards** (per register, including nested ``Gate/c_if`` bodies):
+/// RAW (last write → later read), WAW (last write → later write), and WAR (reads since
+/// last write → later write). Sequence numbers are only a topo-sort tie-break — they do
+/// not replace these edges.
+///
+/// **Empty barrier:** ``Gate/barrier`` with an empty qubit list is a **full-width** wire
+/// barrier (every qubit), not an idle op. ``IdleIdentityRemovalPass`` keeps it.
+///
 /// **Bridge policy:** ``init(circuit:)`` / ``toQuantumCircuit()`` are lossless for the flat
 /// ``Gate`` vocabulary — every gate becomes one node and flattens back in a stable
 /// topological order (original sequence as tie-break). Metadata is **preserved** 1:1 on
@@ -80,6 +88,7 @@ public struct DAGCircuit: Sendable {
         )
         var lastOnQubit = Array(repeating: Optional<DAGNodeID>.none, count: circuit.qubitCount)
         var lastClassicalWrite: [Int: DAGNodeID] = [:]
+        var lastClassicalReads: [Int: Set<DAGNodeID>] = [:]
 
         for index in circuit.gates.indices {
             let gate = circuit.gates[index]
@@ -95,19 +104,37 @@ public struct DAGCircuit: Sendable {
                     preds.insert(pred)
                 }
             }
-            for creg in Self.classicalReads(for: gate) {
+
+            let reads = Self.classicalReads(for: gate)
+            let writes = Self.classicalWrites(for: gate)
+            for creg in reads {
                 if let pred = lastClassicalWrite[creg] {
                     preds.insert(pred)
                 }
             }
+            for creg in writes {
+                if let pred = lastClassicalWrite[creg] {
+                    preds.insert(pred)
+                }
+                if let readers = lastClassicalReads[creg] {
+                    preds.formUnion(readers)
+                }
+            }
+
             for pred in preds {
                 try addEdge(from: pred, to: id)
             }
             for q in wireQubits {
                 lastOnQubit[q] = id
             }
-            for creg in Self.classicalWrites(for: gate) {
+
+            let written = Set(writes)
+            for creg in reads where !written.contains(creg) {
+                lastClassicalReads[creg, default: []].insert(id)
+            }
+            for creg in writes {
                 lastClassicalWrite[creg] = id
+                lastClassicalReads[creg] = []
             }
         }
     }
@@ -148,6 +175,11 @@ public struct DAGCircuit: Sendable {
         guard predecessor != successor else { return }
         successors[predecessor, default: []].insert(successor)
         predecessors[successor, default: []].insert(predecessor)
+    }
+
+    /// Direct edge `predecessor → successor` (not a transitive path).
+    public func hasEdge(from predecessor: DAGNodeID, to successor: DAGNodeID) -> Bool {
+        successors[predecessor]?.contains(successor) ?? false
     }
 
     /// Removes `id`, splicing predecessors directly to successors.
@@ -235,31 +267,51 @@ public struct DAGCircuit: Sendable {
         }
     }
 
+    /// Classical registers written by `gate`, including nested ``Gate/c_if`` bodies.
     public static func classicalWrites(for gate: Gate) -> [Int] {
-        switch gate {
-        case .measure(let spec):
-            return [spec.classicalRegister]
-        default:
-            return []
+        var seen = Set<Int>()
+        var result: [Int] = []
+        func walk(_ g: Gate) {
+            switch g {
+            case .measure(let spec):
+                if seen.insert(spec.classicalRegister).inserted {
+                    result.append(spec.classicalRegister)
+                }
+            case .c_if(_, _, let inner):
+                walk(inner)
+            default:
+                break
+            }
         }
+        walk(gate)
+        return result
     }
 
+    /// Classical registers read by `gate`, including nested ``Gate/c_if`` conditions.
     public static func classicalReads(for gate: Gate) -> [Int] {
-        switch gate {
-        case .c_if(let classicalRegister, _, _):
-            return [classicalRegister]
-        default:
-            return []
+        var seen = Set<Int>()
+        var result: [Int] = []
+        func walk(_ g: Gate) {
+            switch g {
+            case .c_if(let classicalRegister, _, let inner):
+                if seen.insert(classicalRegister).inserted {
+                    result.append(classicalRegister)
+                }
+                walk(inner)
+            default:
+                break
+            }
         }
+        walk(gate)
+        return result
     }
 
-    /// `true` when the op is a removable idle / empty barrier for ``IdleIdentityRemovalPass``.
+    /// `true` when the op is a removable idle identity for ``IdleIdentityRemovalPass``.
+    /// Empty barriers are full-width ordering markers and are **not** idle.
     public static func isIdleIdentity(_ gate: Gate) -> Bool {
         switch gate {
         case .id:
             return true
-        case .barrier(let qubits):
-            return qubits.isEmpty
         default:
             return false
         }

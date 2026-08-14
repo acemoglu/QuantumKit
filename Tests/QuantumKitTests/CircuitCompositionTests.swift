@@ -153,4 +153,86 @@ extension QuantumKitTests {
             }
         }
     }
+
+    func testControlledControlZeroLeavesTarget() throws {
+        var xCircuit = try QuantumCircuit(qubitCount: 1)
+        try xCircuit.x(0)
+        let controlled = try xCircuit.controlled(controlCount: 1)
+
+        var prep = try QuantumCircuit(qubitCount: 2)
+        try prep.x(1) // target |1⟩, control |0⟩
+        let circuit = try prep.compose(controlled)
+
+        let engine = CPUStatevectorEngine()
+        let state = try CPUStateVector(qubitCount: 2)
+        _ = try engine.execute(circuit, on: state)
+        let probs = state.probabilities()
+        // |10⟩ (q1=1, q0=0) must stay; CX must not fire.
+        XCTAssertEqual(probs[2], 1.0, accuracy: 1e-6)
+        XCTAssertEqual(probs[0], 0, accuracy: 1e-6)
+        XCTAssertEqual(probs[1], 0, accuracy: 1e-6)
+        XCTAssertEqual(probs[3], 0, accuracy: 1e-6)
+    }
+
+    func testControlledHAndCustomUnitaryThrow() throws {
+        var hadamard = try QuantumCircuit(qubitCount: 1)
+        try hadamard.h(0)
+        XCTAssertThrowsError(try hadamard.controlled()) { error in
+            guard case QuantumCircuitError.unsupportedControlledGate = error else {
+                return XCTFail("expected unsupportedControlledGate, got \(error)")
+            }
+        }
+
+        var custom = try QuantumCircuit(qubitCount: 1)
+        try custom.customUnitary(
+            matrix: [
+                ComplexAmplitude(real: 1, imaginary: 0),
+                ComplexAmplitude(real: 0, imaginary: 0),
+                ComplexAmplitude(real: 0, imaginary: 0),
+                ComplexAmplitude(real: 1, imaginary: 0),
+            ],
+            qubits: [0]
+        )
+        XCTAssertThrowsError(try custom.controlled()) { error in
+            guard case QuantumCircuitError.unsupportedControlledGate = error else {
+                return XCTFail("expected unsupportedControlledGate, got \(error)")
+            }
+        }
+    }
+
+    func testAppendClassicalRegisterMapMeasureCIfExecuteParity() throws {
+        let destRegs = [try ClassicalRegisterSpec(bitCount: 1), try ClassicalRegisterSpec(bitCount: 1)]
+        var dest = try QuantumCircuit(qubitCount: 2, classicalRegisters: destRegs)
+        try dest.x(1)
+
+        var block = try QuantumCircuit(qubitCount: 1, classicalRegisters: [try ClassicalRegisterSpec(bitCount: 1)])
+        try block.measure(qubits: [0], classicalRegister: 0, classicalBitOffset: 0)
+        try block.apply(.c_if(classicalRegister: 0, expectedValue: 1, gate: .x(target: 0)))
+
+        try dest.append(block, qubitMap: [1], classicalRegisterMap: [1])
+
+        var hand = try QuantumCircuit(qubitCount: 2, classicalRegisters: destRegs)
+        try hand.x(1)
+        try hand.measure(qubits: [1], classicalRegister: 1, classicalBitOffset: 0)
+        try hand.apply(.c_if(classicalRegister: 1, expectedValue: 1, gate: .x(target: 1)))
+
+        XCTAssertEqual(dest.gates, hand.gates)
+        XCTAssertEqual(dest.classicalRegisters.count, 2)
+
+        let engine = CPUStatevectorEngine()
+        let composedState = try CPUStateVector(qubitCount: 2)
+        let handState = try CPUStateVector(qubitCount: 2)
+        let composedRun = try engine.execute(dest, on: composedState)
+        let handRun = try engine.execute(hand, on: handState)
+
+        let p1 = composedState.probabilities()
+        let p2 = handState.probabilities()
+        for index in 0..<4 {
+            XCTAssertEqual(p1[index], p2[index], accuracy: 1e-6)
+        }
+        // x(1) → measure 1 → c_if flips q1 back to |00⟩.
+        XCTAssertEqual(p1[0], 1.0, accuracy: 1e-6)
+        XCTAssertEqual(composedRun.classicalMemory, handRun.classicalMemory)
+        XCTAssertEqual(composedRun.classicalMemory.value(ofRegister: 1), 1)
+    }
 }

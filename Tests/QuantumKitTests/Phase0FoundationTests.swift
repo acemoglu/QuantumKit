@@ -119,7 +119,7 @@ extension QuantumKitTests {
     }
 
     func testQuantumCircuitJSONRoundTrip() throws {
-        var original = try QuantumCircuit(qubitCount: 3)
+        var original = try QuantumCircuit(qubitCount: 3, classicalRegisters: [try ClassicalRegisterSpec(bitCount: 2)])
         try original.h(0)
         try original.cx(0, 1)
         try original.rz(theta: 0.25, 2)

@@ -1,10 +1,10 @@
 import Foundation
 
-/// DAG-native pass: removes idle identity ops and empty barriers.
+/// DAG-native pass: removes idle identity ops.
 ///
-/// Drops ``Gate/id`` and ``Gate/barrier`` with an empty qubit list, splicing dependency
-/// edges so remaining ops stay ordered. Non-empty barriers and ``Gate/delay`` are kept
-/// (scheduling / ordering markers). Metadata on removed nodes is discarded; survivors
+/// Drops ``Gate/id``, splicing dependency edges so remaining ops stay ordered.
+/// ``Gate/barrier`` (including empty = full-width) and ``Gate/delay`` are kept as
+/// scheduling / ordering markers. Metadata on removed nodes is discarded; survivors
 /// keep theirs (see ``InstructionMetadata``).
 public struct IdleIdentityRemovalPass: DAGCompilerPass, CompilerPass {
     public init() {}
