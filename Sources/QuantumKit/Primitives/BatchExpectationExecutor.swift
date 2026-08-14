@@ -18,9 +18,9 @@ enum BatchExpectationExecutor {
             throw QuantumEngineError.qubitCountMismatch(circuit: qubitCount, state: circuits[0].qubitCount)
         }
 
-        let gateNoise = options.noise?.hasGateNoise == true
-        let canBatch = !gateNoise && circuits.allSatisfy(\.isUnitaryOnly)
-            && !circuits.contains(where: \.containsHostAppliedUnitaryGates)
+        let canBatch = circuits.allSatisfy {
+            ShotExecutionPolicy.canUseMetalUnitaryBatch(circuit: $0, noise: options.noise)
+        }
         let effectiveBatchSize = canBatch ? min(batchSize, circuits.count) : 1
 
         var rng = makePrimitiveRNG(seed: options.seed)

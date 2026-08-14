@@ -105,8 +105,13 @@ extension QuantumBackendFactory {
 
 /// CPU statevector backend backed by ``CPUStatevectorEngine``.
 ///
-/// Thread-safety: backend/engine may be shared; do not run concurrent shots that mutate a shared
-/// ``CPUStateVector``. Distinct per-shot states (as in ``run``) are safe across concurrent backends.
+/// Thread-safety: backend/engine may be shared. ``run`` allocates distinct per-shot
+/// ``CPUStateVector``s; when ``ShotExecutionPolicy/canBatch(circuit:noise:)`` those live
+/// in a worker pool (one state per worker, never a shared buffer) and each shot uses
+/// ``QuantumRNG/independentShotStream(seed:shotIndex:)`` (``QuantumRunOptions/seed``
+/// authoritative; the run-local ``QuantumRNG`` is **not** advanced). Coupled circuits stay
+/// serial on one sequential ``QuantumRNG``. Same `seed` will **not** match Metal sequential
+/// histograms for independent circuits — see ``SampleCountOptions/batchSize``.
 public final class CPUStatevectorBackend: QuantumBackend, @unchecked Sendable {
     public let engine: CPUStatevectorEngine
     /// Soft width cap from the constructing ``SimulationPolicy`` (≤ ``CPUStateVector/maxQubitCount``).
@@ -155,26 +160,16 @@ public final class CPUStatevectorBackend: QuantumBackend, @unchecked Sendable {
             if let shots = options.shots {
                 guard shots > 0 else { throw QuantumMeasurementError.invalidShotCount(shots) }
                 let counts = try SimulationProfiling.timePhase("sample") {
-                    var histogram: [Int: Int] = [:]
-                    for _ in 0..<shots {
-                        try cancellationCheck?()
-                        let state = try CPUStateVector(qubitCount: circuit.qubitCount)
-                        _ = try engine.executeRNG(
-                            circuit,
-                            on: state,
-                            rng: &rng,
-                            noise: options.noise,
-                            cancellationCheck: cancellationCheck
-                        )
-                        let outcome = try engine.measureCollapse(
-                            on: state,
-                            qubits: Array(0..<circuit.qubitCount),
-                            rng: &rng,
-                            noise: options.noise
-                        )
-                        histogram[outcome, default: 0] += 1
-                    }
-                    return ShotCounts(shots: shots, counts: histogram)
+                    try CPUShotSampler.runSampleCountsRNG(
+                        circuit: circuit,
+                        engine: engine,
+                        shots: shots,
+                        rng: &rng,
+                        noise: options.noise,
+                        options: options.sampleOptions,
+                        seed: options.seed,
+                        cancellationCheck: cancellationCheck
+                    )
                 }
                 return QuantumResult(
                     metadata: makeCPUMetadata(

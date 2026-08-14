@@ -57,6 +57,30 @@ public enum QuantumRNG: Sendable {
         return Int(nextUInt64() % UInt64(upperBound))
     }
 
+    /// Independent PRNG stream for shot `shotIndex` under a run-level `seed`.
+    ///
+    /// Used for every ``ShotExecutionPolicy/canBatch`` CPU shot (concurrent or serial,
+    /// including `batchSize == 1`): workers must not share one ``QuantumRNG``, and
+    /// `batchSize` must not change the seeded schedule. `shotIndex` is the global shot
+    /// ordinal (`0..<shots`), not a batch-local slot. Mixing is `splitMix64`-based and
+    /// injective in `shotIndex` for a fixed `seed` (bijective mix, then XOR with a
+    /// seed-derived constant).
+    ///
+    /// Stream root comes from ``QuantumRunOptions/seed``, or — when that is `nil` — the
+    /// initial state of a ``seeded`` backend RNG (``CPUShotSampler`` does not advance it).
+    ///
+    /// **Not** the same draw sequence as a single ``seeded`` stream advanced across shots
+    /// (legacy CPU / Metal unitary-batch measurement schedule). Same `seed` on Metal
+    /// therefore does **not** reproduce CPU ``canBatch`` histograms.
+    ///
+    /// Sequential ``seeded`` consumption remains only on ``ShotExecutionPolicy/mustSerial``
+    /// paths (projective mid-circuit measure / `c_if`).
+    public static func independentShotStream(seed: UInt64, shotIndex: Int) -> QuantumRNG {
+        precondition(shotIndex >= 0)
+        let mixed = splitMix64(seed) ^ splitMix64(UInt64(shotIndex) &+ 1)
+        return .seeded(splitMix64(mixed))
+    }
+
     /// Maps 32 random bits to a uniformly distributed `Float` in the half-open range `[0, 1)`.
     ///
     /// `Float32` has a 24-bit significand, so the top 24 bits are scaled by `2⁻²⁴`. Every result is

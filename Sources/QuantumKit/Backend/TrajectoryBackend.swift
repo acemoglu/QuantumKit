@@ -18,7 +18,8 @@ public enum TrajectoryBackendError: Error, Equatable {
 /// ``averageProbabilities(circuit:trajectories:seed:noise:)`` for explicit ensembles
 /// without a histogram.
 ///
-/// Thread-safety: same as the wrapped statevector backend (distinct per-shot states).
+/// Thread-safety: same as the wrapped statevector backend (distinct per-shot states;
+/// CPU independent shots may run concurrently — one state and RNG stream per worker).
 public final class TrajectoryBackend: QuantumBackend, @unchecked Sendable {
     public var method: QuantumSimulationMethod { .trajectory }
     /// Device of the wrapped statevector backend, not merely whether Metal exists on the host.

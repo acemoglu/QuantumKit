@@ -125,8 +125,11 @@ public struct QuantumMeasurement {
 
     /// Runs the circuit `shots` times from |0…0⟩, collapsing each run before the next.
     ///
-    /// Unitary-only circuits without gate noise are executed in batches on the GPU
-    /// (see ``SampleCountOptions/batchSize``).
+    /// Independent unitary circuits use Metal ``StateVectorBatch`` when
+    /// ``ShotExecutionPolicy/canUseMetalUnitaryBatch(circuit:noise:)`` (see
+    /// ``SampleCountOptions/batchSize``). Coupled / noisy-evolution paths stay serial.
+    /// Metal keeps one sequential measurement RNG; CPU ``canBatch`` uses per-shot streams
+    /// — same `seed` does not imply matching histograms across backends.
     public static func runSampleCounts(
         circuit: QuantumCircuit,
         engine: QuantumEngine,

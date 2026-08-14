@@ -8,7 +8,9 @@ public struct SimulationProfilingOptions: Sendable, Equatable {
     /// Host wall time around each top-level instruction, **when that engine instruments gates**.
     ///
     /// - CPU statevector / CPU density-matrix: one sample per circuit index, **summed across
-    ///   shots** (and any other serial re-executions in the same recorder scope).
+    ///   shots** (serial loops **and** concurrent independent-shot workers). Under shot
+    ///   parallelism the sum is aggregate host CPU-ns and can exceed the `sample` phase wall
+    ///   time; it is not a wall-clock exclusive duration.
     /// - Metal density-matrix: host-encode time per instruction (GPU drain is in the phase).
     /// - Metal statevector: **not instrumented**. Pending-unitary flush + `drainPipeline` run
     ///   after the gate loop; per-gate samples would be “append to pending,” not encode+wait.
@@ -64,11 +66,14 @@ public enum SimulationMemorySource: String, Codable, Sendable, Equatable {
 /// Host wall time for one top-level circuit instruction.
 ///
 /// ``index`` is unique in a finished profile: nanoseconds are **summed** across every
-/// application of that instruction (each shot, each nested `executeRNG` in the same run).
+/// application of that instruction (each shot — including concurrent CPU workers — and each
+/// nested `executeRNG` in the same run). Concurrent shots therefore accumulate aggregate
+/// CPU-ns that can exceed the owning phase’s wall clock.
 public struct SimulationGateTiming: Codable, Sendable, Equatable {
     /// Index into ``QuantumCircuit/gates``.
     public let index: Int
-    /// Sum of host wall time for this index over the profiled invocation.
+    /// Cumulative host nanoseconds for this index (sum over shots / re-executions; not
+    /// wall-clock exclusive under ``ShotExecutionPolicy/canBatch`` parallelism).
     public let wallClockNanoseconds: UInt64
 
     public init(index: Int, wallClockNanoseconds: UInt64) {
@@ -95,7 +100,8 @@ public struct SimulationProfile: Codable, Sendable, Equatable {
     public let wallClockNanoseconds: UInt64
     /// Primary quantum state footprint: SV `2^n` complex amplitudes, or DM `4^n` elements.
     public let stateBytes: Int
-    /// High-water estimate: ``stateBytes`` × live copies (shot batch pool) + one scratch copy.
+    /// High-water estimate: ``stateBytes`` × live copies (Metal ``StateVectorBatch`` or CPU
+    /// independent-shot worker pool) + one scratch copy.
     public let peakMemoryBytes: Int
     /// Always ``SimulationMemorySource/estimated`` in this release (not OS RSS).
     public let memorySource: SimulationMemorySource
@@ -135,8 +141,8 @@ public struct SimulationProfile: Codable, Sendable, Equatable {
 
 /// Host-side timing sink installed for the duration of a profiled run via ``TaskLocal``.
 ///
-/// Mutation is serialized with `NSLock` so inherited TaskLocal child tasks (future shot-parallel
-/// workers) cannot data-race the dictionaries. Prefer **one recorder per run**; do not append
+/// Mutation is serialized with `NSLock` so inherited TaskLocal child tasks and GCD shot
+/// workers cannot data-race the dictionaries. Prefer **one recorder per run**; do not append
 /// from unsynchronized shared state. Concurrent `timeGate` bodies may run in parallel; only
 /// the accounting update is locked.
 ///
@@ -401,24 +407,39 @@ enum SimulationMemoryFootprint {
             stateBytes = dim * dim * complexBytes
         }
 
-        let liveCopies: Int
-        switch method {
-        case .statevector, .trajectory:
-            if !isCPU, let shots, shots > 0 {
-                let evolutionNoise = BatchSampleExecutor.requiresEvolutionNoise(noise, circuit: circuit)
-                let canBatch = circuit.isUnitaryOnly
-                    && !evolutionNoise
-                    && !circuit.containsHostAppliedUnitaryGates
-                liveCopies = canBatch ? min(max(batchSize, 1), shots) : 1
-            } else {
-                liveCopies = 1
-            }
-        case .densityMatrix:
-            liveCopies = 1
-        }
+        let liveCopies = liveCopiesForEstimate(
+            method: method,
+            isCPU: isCPU,
+            shots: shots,
+            batchSize: batchSize,
+            circuit: circuit,
+            noise: noise
+        )
 
         // One extra state-sized workspace: Metal renorm/measure or DM scratch buffers.
         let peakBytes = stateBytes * liveCopies + stateBytes
         return (stateBytes, peakBytes)
+    }
+
+    static func liveCopiesForEstimate(
+        method: QuantumSimulationMethod,
+        isCPU: Bool,
+        shots: Int?,
+        batchSize: Int,
+        circuit: QuantumCircuit,
+        noise: NoiseModel?
+    ) -> Int {
+        switch method {
+        case .densityMatrix:
+            return 1
+        case .statevector, .trajectory:
+            return ShotExecutionPolicy.liveStateCopies(
+                circuit: circuit,
+                noise: noise,
+                shots: shots,
+                batchSize: batchSize,
+                isCPU: isCPU
+            )
+        }
     }
 }

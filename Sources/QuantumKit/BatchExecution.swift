@@ -4,8 +4,27 @@ import Metal
 /// Options for repeated circuit execution (sampling).
 public struct SampleCountOptions: Sendable, Equatable {
 
-    /// How many independent runs to group per GPU submission. Ignored when evolution noise,
-    /// mid-circuit measure/reset, or host-applied unitaries require sequential execution.
+    /// Requested grouping for independent shots. See ``ShotExecutionPolicy``.
+    ///
+    /// - Metal: ``StateVectorBatch`` capacity when
+    ///   ``ShotExecutionPolicy/canUseMetalUnitaryBatch(circuit:noise:)``; otherwise `1`
+    ///   (evolution noise, host-applied unitaries, reset/initialize, and
+    ///   ``ShotExecutionPolicy/mustSerial(circuit:noise:)`` stay serial — never share one
+    ///   RNG or one ``StateVector`` across threads). Unitary Metal batches keep **one
+    ///   sequential** measurement ``QuantumRNG`` (batch size does not change that schedule).
+    /// - CPU: worker-pool size when ``ShotExecutionPolicy/canBatch(circuit:noise:)``.
+    ///   Independent CPU shots **always** use ``QuantumRNG/independentShotStream(seed:shotIndex:)``
+    ///   (or hardware entropy when no seed is available) — including when `batchSize == 1`.
+    ///   Stream root: ``QuantumRunOptions/seed`` if set, otherwise the initial state of a
+    ///   backend-local ``QuantumRNG/seeded`` value, otherwise hardware per shot. That RNG is
+    ///   **not advanced** on the independent path. `batchSize` only controls concurrency and
+    ///   must **not** change seeded histograms *within that per-shot-stream contract*.
+    ///   ``ShotExecutionPolicy/mustSerial`` forces pool size `1` and one sequential ``QuantumRNG``.
+    ///
+    /// **Seed contract (breaking vs pre-shot-parallel CPU):** for ``canBatch`` circuits, a
+    /// fixed ``QuantumRunOptions/seed`` no longer matches (1) legacy single-stream sequential
+    /// CPU consumption or (2) Metal’s sequential measurement RNG. Prefer matching goldens to
+    /// ``independentShotStream``, or pin ``mustSerial`` circuits if you need one shared stream.
     public var batchSize: Int
 
     public init(batchSize: Int = 32) {
@@ -67,41 +86,61 @@ extension QuantumCircuit {
     /// `true` when density-matrix evolution is deterministic for `noise`, so terminal shots can
     /// be drawn from a single prepared ρ without re-executing the circuit.
     ///
-    /// Projective mid-circuit measures (and classical control that depends on them) make each
-    /// run stochastic; ``MeasurementMode/dephasingOnly`` remains deterministic on ρ.
+    /// Same coupling rule as ``ShotExecutionPolicy/mustSerial(circuit:noise:)``: projective
+    /// mid-circuit measures (and `c_if`) make each run stochastic;
+    /// ``MeasurementMode/dephasingOnly`` remains deterministic on ρ.
     public func allowsPreparedDensityShotBatching(noise: NoiseModel? = nil) -> Bool {
-        let projective = (noise?.measurementMode ?? .projective) == .projective
-        for gate in gates {
-            switch gate {
-            case .measure where projective:
-                return false
-            case .c_if:
-                return false
-            default:
-                continue
-            }
-        }
-        return true
+        ShotExecutionPolicy.canBatch(circuit: self, noise: noise)
     }
 
-    /// `true` when the circuit contains at least one ``Gate/delay``.
+    /// `true` when the circuit contains at least one ``Gate/delay`` (including nested
+    /// ``Gate/c_if`` bodies).
     var containsDelay: Bool {
-        gates.contains { gate in
-            if case .delay = gate { return true }
+        gates.contains { Self.gateContainsDelay($0) }
+    }
+
+    /// `true` when the circuit contains at least one ``Gate/measure`` (including nested
+    /// ``Gate/c_if`` bodies). Used for evolution-noise charging of measurement channels.
+    var containsMeasure: Bool {
+        gates.contains { Self.gateContainsMeasure($0) }
+    }
+
+    private static func gateContainsDelay(_ gate: Gate) -> Bool {
+        switch gate {
+        case .delay:
+            return true
+        case .c_if(_, _, let inner):
+            return gateContainsDelay(inner)
+        default:
+            return false
+        }
+    }
+
+    private static func gateContainsMeasure(_ gate: Gate) -> Bool {
+        switch gate {
+        case .measure:
+            return true
+        case .c_if(_, _, let inner):
+            return gateContainsMeasure(inner)
+        default:
             return false
         }
     }
 
     var containsHostAppliedUnitaryGates: Bool {
-        gates.contains { gate in
-            switch gate {
-            case .unitary1:
-                return true
-            case .customUnitary(_, let qubits) where qubits.count > 1:
-                return true
-            default:
-                return false
-            }
+        gates.contains { Self.gateContainsHostAppliedUnitary($0) }
+    }
+
+    private static func gateContainsHostAppliedUnitary(_ gate: Gate) -> Bool {
+        switch gate {
+        case .unitary1:
+            return true
+        case .customUnitary(_, let qubits) where qubits.count > 1:
+            return true
+        case .c_if(_, _, let inner):
+            return gateContainsHostAppliedUnitary(inner)
+        default:
+            return false
         }
     }
 }
@@ -110,11 +149,7 @@ enum BatchSampleExecutor {
 
     /// Noise that must be applied during circuit evolution (not only at terminal readout).
     static func requiresEvolutionNoise(_ noise: NoiseModel?, circuit: QuantumCircuit) -> Bool {
-        guard let noise else { return false }
-        if noise.hasGateNoise || noise.hasPreparationNoise || noise.hasMeasurementChannelNoise {
-            return true
-        }
-        return noise.hasIdleNoise && circuit.containsDelay
+        ShotExecutionPolicy.requiresEvolutionNoise(noise, circuit: circuit)
     }
 
     static func runSampleCountsRNG(
@@ -134,9 +169,14 @@ enum BatchSampleExecutor {
         var histogram: [Int: Int] = [:]
         histogram.reserveCapacity(min(shots, circuit.qubitCount > 0 ? 1 << circuit.qubitCount : 1))
 
-        let evolutionNoise = requiresEvolutionNoise(noise, circuit: circuit)
-        let canBatch = circuit.isUnitaryOnly && !evolutionNoise && !circuit.containsHostAppliedUnitaryGates
-        let batchSize = canBatch ? min(options.batchSize, shots) : 1
+        let evolutionNoise = ShotExecutionPolicy.requiresEvolutionNoise(noise, circuit: circuit)
+        let metalBatch = ShotExecutionPolicy.canUseMetalUnitaryBatch(circuit: circuit, noise: noise)
+        let batchSize = ShotExecutionPolicy.metalUnitaryBatchSize(
+            circuit: circuit,
+            noise: noise,
+            requested: options.batchSize,
+            shots: shots
+        )
 
         let pool = try StateVectorBatch(qubitCount: circuit.qubitCount, device: device, capacity: batchSize)
         var completedShots = 0
@@ -146,7 +186,7 @@ enum BatchSampleExecutor {
             let activeCount = min(batchSize, shots - completedShots)
             let activeStates = Array(pool.states.prefix(activeCount))
 
-            if canBatch {
+            if metalBatch {
                 for state in activeStates {
                     state.resetToZero()
                 }
@@ -159,6 +199,8 @@ enum BatchSampleExecutor {
                     histogram[outcome, default: 0] += 1
                 }
             } else {
+                // Coupled shots, evolution noise, or host unitaries: one state, one sequential
+                // RNG. Do not parallelize by sharing this stream or buffer.
                 for state in activeStates {
                     try cancellationCheck?()
                     state.resetToZero()

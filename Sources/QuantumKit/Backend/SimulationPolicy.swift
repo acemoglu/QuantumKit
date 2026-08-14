@@ -386,14 +386,14 @@ extension QuantumBackendFactory {
         case .trajectory:
             let ensemble = shots ?? policy.defaultTrajectoryShots
             let stateBytes = dim * complexBytes
-            // Noisy evolution forces BatchSampleExecutor batchSize = 1; only charge a Metal
-            // StateVectorBatch pool when shots can actually be batched.
-            let forcesSerialShots =
-                (noise?.hasGateNoise == true)
-                || (noise?.hasPreparationNoise == true)
-                || (noise?.hasMeasurementChannelNoise == true)
+            // Metal StateVectorBatch only when ``ShotExecutionPolicy`` allows unitary batching.
+            // Without a circuit, mid-circuit measure/`c_if` are unknown; evolution-noise channels
+            // still force serial Metal (CPU independent unraveling is charged in the profile,
+            // not this factory heuristic — CPU peak stays 2× SV).
             let metalBatch: Int
-            if device == .metal && !forcesSerialShots {
+            if device == .metal,
+               ShotExecutionPolicy.metalUnitaryBatchAllowedWithoutCircuit(noise: noise)
+            {
                 metalBatch = min(ensemble, SampleCountOptions().batchSize)
             } else {
                 metalBatch = 1
