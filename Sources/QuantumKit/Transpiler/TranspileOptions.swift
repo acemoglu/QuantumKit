@@ -37,6 +37,10 @@ public struct TranspileOptions: Sendable, Equatable {
     /// Expanding passes (unroll / basis expansion / schedule delay insertion) still strip metadata
     /// because instruction indices no longer align 1:1. Default is `false` (strip everywhere).
     public var preserveInstructionMetadata: Bool
+    /// Opt-in IR-level 1Q gate fusion (``GateFusionPass``). Default `false` — never silently
+    /// rewrites user circuits. When enabled, runs after algebraic / Clifford / local synthesis
+    /// so those passes can cancel / merge first; fusion then collapses remaining same-wire 1Q runs.
+    public var enableGateFusion: Bool
 
     public init(
         targetBasis: BasisGateSet = .ibmEagle,
@@ -50,7 +54,8 @@ public struct TranspileOptions: Sendable, Equatable {
         disableAncillaReuse: Bool = false,
         scheduling: SchedulingMethod? = nil,
         gateDurations: GateDurationTable = .uniform(1),
-        preserveInstructionMetadata: Bool = false
+        preserveInstructionMetadata: Bool = false,
+        enableGateFusion: Bool = false
     ) {
         self.targetBasis = targetBasis
         self.couplingMap = couplingMap
@@ -64,6 +69,7 @@ public struct TranspileOptions: Sendable, Equatable {
         self.scheduling = scheduling
         self.gateDurations = gateDurations
         self.preserveInstructionMetadata = preserveInstructionMetadata
+        self.enableGateFusion = enableGateFusion
     }
 
     /// Builds the ordered pass list for these options.
@@ -82,6 +88,9 @@ public struct TranspileOptions: Sendable, Equatable {
         if optimizationLevel >= 2 {
             passes.append(CliffordSimplificationPass())
             passes.append(LocalUnitarySynthesisPass())
+        }
+        if enableGateFusion {
+            passes.append(GateFusionPass())
         }
 
         let unroll = UnrollMultiQubitPass(
