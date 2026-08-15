@@ -183,6 +183,53 @@ extension QuantumKitTests {
         XCTAssertLessThan(mitErr, rawErr)
     }
 
+    /// Single-site PEC lite with identity omitted: infinite-sample value is
+    /// `(λ² - 2λ - 3)/4 = -1 + (4p/3)²/4` (O(p²) residual), not the raw `-λ`.
+    func testPECResidualIsSecondOrderInDepolarizingProbability() throws {
+        var circuit = try QuantumCircuit(qubitCount: 1)
+        try circuit.x(0)
+        let hamiltonian = try Hamiltonian(PauliTerm(coefficient: 1, label: "Z0"))
+        let p: QFloat = 0.1
+        let noise = NoiseModel(depolarizingProbability: p)
+        let backend = CPUDensityMatrixBackend()
+        let ideal: QFloat = -1
+
+        let lambda = 1 - (4 * p) / 3
+        let rawAnalytic = -lambda
+        // I branch sees one Φ; X/Y/Z recoveries see Φ∘R∘Φ → O(p²) leftover after QPR.
+        let pecAnalytic = (lambda * lambda - 2 * lambda - 3) / 4
+        let secondOrderBound = (4 * p / 3) * (4 * p / 3) // ε² with ε=4p/3
+        XCTAssertEqual(pecAnalytic, ideal + secondOrderBound / 4, accuracy: 1e-5)
+        XCTAssertLessThan(abs(pecAnalytic - ideal), 0.25 * abs(rawAnalytic - ideal))
+
+        let raw = try Estimator().run(
+            circuit: circuit,
+            hamiltonian: hamiltonian,
+            backend: backend,
+            options: QuantumRunOptions(noise: noise, seed: 7),
+            estimatorOptions: EstimatorOptions(shots: 16000)
+        )
+        let mitigated = try Estimator().run(
+            circuit: circuit,
+            hamiltonian: hamiltonian,
+            backend: backend,
+            options: QuantumRunOptions(noise: noise, seed: 7),
+            estimatorOptions: EstimatorOptions(
+                shots: 16000,
+                resilience: ResilienceOptions(
+                    pec: PECOptions(channel: .globalDepolarizing, circuitSamples: 2000)
+                )
+            )
+        )
+
+        XCTAssertEqual(raw.value, rawAnalytic, accuracy: 0.03)
+        XCTAssertEqual(mitigated.value, pecAnalytic, accuracy: 0.08)
+        XCTAssertLessThan(abs(mitigated.value - ideal), abs(raw.value - ideal))
+        // Residual must stay in the O(p²) ballpark, well below the O(p) raw bias.
+        XCTAssertLessThan(abs(mitigated.value - ideal), 3 * secondOrderBound)
+        XCTAssertGreaterThan(abs(raw.value - ideal), 0.5 * (4 * p / 3))
+    }
+
     func testInactiveZNEDoesNotBlockPEC() throws {
         var circuit = try QuantumCircuit(qubitCount: 1)
         try circuit.x(0)

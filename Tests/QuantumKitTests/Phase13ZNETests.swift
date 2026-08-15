@@ -154,6 +154,65 @@ extension QuantumKitTests {
         XCTAssertNotNil(result.metadata.pipelineHash)
     }
 
+    /// Independent oracle: |0⟩--Z--⟨Z⟩ under global dep has E(λ)=1-(4/3)pλ (unsaturated).
+    /// Exact DM scale points + linear ZNE must recover E(0)=1.
+    func testZNEExactDepolarizingScalesExtrapolateToIdeal() throws {
+        var circuit = try QuantumCircuit(qubitCount: 1)
+        try circuit.z(0)
+        let hamiltonian = try Hamiltonian(PauliTerm(coefficient: 1, label: "Z0"))
+        let p: QFloat = 0.05
+        let noise = NoiseModel(depolarizingProbability: p)
+        let scales: [QFloat] = [1, 2, 3]
+        let engine = CPUDensityMatrixEngine()
+
+        var values: [QFloat] = []
+        values.reserveCapacity(scales.count)
+        for λ in scales {
+            let scaled = noise.scalingGlobalDepolarizing(by: λ)
+            XCTAssertLessThanOrEqual(scaled.depolarizingProbability, 1, "unsaturated scales required")
+            let density = try CPUDensityMatrix(qubitCount: 1)
+            _ = try engine.execute(circuit, on: density, noise: scaled)
+            let value = try hamiltonian.expectation(density: density)
+            let predicted = 1 - (4 * p * λ) / 3
+            XCTAssertEqual(value, predicted, accuracy: 1e-5)
+            values.append(value)
+        }
+
+        let extrapolated = try ZeroNoiseExtrapolation.extrapolateLinear(
+            scaleFactors: scales,
+            values: values
+        )
+        XCTAssertEqual(extrapolated, 1, accuracy: 1e-5)
+    }
+
+    /// Shot Estimator ZNE on the same affine model should land near the ideal intercept.
+    func testEstimatorZNERecoversNearIdealOnSingleQubitDepolarizing() throws {
+        var circuit = try QuantumCircuit(qubitCount: 1)
+        try circuit.z(0)
+        let hamiltonian = try Hamiltonian(PauliTerm(coefficient: 1, label: "Z0"))
+        let p: QFloat = 0.05
+        let noise = NoiseModel(depolarizingProbability: p)
+        let zne = ZNEOptions(scaleFactors: [1, 2, 3], extrapolator: .linear)
+
+        let result = try Estimator().run(
+            circuit: circuit,
+            hamiltonian: hamiltonian,
+            backend: CPUDensityMatrixBackend(),
+            options: QuantumRunOptions(noise: noise, seed: 31),
+            estimatorOptions: EstimatorOptions(
+                shots: 8192,
+                resilience: ResilienceOptions(zne: zne)
+            )
+        )
+
+        let meta = try XCTUnwrap(result.zne)
+        for (λ, value) in zip(meta.scaleFactors, meta.valuesAtScale) {
+            let predicted = 1 - (4 * p * λ) / 3
+            XCTAssertEqual(value, predicted, accuracy: 0.06)
+        }
+        XCTAssertEqual(result.value, 1, accuracy: 0.08)
+    }
+
     func testInactiveZNEIgnoredWithReadoutMitigation() throws {
         var circuit = try QuantumCircuit(qubitCount: 1)
         try circuit.h(0)
