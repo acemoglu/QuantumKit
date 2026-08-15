@@ -44,8 +44,8 @@ extension QuantumMeasurement {
         let signMask = yMask | zMask
         try engine.drainPipeline()
 
-        let real = density.realBuffer.contents().assumingMemoryBound(to: QFloat.self)
-        let imag = density.imagBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let real = density.metalRealBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let imag = density.metalImagBuffer.contents().assumingMemoryBound(to: QFloat.self)
         let stateCount = density.stateCount
 
         var expectation = 0.0

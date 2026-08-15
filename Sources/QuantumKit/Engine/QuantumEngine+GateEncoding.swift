@@ -33,8 +33,8 @@ extension QuantumEngine {
         guard pairCount > 0 else { return }
 
         encoder.setComputePipelineState(pipeline)
-        encoder.setBuffer(state.realBuffer, offset: 0, index: 0)
-        encoder.setBuffer(state.imagBuffer, offset: 0, index: 1)
+        encoder.setBuffer(state.metalRealBuffer, offset: 0, index: 0)
+        encoder.setBuffer(state.metalImagBuffer, offset: 0, index: 1)
         configure(encoder)
         var pairCountValue = UInt32(pairCount)
         encoder.setBytes(&pairCountValue, length: MemoryLayout<UInt32>.stride, index: Self.pairCountBufferIndex)
@@ -100,8 +100,8 @@ extension QuantumEngine {
         var partialCount = renormBlockCount(for: state.stateCount)
 
         encoder.setComputePipelineState(pipelines.renormStateNormPartial)
-        encoder.setBuffer(state.realBuffer, offset: 0, index: 0)
-        encoder.setBuffer(state.imagBuffer, offset: 0, index: 1)
+        encoder.setBuffer(state.metalRealBuffer, offset: 0, index: 0)
+        encoder.setBuffer(state.metalImagBuffer, offset: 0, index: 1)
         encoder.setBytes(&stateElementCount, length: MemoryLayout<UInt32>.stride, index: 2)
         encoder.setBuffer(scratch.hiA, offset: 0, index: 3)
         encoder.setBuffer(scratch.loA, offset: 0, index: 4)
@@ -152,8 +152,8 @@ extension QuantumEngine {
         let threadCount = max(state.stateCount, 1)
 
         encoder.setComputePipelineState(pipeline)
-        encoder.setBuffer(state.realBuffer, offset: 0, index: 0)
-        encoder.setBuffer(state.imagBuffer, offset: 0, index: 1)
+        encoder.setBuffer(state.metalRealBuffer, offset: 0, index: 0)
+        encoder.setBuffer(state.metalImagBuffer, offset: 0, index: 1)
         configure(encoder)
 
         let threadsPerGrid = MTLSize(width: threadCount, height: 1, depth: 1)

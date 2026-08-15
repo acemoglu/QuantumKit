@@ -355,8 +355,8 @@ public final class DensityMatrixEngine: @unchecked Sendable {
     func renormalizeTrace(of density: DensityMatrix) throws {
         try drainPipeline()
 
-        let real = density.realBuffer.contents().assumingMemoryBound(to: QFloat.self)
-        let imag = density.imagBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let real = density.metalRealBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let imag = density.metalImagBuffer.contents().assumingMemoryBound(to: QFloat.self)
         let stateCount = density.stateCount
 
         var trace = 0.0
@@ -380,7 +380,7 @@ public final class DensityMatrixEngine: @unchecked Sendable {
         // of its own), so its only failure mode is command-buffer creation under extreme memory
         // pressure; there is no meaningful error to surface from this non-throwing accessor.
         try? drainPipeline()
-        let real = density.realBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let real = density.metalRealBuffer.contents().assumingMemoryBound(to: QFloat.self)
         return (0..<density.stateCount).map { basis in
             real[basis * density.stateCount + basis]
         }
@@ -418,8 +418,8 @@ public final class DensityMatrixEngine: @unchecked Sendable {
 
         // Pass A: temp = U * rho
         encoder.setComputePipelineState(pipelines.leftMultiplySingleQubit)
-        encoder.setBuffer(density.realBuffer, offset: 0, index: 0)
-        encoder.setBuffer(density.imagBuffer, offset: 0, index: 1)
+        encoder.setBuffer(density.metalRealBuffer, offset: 0, index: 0)
+        encoder.setBuffer(density.metalImagBuffer, offset: 0, index: 1)
         encoder.setBuffer(scratchReal, offset: 0, index: 2)
         encoder.setBuffer(scratchImag, offset: 0, index: 3)
         encoder.setBytes(&stateCount, length: MemoryLayout<UInt32>.stride, index: 4)
@@ -443,8 +443,8 @@ public final class DensityMatrixEngine: @unchecked Sendable {
         encoder.setComputePipelineState(pipelines.rightMultiplySingleQubitDagger)
         encoder.setBuffer(scratchReal, offset: 0, index: 0)
         encoder.setBuffer(scratchImag, offset: 0, index: 1)
-        encoder.setBuffer(density.realBuffer, offset: 0, index: 2)
-        encoder.setBuffer(density.imagBuffer, offset: 0, index: 3)
+        encoder.setBuffer(density.metalRealBuffer, offset: 0, index: 2)
+        encoder.setBuffer(density.metalImagBuffer, offset: 0, index: 3)
         encoder.setBytes(&stateCount, length: MemoryLayout<UInt32>.stride, index: 4)
         encoder.setBytes(&target, length: MemoryLayout<UInt32>.stride, index: 5)
         encoder.setBytes(&controlMask, length: MemoryLayout<UInt32>.stride, index: 6)
@@ -618,8 +618,8 @@ public final class DensityMatrixEngine: @unchecked Sendable {
         var krausCount = UInt32(kraus.count)
 
         encoder.setComputePipelineState(pipelines.applyKrausSingleQubit)
-        encoder.setBuffer(density.realBuffer, offset: 0, index: 0)
-        encoder.setBuffer(density.imagBuffer, offset: 0, index: 1)
+        encoder.setBuffer(density.metalRealBuffer, offset: 0, index: 0)
+        encoder.setBuffer(density.metalImagBuffer, offset: 0, index: 1)
         encoder.setBuffer(scratchReal, offset: 0, index: 2)
         encoder.setBuffer(scratchImag, offset: 0, index: 3)
         encoder.setBytes(&stateCount, length: MemoryLayout<UInt32>.stride, index: 4)
@@ -636,8 +636,8 @@ public final class DensityMatrixEngine: @unchecked Sendable {
         guard let blit = commandBuffer.makeBlitCommandEncoder() else {
             throw DensityMatrixEngineError.commandBufferCreationFailed
         }
-        blit.copy(from: scratchReal, sourceOffset: 0, to: density.realBuffer, destinationOffset: 0, size: density.realBuffer.length)
-        blit.copy(from: scratchImag, sourceOffset: 0, to: density.imagBuffer, destinationOffset: 0, size: density.imagBuffer.length)
+        blit.copy(from: scratchReal, sourceOffset: 0, to: density.metalRealBuffer, destinationOffset: 0, size: density.metalRealBuffer.length)
+        blit.copy(from: scratchImag, sourceOffset: 0, to: density.metalImagBuffer, destinationOffset: 0, size: density.metalImagBuffer.length)
         blit.endEncoding()
 
         // Reclaim the Kraus matrix only once this command buffer completes, then commit without
@@ -799,8 +799,8 @@ public final class DensityMatrixEngine: @unchecked Sendable {
         var count = UInt32(krausCount)
 
         encoder.setComputePipelineState(pipelines.applyKrausTwoQubit)
-        encoder.setBuffer(density.realBuffer, offset: 0, index: 0)
-        encoder.setBuffer(density.imagBuffer, offset: 0, index: 1)
+        encoder.setBuffer(density.metalRealBuffer, offset: 0, index: 0)
+        encoder.setBuffer(density.metalImagBuffer, offset: 0, index: 1)
         encoder.setBuffer(scratchReal, offset: 0, index: 2)
         encoder.setBuffer(scratchImag, offset: 0, index: 3)
         encoder.setBytes(&stateCount, length: MemoryLayout<UInt32>.stride, index: 4)
@@ -818,8 +818,8 @@ public final class DensityMatrixEngine: @unchecked Sendable {
         guard let blit = commandBuffer.makeBlitCommandEncoder() else {
             throw DensityMatrixEngineError.commandBufferCreationFailed
         }
-        blit.copy(from: scratchReal, sourceOffset: 0, to: density.realBuffer, destinationOffset: 0, size: density.realBuffer.length)
-        blit.copy(from: scratchImag, sourceOffset: 0, to: density.imagBuffer, destinationOffset: 0, size: density.imagBuffer.length)
+        blit.copy(from: scratchReal, sourceOffset: 0, to: density.metalRealBuffer, destinationOffset: 0, size: density.metalRealBuffer.length)
+        blit.copy(from: scratchImag, sourceOffset: 0, to: density.metalImagBuffer, destinationOffset: 0, size: density.metalImagBuffer.length)
         blit.endEncoding()
 
         // Reclaim the Kraus matrix only once this command buffer completes, then commit without
@@ -1012,7 +1012,7 @@ public final class DensityMatrixEngine: @unchecked Sendable {
         // collapse in this measurement) were committed without blocking, so drain the serial queue
         // before touching the shared density buffer to avoid reading stale, pre-dispatch contents.
         try drainPipeline()
-        let real = density.realBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let real = density.metalRealBuffer.contents().assumingMemoryBound(to: QFloat.self)
         let stateCount = density.stateCount
         var sum = 0.0
         for i in 0..<stateCount where (i >> qubit) & 1 == bit {
@@ -1703,8 +1703,8 @@ extension DensityMatrixEngine {
             }
         }
 
-        let real = density.realBuffer.contents().assumingMemoryBound(to: QFloat.self)
-        let imag = density.imagBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let real = density.metalRealBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let imag = density.metalImagBuffer.contents().assumingMemoryBound(to: QFloat.self)
 
         var rho = [[(re: Double, im: Double)]](
             repeating: Array(repeating: (0.0, 0.0), count: dimension),

@@ -13,11 +13,11 @@ public struct QuantumMeasurement {
     /// The full complex state vector (amplitude index uses ``QubitBitOrdering/engineLSB``:
     /// bit `k` ↔ qubit `k`, qubit 0 = LSB). Do not reinterpret without an explicit conversion.
     ///
-    /// Reads `realBuffer`/`imagBuffer` directly from unified memory; the buffers are
-    /// current as long as any preceding ``QuantumEngine`` execution has completed.
+    /// Reads GPU-resident amplitudes from unified memory; values are current as long as any
+    /// preceding ``QuantumEngine`` execution has completed.
     public static func amplitudes(state: StateVector) -> [ComplexAmplitude] {
-        let realPointer = state.realBuffer.contents().assumingMemoryBound(to: QFloat.self)
-        let imagPointer = state.imagBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let realPointer = state.metalRealBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let imagPointer = state.metalImagBuffer.contents().assumingMemoryBound(to: QFloat.self)
 
         return (0..<state.stateCount).map { index in
             ComplexAmplitude(real: realPointer[index], imaginary: imagPointer[index])
@@ -43,11 +43,13 @@ public struct QuantumMeasurement {
     /// (``QubitBitOrdering/engineLSB`` index).
     public static func probabilities(state: StateVector, engine: QuantumEngine) throws -> [QFloat] {
         let byteCount = state.stateCount * MemoryLayout<QFloat>.stride
-        guard let buffer = state.realBuffer.device.makeBuffer(length: byteCount, options: .storageModeShared) else {
+        // Allocate on the engine's device so the probability kernel writes a buffer it can bind;
+        // the normal device-free path uses the same shared MetalRuntime device for state and engine.
+        guard let buffer = engine.device.makeBuffer(length: byteCount, options: .storageModeShared) else {
             throw StateVectorError.bufferAllocationFailed(requiredBytes: byteCount)
         }
 
-        try engine.executeProbabilityKernel(on: state, outputBuffer: buffer)
+        try engine.executeProbabilityKernel(on: state, into: buffer)
 
         let pointer = buffer.contents().assumingMemoryBound(to: QFloat.self)
         return Array(UnsafeBufferPointer(start: pointer, count: state.stateCount))

@@ -25,8 +25,8 @@ extension DensityMatrix {
             throw error
         }
 
-        let real = realBuffer.contents().assumingMemoryBound(to: QFloat.self)
-        let imag = imagBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let real = metalRealBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let imag = metalImagBuffer.contents().assumingMemoryBound(to: QFloat.self)
         real.update(repeating: 0, count: elementCount)
         imag.update(repeating: 0, count: elementCount)
 

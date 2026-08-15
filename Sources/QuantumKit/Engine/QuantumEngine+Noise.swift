@@ -174,8 +174,8 @@ extension QuantumEngine {
         var countValue = UInt32(elementCount)
 
         computeEncoder.setComputePipelineState(pipelines.maskedPopulationReduce)
-        computeEncoder.setBuffer(state.realBuffer, offset: 0, index: 0)
-        computeEncoder.setBuffer(state.imagBuffer, offset: 0, index: 1)
+        computeEncoder.setBuffer(state.metalRealBuffer, offset: 0, index: 0)
+        computeEncoder.setBuffer(state.metalImagBuffer, offset: 0, index: 1)
         computeEncoder.setBytes(&targetQubit, length: MemoryLayout<UInt32>.stride, index: 2)
         computeEncoder.setBytes(&countValue, length: MemoryLayout<UInt32>.stride, index: 3)
         computeEncoder.setBuffer(partialsBuffer, offset: 0, index: 4)
@@ -275,8 +275,8 @@ extension QuantumEngine {
         var weightValue = weight
         var elementCount = UInt32(stateCount)
         computeEncoder.setComputePipelineState(pipelines.trajectoryWeightedPopulationPartial)
-        computeEncoder.setBuffer(state.realBuffer, offset: 0, index: 0)
-        computeEncoder.setBuffer(state.imagBuffer, offset: 0, index: 1)
+        computeEncoder.setBuffer(state.metalRealBuffer, offset: 0, index: 0)
+        computeEncoder.setBuffer(state.metalImagBuffer, offset: 0, index: 1)
         computeEncoder.setBytes(&targetQubit, length: MemoryLayout<UInt32>.stride, index: 2)
         computeEncoder.setBytes(&weightValue, length: MemoryLayout<QFloat>.stride, index: 3)
         computeEncoder.setBytes(&elementCount, length: MemoryLayout<UInt32>.stride, index: 4)

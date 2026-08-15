@@ -15,8 +15,8 @@ extension StateVector {
             throw StateVectorInitializationError.invalidBasisIndex(index: index, stateCount: stateCount)
         }
 
-        let realPointer = realBuffer.contents().assumingMemoryBound(to: QFloat.self)
-        let imagPointer = imagBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let realPointer = metalRealBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let imagPointer = metalImagBuffer.contents().assumingMemoryBound(to: QFloat.self)
 
         realPointer.update(repeating: 0, count: stateCount)
         imagPointer.update(repeating: 0, count: stateCount)
@@ -34,8 +34,8 @@ extension StateVector {
 
         try UnitaryValidation.validateUnitNorm(amplitudes)
 
-        let realPointer = realBuffer.contents().assumingMemoryBound(to: QFloat.self)
-        let imagPointer = imagBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let realPointer = metalRealBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let imagPointer = metalImagBuffer.contents().assumingMemoryBound(to: QFloat.self)
 
         for index in 0..<stateCount {
             realPointer[index] = amplitudes[index].real
@@ -93,8 +93,8 @@ extension StateVector {
             )
         }
 
-        let realPointer = realBuffer.contents().assumingMemoryBound(to: QFloat.self)
-        let imagPointer = imagBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let realPointer = metalRealBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let imagPointer = metalImagBuffer.contents().assumingMemoryBound(to: QFloat.self)
 
         for index in 0..<stateCount {
             realPointer[index] = amplitudes[index].real

@@ -14,7 +14,9 @@ public enum DensityMatrixError: Error {
 /// (real + imaginary components). Designed for low-qubit, high-fidelity noisy simulation.
 ///
 /// Prefer ``init(qubitCount:)`` (resolves ``MetalRuntime``) so callers never touch Metal.
-/// Explicit ``MTLDevice`` allocation and ``device`` remain available but are **deprecated** (H6b).
+/// Read state via engine probabilities / expectations or ``snapshotHostMatrix()`` — raw buffers
+/// are package-`internal` `metal*` (H7 soft; not Swift `private`). Explicit ``MTLDevice``
+/// allocation and ``device`` remain available but are **deprecated** (H6b).
 ///
 /// Thread-safety: a single ``DensityMatrix`` must not be mutated concurrently. Distinct matrices
 /// may be evolved in parallel with the same or separate ``DensityMatrixEngine`` instances.
@@ -33,8 +35,22 @@ public final class DensityMatrix {
     @available(*, deprecated, message: "Prefer device-free init(qubitCount:). Reading MTLDevice is deprecated; removal planned for a future major (H6c).")
     public var device: MTLDevice { metalDevice }
 
-    public let realBuffer: MTLBuffer
-    public let imagBuffer: MTLBuffer
+    /// Package-internal real-matrix storage (engine / measure only).
+    let metalRealBuffer: MTLBuffer
+    /// Package-internal imaginary-matrix storage (engine / measure only).
+    let metalImagBuffer: MTLBuffer
+
+    /// Deprecated raw buffer accessor. Prefer probabilities / snapshot APIs; storage is package-`internal`.
+    ///
+    /// Scheduled for removal in a future major (H7b).
+    @available(*, deprecated, message: "Use amplitudes/probabilities APIs; buffers are package-internal. Removal planned for a future major (H7b).")
+    public var realBuffer: MTLBuffer { metalRealBuffer }
+
+    /// Deprecated raw buffer accessor. Prefer probabilities / snapshot APIs; storage is package-`internal`.
+    ///
+    /// Scheduled for removal in a future major (H7b).
+    @available(*, deprecated, message: "Use amplitudes/probabilities APIs; buffers are package-internal. Removal planned for a future major (H7b).")
+    public var imagBuffer: MTLBuffer { metalImagBuffer }
 
     /// Creates a GPU density matrix via ``MetalRuntime/sharedDevice()`` (no caller Metal imports).
     public convenience init(qubitCount: Int) throws {
@@ -74,16 +90,16 @@ public final class DensityMatrix {
         self.stateCount = stateCount
         self.elementCount = elementCount
         self.metalDevice = device
-        self.realBuffer = realBuffer
-        self.imagBuffer = imagBuffer
+        self.metalRealBuffer = realBuffer
+        self.metalImagBuffer = imagBuffer
 
         resetToGroundState()
     }
 
     /// Resets to `|0...0><0...0|` without reallocating buffers.
     public func resetToGroundState() {
-        let real = realBuffer.contents().assumingMemoryBound(to: QFloat.self)
-        let imag = imagBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let real = metalRealBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let imag = metalImagBuffer.contents().assumingMemoryBound(to: QFloat.self)
         real.update(repeating: 0, count: elementCount)
         imag.update(repeating: 0, count: elementCount)
         real[0] = 1.0
@@ -91,8 +107,8 @@ public final class DensityMatrix {
 
     /// Host copy of ρ after GPU work has drained. Prefer ``DensityMatrixEngine/snapshot(_:)``.
     public func snapshotHostMatrix() -> DensityMatrixSnapshot {
-        let realPointer = realBuffer.contents().assumingMemoryBound(to: QFloat.self)
-        let imagPointer = imagBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let realPointer = metalRealBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let imagPointer = metalImagBuffer.contents().assumingMemoryBound(to: QFloat.self)
         var real = [Float](repeating: 0, count: elementCount)
         var imag = [Float](repeating: 0, count: elementCount)
         for index in 0..<elementCount {
@@ -110,8 +126,8 @@ public final class DensityMatrix {
         guard snapshot.real.count == elementCount, snapshot.imag.count == elementCount else {
             throw CheckpointError.elementCountMismatch(expected: elementCount, actual: snapshot.real.count)
         }
-        let realPointer = realBuffer.contents().assumingMemoryBound(to: QFloat.self)
-        let imagPointer = imagBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let realPointer = metalRealBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let imagPointer = metalImagBuffer.contents().assumingMemoryBound(to: QFloat.self)
         for index in 0..<elementCount {
             realPointer[index] = snapshot.real[index]
             imagPointer[index] = snapshot.imag[index]

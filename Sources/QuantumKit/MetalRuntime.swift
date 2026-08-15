@@ -28,8 +28,20 @@ import Metal
 /// construction) were migrated in H6b to the device-free APIs. Do not treat “no remaining
 /// labeled call sites” as proof that external clients never used those overloads.
 ///
+/// ## Public `MTLBuffer` inventory (H7 soft)
+/// Soft encapsulation: amplitude storage is package-`internal` `metalRealBuffer` /
+/// `metalImagBuffer` (same-module / `@testable` visible — not Swift `private`). Public
+/// `realBuffer` / `imagBuffer` are deprecated same-instance wrappers until H7b.
+/// - ``StateVector/realBuffer`` / ``StateVector/imagBuffer`` — **deprecated** wrappers over
+///   package-`internal` `metalRealBuffer` / `metalImagBuffer` (H7b removal)
+/// - ``DensityMatrix/realBuffer`` / ``DensityMatrix/imagBuffer`` — **deprecated** wrappers over
+///   package-`internal` `metalRealBuffer` / `metalImagBuffer` (H7b removal)
+/// - ``QuantumEngine/executeProbabilityKernel(on:outputBuffer:)`` — **deprecated**; prefer
+///   ``QuantumMeasurement/probabilities(state:engine:)``; package-`internal`
+///   `executeProbabilityKernel(on:into:)` remains for engines
+///
 /// H6c (future major): remove the deprecated public `device:` inits / ``DensityMatrix/device``.
-/// H7 (out of scope): encapsulate raw `MTLBuffer` surfaces.
+/// H7b (future major): remove deprecated public `MTLBuffer` accessors / probability-kernel shim.
 public enum MetalRuntime: Sendable {
 
     private static let lock = NSLock()

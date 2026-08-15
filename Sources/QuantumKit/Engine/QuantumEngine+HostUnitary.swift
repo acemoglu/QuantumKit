@@ -10,8 +10,8 @@ extension QuantumEngine {
         // Host reads shared Metal buffers; drain any in-flight GPU writes first.
         try drainPipeline()
 
-        let realPointer = state.realBuffer.contents().assumingMemoryBound(to: QFloat.self)
-        let imagPointer = state.imagBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let realPointer = state.metalRealBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let imagPointer = state.metalImagBuffer.contents().assumingMemoryBound(to: QFloat.self)
         let bit = 1 << target
 
         var updatedReal = Array(repeating: QFloat(0), count: state.stateCount)
@@ -86,8 +86,8 @@ extension QuantumEngine {
         // Host reads shared Metal buffers; drain any in-flight GPU writes first.
         try drainPipeline()
 
-        let realPointer = state.realBuffer.contents().assumingMemoryBound(to: QFloat.self)
-        let imagPointer = state.imagBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let realPointer = state.metalRealBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let imagPointer = state.metalImagBuffer.contents().assumingMemoryBound(to: QFloat.self)
         let outerCount = 1 << (state.qubitCount - qubits.count)
 
         var updatedReal = Array(repeating: QFloat(0), count: state.stateCount)

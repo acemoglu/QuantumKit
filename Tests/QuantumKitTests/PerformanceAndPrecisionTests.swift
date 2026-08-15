@@ -147,8 +147,8 @@ extension QuantumKitTests {
             }
 
             encoder.setComputePipelineState(pipeline)
-            encoder.setBuffer(state.realBuffer, offset: 0, index: 0)
-            encoder.setBuffer(state.imagBuffer, offset: 0, index: 1)
+            encoder.setBuffer(state.metalRealBuffer, offset: 0, index: 0)
+            encoder.setBuffer(state.metalImagBuffer, offset: 0, index: 1)
             setArguments(encoder)
             var pairCountValue = UInt32(pairCount)
             encoder.setBytes(

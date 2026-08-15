@@ -16,12 +16,14 @@ public enum StateVectorError: Error {
 
 /// A GPU-resident quantum state vector.
 ///
-/// `StateVector` is a **reference type**: its amplitudes live in shared `MTLBuffer`s, so two
+/// `StateVector` is a **reference type**: its amplitudes live in shared Metal buffers, so two
 /// variables that refer to the same instance read and write the same GPU memory (mutating one
 /// via ``resetToZero()`` or a kernel mutates the other). Create a fresh instance per independent
 /// state rather than copying.
 ///
 /// Prefer ``init(qubitCount:)`` (resolves ``MetalRuntime``) so callers never touch Metal.
+/// Read state via ``QuantumMeasurement/amplitudes(state:)``, ``QuantumMeasurement/probabilities(state:engine:)``,
+/// or ``snapshotHostAmplitudes()`` — raw buffers are package-`internal` `metal*` (H7 soft; not Swift `private`).
 /// Explicit ``MTLDevice`` allocation remains available but is **deprecated** (H6b); removal is H6c.
 ///
 /// - Important: A single `StateVector` is **not** safe to mutate from multiple threads at once.
@@ -33,8 +35,22 @@ public final class StateVector {
     public let qubitCount: Int
     public let stateCount: Int
 
-    public let realBuffer: MTLBuffer
-    public let imagBuffer: MTLBuffer
+    /// Package-internal real-amplitude storage (engine / measure only).
+    let metalRealBuffer: MTLBuffer
+    /// Package-internal imaginary-amplitude storage (engine / measure only).
+    let metalImagBuffer: MTLBuffer
+
+    /// Deprecated raw buffer accessor. Prefer amplitudes / probabilities APIs; storage is package-`internal`.
+    ///
+    /// Scheduled for removal in a future major (H7b).
+    @available(*, deprecated, message: "Use amplitudes/probabilities APIs; buffers are package-internal. Removal planned for a future major (H7b).")
+    public var realBuffer: MTLBuffer { metalRealBuffer }
+
+    /// Deprecated raw buffer accessor. Prefer amplitudes / probabilities APIs; storage is package-`internal`.
+    ///
+    /// Scheduled for removal in a future major (H7b).
+    @available(*, deprecated, message: "Use amplitudes/probabilities APIs; buffers are package-internal. Removal planned for a future major (H7b).")
+    public var imagBuffer: MTLBuffer { metalImagBuffer }
 
     /// Creates a GPU state vector via ``MetalRuntime/sharedDevice()`` (no caller Metal imports).
     public convenience init(qubitCount: Int) throws {
@@ -73,8 +89,8 @@ public final class StateVector {
 
         self.qubitCount = qubitCount
         self.stateCount = computedStateCount
-        self.realBuffer = realBuffer
-        self.imagBuffer = imagBuffer
+        self.metalRealBuffer = realBuffer
+        self.metalImagBuffer = imagBuffer
 
         let realPointer = realBuffer.contents().assumingMemoryBound(to: QFloat.self)
         let imagPointer = imagBuffer.contents().assumingMemoryBound(to: QFloat.self)
@@ -87,8 +103,8 @@ public final class StateVector {
 
     /// Resets amplitudes to |0…0⟩ without reallocating GPU buffers.
     public func resetToZero() {
-        let realPointer = realBuffer.contents().assumingMemoryBound(to: QFloat.self)
-        let imagPointer = imagBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let realPointer = metalRealBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let imagPointer = metalImagBuffer.contents().assumingMemoryBound(to: QFloat.self)
 
         realPointer.update(repeating: 0, count: stateCount)
         imagPointer.update(repeating: 0, count: stateCount)
@@ -100,8 +116,8 @@ public final class StateVector {
     /// Call only after GPU work on this state has completed (e.g. via ``QuantumEngine/drainPipeline()``
     /// or after ``QuantumEngine/executeRNG`` returns). Prefer ``QuantumEngine/snapshot(_:)``.
     public func snapshotHostAmplitudes() -> StateVectorSnapshot {
-        let realPointer = realBuffer.contents().assumingMemoryBound(to: QFloat.self)
-        let imagPointer = imagBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let realPointer = metalRealBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let imagPointer = metalImagBuffer.contents().assumingMemoryBound(to: QFloat.self)
         var real = [Float](repeating: 0, count: stateCount)
         var imag = [Float](repeating: 0, count: stateCount)
         for index in 0..<stateCount {
@@ -119,8 +135,8 @@ public final class StateVector {
         guard snapshot.real.count == stateCount, snapshot.imag.count == stateCount else {
             throw CheckpointError.elementCountMismatch(expected: stateCount, actual: snapshot.real.count)
         }
-        let realPointer = realBuffer.contents().assumingMemoryBound(to: QFloat.self)
-        let imagPointer = imagBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let realPointer = metalRealBuffer.contents().assumingMemoryBound(to: QFloat.self)
+        let imagPointer = metalImagBuffer.contents().assumingMemoryBound(to: QFloat.self)
         for index in 0..<stateCount {
             realPointer[index] = snapshot.real[index]
             imagPointer[index] = snapshot.imag[index]

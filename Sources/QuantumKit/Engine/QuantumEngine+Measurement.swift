@@ -220,8 +220,8 @@ extension QuantumEngine {
         var binCountValue = UInt32(binCount)
         var elementCount = UInt32(stateCount)
         encoder.setComputePipelineState(pipelines.marginalLeafHistogram)
-        encoder.setBuffer(state.realBuffer, offset: 0, index: 0)
-        encoder.setBuffer(state.imagBuffer, offset: 0, index: 1)
+        encoder.setBuffer(state.metalRealBuffer, offset: 0, index: 0)
+        encoder.setBuffer(state.metalImagBuffer, offset: 0, index: 1)
         encoder.setBuffer(qubitBuffer, offset: 0, index: 2)
         encoder.setBytes(&measuredCount, length: MemoryLayout<UInt32>.stride, index: 3)
         encoder.setBytes(&binCountValue, length: MemoryLayout<UInt32>.stride, index: 4)
@@ -293,7 +293,7 @@ extension QuantumEngine {
         let buffer = try bufferPool.acquire(length: byteCount)
         defer { bufferPool.release(buffer) }
 
-        try executeProbabilityKernel(on: state, outputBuffer: buffer)
+        try executeProbabilityKernel(on: state, into: buffer)
         let pointer = buffer.contents().assumingMemoryBound(to: QFloat.self)
 
         var marginal = [Double](repeating: 0, count: 1 << qubits.count)
@@ -457,8 +457,8 @@ extension QuantumEngine {
         var phaseImag = phaseBaseImag
         var elementCount = UInt32(stateCount)
         computeEncoder.setComputePipelineState(pipelines.pauliExpectationPartial)
-        computeEncoder.setBuffer(state.realBuffer, offset: 0, index: 0)
-        computeEncoder.setBuffer(state.imagBuffer, offset: 0, index: 1)
+        computeEncoder.setBuffer(state.metalRealBuffer, offset: 0, index: 0)
+        computeEncoder.setBuffer(state.metalImagBuffer, offset: 0, index: 1)
         computeEncoder.setBytes(&flipMaskValue, length: MemoryLayout<UInt32>.stride, index: 2)
         computeEncoder.setBytes(&signMaskValue, length: MemoryLayout<UInt32>.stride, index: 3)
         computeEncoder.setBytes(&phaseReal, length: MemoryLayout<QFloat>.stride, index: 4)
@@ -509,7 +509,8 @@ extension QuantumEngine {
         return QFloat(Double(hiPtr[0]) + Double(loPtr[0]))
     }
 
-    public func executeProbabilityKernel(on state: StateVector, outputBuffer: MTLBuffer) throws {
+    /// Package-internal Born-rule probability encoding into a shared buffer.
+    func executeProbabilityKernel(on state: StateVector, into outputBuffer: MTLBuffer) throws {
         guard let commandBuffer = commandQueue.makeCommandBuffer(),
               let computeEncoder = commandBuffer.makeComputeCommandEncoder() else {
             throw QuantumEngineError.commandBufferCreationFailed
@@ -525,5 +526,13 @@ extension QuantumEngine {
         if let error = commandBuffer.error {
             throw QuantumEngineError.commandBufferExecutionFailed(underlying: error)
         }
+    }
+
+    /// Deprecated raw MTLBuffer probability encoding. Prefer ``QuantumMeasurement/probabilities(state:engine:)``.
+    ///
+    /// Scheduled for removal in a future major (H7b).
+    @available(*, deprecated, message: "Use QuantumMeasurement.probabilities; raw MTLBuffer probability encoding is package-internal. Removal planned for a future major (H7b).")
+    public func executeProbabilityKernel(on state: StateVector, outputBuffer: MTLBuffer) throws {
+        try executeProbabilityKernel(on: state, into: outputBuffer)
     }
 }
