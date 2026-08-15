@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "description": "Frozen reference oracles for QuantumKit (item 40). Hand-derived analytic values; no Aer/Stim. Keys: engine LSB basis (index 0 = |0…0⟩). Tolerances allow QFloat (Float32) gate-parameter rounding on rotation fixtures.",
+  "amplitudeTolerance": 1e-6,
+  "probabilityTolerance": 1e-6,
+  "pauliTolerance": 1e-5,
+  "entries": [
+    {
+      "id": "zero_state",
+      "qubitCount": 1,
+      "ops": [],
+      "amplitudesReal": [1.0, 0.0],
+      "amplitudesImag": [0.0, 0.0],
+      "probabilities": [1.0, 0.0],
+      "pauliExpectations": [
+        { "paulis": { "0": "z" }, "value": 1.0 },
+        { "paulis": { "0": "x" }, "value": 0.0 }
+      ]
+    },
+    {
+      "id": "plus_state",
+      "qubitCount": 1,
+      "ops": [["h", 0]],
+      "amplitudesReal": [0.7071067811865475, 0.7071067811865475],
+      "amplitudesImag": [0.0, 0.0],
+      "probabilities": [0.5, 0.5],
+      "pauliExpectations": [
+        { "paulis": { "0": "x" }, "value": 1.0 },
+        { "paulis": { "0": "z" }, "value": 0.0 }
+      ]
+    },
+    {
+      "id": "bell_phi_plus",
+      "qubitCount": 2,
+      "ops": [["h", 0], ["cx", 0, 1]],
+      "amplitudesReal": [0.7071067811865475, 0.0, 0.0, 0.7071067811865475],
+      "amplitudesImag": [0.0, 0.0, 0.0, 0.0],
+      "probabilities": [0.5, 0.0, 0.0, 0.5],
+      "pauliExpectations": [
+        { "paulis": { "0": "x", "1": "x" }, "value": 1.0 },
+        { "paulis": { "0": "y", "1": "y" }, "value": -1.0 },
+        { "paulis": { "0": "z", "1": "z" }, "value": 1.0 },
+        { "paulis": { "0": "z" }, "value": 0.0 }
+      ],
+      "stabilizerClifford": true
+    },
+    {
+      "id": "ghz3",
+      "qubitCount": 3,
+      "ops": [["h", 0], ["cx", 0, 1], ["cx", 0, 2]],
+      "amplitudesReal": [0.7071067811865475, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.7071067811865475],
+      "amplitudesImag": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+      "probabilities": [0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5],
+      "pauliExpectations": [
+        { "paulis": { "0": "z", "1": "z" }, "value": 1.0 },
+        { "paulis": { "0": "x", "1": "x", "2": "x" }, "value": 1.0 },
+        { "paulis": { "0": "z" }, "value": 0.0 }
+      ],
+      "stabilizerClifford": true
+    },
+    {
+      "id": "ry_pi_over_3",
+      "qubitCount": 1,
+      "ops": [["ry", 1.0471975511965976, 0]],
+      "comment": "RY(π/3)|0⟩ = cos(π/6)|0⟩ + sin(π/6)|1⟩; ⟨Z⟩=cos(π/3)=1/2, ⟨X⟩=sin(π/3)=√3/2",
+      "amplitudesReal": [0.8660254037844386, 0.5],
+      "amplitudesImag": [0.0, 0.0],
+      "probabilities": [0.75, 0.25],
+      "pauliExpectations": [
+        { "paulis": { "0": "z" }, "value": 0.5 },
+        { "paulis": { "0": "x" }, "value": 0.8660254037844386 }
+      ]
+    }
+  ]
+}

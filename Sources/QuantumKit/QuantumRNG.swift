@@ -75,6 +75,9 @@ public enum QuantumRNG: Sendable {
     ///
     /// Sequential ``seeded`` consumption remains only on ``ShotExecutionPolicy/mustSerial``
     /// paths (projective mid-circuit measure / `c_if`).
+    ///
+    /// Determinism policy for the claimed paths is encoded in `DeterminismTests`
+    /// (bit-identical replay within one backend method; CPU≠Metal under the same seed is intentional).
     public static func independentShotStream(seed: UInt64, shotIndex: Int) -> QuantumRNG {
         precondition(shotIndex >= 0)
         let mixed = splitMix64(seed) ^ splitMix64(UInt64(shotIndex) &+ 1)

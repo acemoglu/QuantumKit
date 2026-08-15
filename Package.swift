@@ -36,7 +36,11 @@ let package = Package(
         ),
         .testTarget(
             name: "QuantumKitTests",
-            dependencies: ["QuantumKit"]
+            dependencies: ["QuantumKit"],
+            resources: [
+                // Frozen analytic oracles for OracleConformanceTests / ShotStatisticsTests (no Aer/Stim).
+                .copy("Resources")
+            ]
         ),
     ]
 )
