@@ -13,6 +13,11 @@ public enum QuantumSimulationMethod: String, Codable, Sendable, Equatable {
     /// ``SimulationPolicy/preferStabilizerWhenClifford`` and the circuit-aware
     /// ``QuantumBackendFactory/recommendMethod(circuit:noise:policy:)``.
     case stabilizer
+    /// Host CPU matrix-product-state simulation for 1D-ish circuits (B18 MVP).
+    ///
+    /// Not selected by ``recommendMethod``. Construct with
+    /// ``QuantumBackendFactory/makeMPS(configuration:)``.
+    case mps
 }
 
 /// Options for a single ``QuantumBackend/run(circuit:options:)`` invocation.

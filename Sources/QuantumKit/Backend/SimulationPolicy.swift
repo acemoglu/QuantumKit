@@ -244,6 +244,8 @@ extension QuantumBackendFactory {
             )
         case .stabilizer:
             return makeStabilizer(maxQubitCount: StabilizerTableau.maxQubitCount)
+        case .mps:
+            return makeMPS()
         }
     }
 
@@ -292,6 +294,13 @@ extension QuantumBackendFactory {
         maxQubitCount: Int = StabilizerTableau.maxQubitCount
     ) -> any QuantumBackend {
         StabilizerBackend(maxQubitCount: maxQubitCount)
+    }
+
+    /// Host CPU MPS backend (1D open chain, configurable χ). Always CPU; never auto-selected.
+    public static func makeMPS(
+        configuration: MPSConfiguration = .default
+    ) -> any QuantumBackend {
+        MPSBackend(configuration: configuration)
     }
 
     /// Builds a trajectory (SV Monte-Carlo ensemble) backend for the requested device preference.
@@ -465,6 +474,11 @@ extension QuantumBackendFactory {
             let bitCells = rows * 2 * qubitCount + rows
             let stateBytes = max((bitCells + 7) / 8, 64)
             return (stateBytes, stateBytes * 2, nil)
+        case .mps:
+            // Rough O(n χ²) complex amplitudes with default χ=64.
+            let chi = 64
+            let stateBytes = max(qubitCount, 1) * 2 * chi * chi * complexBytes
+            return (stateBytes, stateBytes * 2, nil)
         }
     }
 
@@ -522,6 +536,10 @@ extension QuantumBackendFactory {
             // ~O(gate · n²) tableau bit updates.
             let n = Double(max(qubitCount, 1))
             baseNS = gateFactor * n * n * 8.0
+        case .mps:
+            // ~O(gate · χ³) with default χ=64 heuristic.
+            let chi = 64.0
+            baseNS = gateFactor * chi * chi * chi * 0.05
         }
         let clamped = min(max(baseNS * deviceScale, 1.0), Double(UInt64.max) * 0.5)
         return UInt64(clamped)

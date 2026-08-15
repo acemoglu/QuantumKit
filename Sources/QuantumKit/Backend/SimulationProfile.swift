@@ -409,6 +409,9 @@ enum SimulationMemoryFootprint {
             let rows = 2 * qubitCount + 1
             let bitCells = rows * 2 * qubitCount + rows
             stateBytes = max((bitCells + 7) / 8, 64)
+        case .mps:
+            let chi = 64
+            stateBytes = max(qubitCount, 1) * 2 * chi * chi * complexBytes
         }
 
         let liveCopies = liveCopiesForEstimate(
@@ -450,6 +453,9 @@ enum SimulationMemoryFootprint {
             if ShotExecutionPolicy.mustSerial(circuit: circuit, noise: noise) {
                 return 1
             }
+            return min(max(batchSize, 1), shots, max(ProcessInfo.processInfo.activeProcessorCount, 1))
+        case .mps:
+            guard let shots, shots > 0 else { return 1 }
             return min(max(batchSize, 1), shots, max(ProcessInfo.processInfo.activeProcessorCount, 1))
         }
     }

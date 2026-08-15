@@ -836,6 +836,9 @@ extension QuantumKitTests {
             let rows = 2 * qubitCount + 1
             let bitCells = rows * 2 * qubitCount + rows
             expectedState = max((bitCells + 7) / 8, 64)
+        case .mps:
+            let chi = 64
+            expectedState = max(qubitCount, 1) * 2 * chi * chi * complexBytes
         }
         XCTAssertEqual(profile.stateBytes, expectedState, file: file, line: line)
         XCTAssertGreaterThanOrEqual(profile.peakMemoryBytes, profile.stateBytes, file: file, line: line)

@@ -33,7 +33,7 @@ public struct SamplerResult: Sendable, Equatable {
 ///
 /// Without `shots`, returns exact Born-rule / diagonal probabilities. With `shots`, returns a
 /// shot histogram plus empirical frequencies. Supported on statevector, density-matrix
-/// (prepared-ρ batching when possible), and trajectory backends.
+/// (prepared-ρ batching when possible), trajectory, and host MPS backends.
 ///
 /// When ``QuantumRunOptions/resilience`` includes ``ResilienceOptions/readoutMitigation``,
 /// host-side inverse readout correction is applied to shot histograms after sampling
@@ -62,6 +62,9 @@ public struct Sampler: Sendable {
             }
             if let cpuSV = backend as? CPUStatevectorBackend {
                 return try sample(circuit: circuit, backend: cpuSV, options: options)
+            }
+            if let mps = backend as? MPSBackend {
+                return try sample(circuit: circuit, backend: mps, options: options)
             }
             throw SamplerError.unsupportedBackend
         }
@@ -319,6 +322,45 @@ public struct Sampler: Sendable {
                 options: options,
                 started: started,
                 method: .statevector,
+                deviceName: "CPU"
+            ),
+            qubitCount: circuit.qubitCount,
+            quasiProbabilities: quasiProbabilities
+        )
+    }
+
+    private func sample(
+        circuit: QuantumCircuit,
+        backend: MPSBackend,
+        options: QuantumRunOptions
+    ) throws -> SamplerResult {
+        if options.shots != nil {
+            return try sampleShotsFromBackendRun(
+                circuit: circuit,
+                backend: backend,
+                options: options,
+                method: .mps,
+                deviceName: "CPU"
+            )
+        }
+        let started = DispatchTime.now()
+        let quasiProbabilities = try SimulationProfiling.timePhase("evolve") {
+            var state = try MPSState(
+                qubitCount: circuit.qubitCount,
+                configuration: backend.configuration
+            )
+            _ = try backend.engine.execute(circuit, on: &state)
+            return makeBitstringProbabilities(
+                probabilities: try state.probabilities(),
+                qubitCount: circuit.qubitCount
+            )
+        }
+        return SamplerResult(
+            metadata: makeSamplerMetadata(
+                circuit: circuit,
+                options: options,
+                started: started,
+                method: .mps,
                 deviceName: "CPU"
             ),
             qubitCount: circuit.qubitCount,
