@@ -34,6 +34,10 @@ public struct SamplerResult: Sendable, Equatable {
 /// Without `shots`, returns exact Born-rule / diagonal probabilities. With `shots`, returns a
 /// shot histogram plus empirical frequencies. Supported on statevector, density-matrix
 /// (prepared-ρ batching when possible), and trajectory backends.
+///
+/// When ``QuantumRunOptions/resilience`` includes ``ResilienceOptions/readoutMitigation``,
+/// host-side inverse readout correction is applied to shot histograms after sampling
+/// (exact Born paths are unchanged).
 public struct Sampler: Sendable {
     public init() {}
 
@@ -62,6 +66,45 @@ public struct Sampler: Sendable {
         }
     }
 
+    /// Apply opt-in readout mitigation and build quasi-probabilities from the kept shots.
+    private func mitigatedShotResult(
+        counts: ShotCounts,
+        circuit: QuantumCircuit,
+        options: QuantumRunOptions,
+        started: DispatchTime,
+        method: QuantumSimulationMethod,
+        deviceName: String? = nil,
+        pipelineHash: String? = nil
+    ) throws -> SamplerResult {
+        let shots = counts.shots
+        let finalCounts = try applyResilienceIfNeeded(
+            counts,
+            qubitCount: circuit.qubitCount,
+            resilience: options.resilience
+        )
+        let bitstrings = finalCounts.bitstringCounts(qubitCount: circuit.qubitCount)
+        let quasiProbabilities = bitstrings.mapValues { QFloat($0) / QFloat(max(shots, 1)) }
+        let resolvedHash = pipelineHash ?? PipelineFingerprint.hash(
+            circuit: circuit,
+            method: method,
+            options: options
+        )
+        return SamplerResult(
+            metadata: makeSamplerMetadata(
+                circuit: circuit,
+                options: options,
+                started: started,
+                method: method,
+                deviceName: deviceName,
+                effectiveShots: shots,
+                pipelineHash: resolvedHash
+            ),
+            qubitCount: circuit.qubitCount,
+            quasiProbabilities: quasiProbabilities,
+            shotCounts: finalCounts
+        )
+    }
+
     private func sample(
         circuit: QuantumCircuit,
         backend: StatevectorBackend,
@@ -81,21 +124,12 @@ public struct Sampler: Sendable {
                     options: options.sampleOptions
                 )
             }
-
-            let bitstrings = counts.bitstringCounts(qubitCount: circuit.qubitCount)
-            let quasiProbabilities = bitstrings.mapValues { QFloat($0) / QFloat(shots) }
-
-            return SamplerResult(
-                metadata: makeSamplerMetadata(
-                    circuit: circuit,
-                    options: options,
-                    started: started,
-                    method: .statevector,
-                    effectiveShots: shots
-                ),
-                qubitCount: circuit.qubitCount,
-                quasiProbabilities: quasiProbabilities,
-                shotCounts: counts
+            return try mitigatedShotResult(
+                counts: counts,
+                circuit: circuit,
+                options: options,
+                started: started,
+                method: .statevector
             )
         }
 
@@ -146,19 +180,12 @@ public struct Sampler: Sendable {
                     noise: options.noise
                 )
             }
-            let bitstrings = counts.bitstringCounts(qubitCount: circuit.qubitCount)
-            let quasiProbabilities = bitstrings.mapValues { QFloat($0) / QFloat(shots) }
-            return SamplerResult(
-                metadata: makeSamplerMetadata(
-                    circuit: circuit,
-                    options: options,
-                    started: started,
-                    method: .densityMatrix,
-                    effectiveShots: shots
-                ),
-                qubitCount: circuit.qubitCount,
-                quasiProbabilities: quasiProbabilities,
-                shotCounts: counts
+            return try mitigatedShotResult(
+                counts: counts,
+                circuit: circuit,
+                options: options,
+                started: started,
+                method: .densityMatrix
             )
         }
 
@@ -207,20 +234,13 @@ public struct Sampler: Sendable {
                     noise: options.noise
                 )
             }
-            let bitstrings = counts.bitstringCounts(qubitCount: circuit.qubitCount)
-            let quasiProbabilities = bitstrings.mapValues { QFloat($0) / QFloat(shots) }
-            return SamplerResult(
-                metadata: makeSamplerMetadata(
-                    circuit: circuit,
-                    options: options,
-                    started: started,
-                    method: .densityMatrix,
-                    deviceName: "CPU",
-                    effectiveShots: shots
-                ),
-                qubitCount: circuit.qubitCount,
-                quasiProbabilities: quasiProbabilities,
-                shotCounts: counts
+            return try mitigatedShotResult(
+                counts: counts,
+                circuit: circuit,
+                options: options,
+                started: started,
+                method: .densityMatrix,
+                deviceName: "CPU"
             )
         }
 
@@ -319,22 +339,25 @@ public struct Sampler: Sendable {
         // Successful `backend.run` always sets `shotCounts` when `options.shots` is set.
         // The empty histogram is a defensive fallback, not a physics path for a missing sample.
         let counts = result.shotCounts ?? ShotCounts(shots: shots, counts: [:])
-        let bitstrings = counts.bitstringCounts(qubitCount: circuit.qubitCount)
-        return SamplerResult(
-            metadata: makeSamplerMetadata(
-                circuit: circuit,
-                options: options,
-                started: started,
-                method: method,
-                deviceName: deviceName,
-                effectiveShots: shots,
-                pipelineHash: result.metadata.pipelineHash
-            ),
-            qubitCount: circuit.qubitCount,
-            quasiProbabilities: bitstrings.mapValues { QFloat($0) / QFloat(shots) },
-            shotCounts: counts
+        return try mitigatedShotResult(
+            counts: counts,
+            circuit: circuit,
+            options: options,
+            started: started,
+            method: method,
+            deviceName: deviceName,
+            pipelineHash: result.metadata.pipelineHash
         )
     }
+}
+
+func applyResilienceIfNeeded(
+    _ counts: ShotCounts,
+    qubitCount: Int,
+    resilience: ResilienceOptions
+) throws -> ShotCounts {
+    guard let matrix = resilience.readoutMitigation else { return counts }
+    return try ReadoutMitigation.apply(to: counts, matrix: matrix, qubitCount: qubitCount)
 }
 
 private func makeSamplerMetadata(

@@ -10,7 +10,9 @@ public enum PipelineFingerprint {
     public static func hash(
         circuit: QuantumCircuit,
         method: QuantumSimulationMethod,
-        options: QuantumRunOptions
+        options: QuantumRunOptions,
+        /// Extra physics-affecting tokens (e.g. ``Estimator`` QWC grouping flag).
+        extra: [String] = []
     ) -> String {
         var hasher = FNV64()
         hasher.combine(QuantumKitInfo.version)
@@ -29,7 +31,25 @@ public enum PipelineFingerprint {
         if let noise = options.noise {
             hasher.combine(canonicalNoise(noise))
         }
+        if let matrix = options.resilience.readoutMitigation {
+            hasher.combine("rm:\(matrix.qubitCount):\(matrix.probabilities)")
+        }
+        for token in extra {
+            hasher.combine(token)
+        }
         return String(format: "%016llx", hasher.finalize())
+    }
+
+    /// Run options with Estimator-resolved shots / resilience for reproducibility hashing.
+    public static func optionsForEstimatorFingerprint(
+        runOptions: QuantumRunOptions,
+        resolvedShots: Int?,
+        resolvedResilience: ResilienceOptions
+    ) -> QuantumRunOptions {
+        var options = runOptions
+        options.shots = resolvedShots
+        options.resilience = resolvedResilience
+        return options
     }
 
     private static func canonicalNoise(_ noise: NoiseModel) -> String {

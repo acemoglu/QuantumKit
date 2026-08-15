@@ -17,19 +17,24 @@ public struct QuantumRunOptions: Sendable, Equatable {
     public var sampleOptions: SampleCountOptions
     /// Host-side telemetry. Default off; enabling it must not change shot histograms or amplitudes.
     public var profiling: SimulationProfilingOptions
+    /// Opt-in resilience (default ``ResilienceOptions/disabled``). Sampler applies
+    /// ``ResilienceOptions/readoutMitigation`` to shot histograms when set.
+    public var resilience: ResilienceOptions
 
     public init(
         noise: NoiseModel? = nil,
         seed: UInt64? = nil,
         shots: Int? = nil,
         sampleOptions: SampleCountOptions = SampleCountOptions(),
-        profiling: SimulationProfilingOptions = .disabled
+        profiling: SimulationProfilingOptions = .disabled,
+        resilience: ResilienceOptions = .disabled
     ) {
         self.noise = noise
         self.seed = seed
         self.shots = shots
         self.sampleOptions = sampleOptions
         self.profiling = profiling
+        self.resilience = resilience
     }
 }
 

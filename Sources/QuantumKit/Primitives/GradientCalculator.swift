@@ -2,16 +2,12 @@ import Foundation
 
 /// Computes Hamiltonian expectation gradients via parameter-shift or adjoint differentiation.
 ///
-/// Parameter-shift (default): for each symbolic parameter θ,
-/// `∂⟨H⟩/∂θ = ½ (⟨H⟩(θ + π/2) − ⟨H⟩(θ − π/2))`.
+/// Parameter-shift (default): for each symbolic parameter θ with homogeneous gate-angle
+/// scale `s` (`φ = s·θ` in RX/RY/RZ/RXX/RYY/RZZ),
+/// `∂⟨H⟩/∂θ = (s/2) (⟨H⟩(θ + π/(2s)) − ⟨H⟩(θ − π/(2s)))` (signed `s`, including `s < 0`).
 ///
 /// Adjoint: reverse-mode sweep with O(1) circuit evolutions in the parameter count
 /// (``StatevectorBackend`` only; `RX`/`RY`/`RZ` parameters).
-///
-/// Parameter-shift and adjoint metadata profiles use `isCPU: false`: both supported backends
-/// are Metal (`StatevectorBackend` / `DensityMatrixBackend`). CPU backends throw
-/// ``GradientCalculatorError/unsupportedBackend`` (or adjoint's statevector requirement)
-/// before a profile is built.
 ///
 /// Under ``SimulationProfilingOptions/detailed``, parameter-shift installs one outer recorder and
 /// times a single `gradient` phase. Nested exact ``Estimator`` calls reuse that recorder for
@@ -79,48 +75,36 @@ public struct GradientCalculator: Sendable {
             }
         }
 
-        let payload = try SimulationProfiling.timePhase("gradient") { () -> (QFloat, [ParameterGradient], Int, QuantumSimulationMethod) in
-            let baseCircuit = try circuit.bind(parameters: parameters)
-            let baseResult = try estimator.run(
-                circuit: baseCircuit,
-                hamiltonian: hamiltonian,
-                backend: backend,
-                options: options
-            )
+        var scales: [String: QFloat] = [:]
+        for name in parameterNames {
+            scales[name] = try ParameterShift.homogeneousScale(for: name, in: circuit)
+        }
 
-            var shiftJobs: [(parameter: String, polarity: ShiftPolarity, circuit: QuantumCircuit)] = []
+        let payload = try SimulationProfiling.timePhase("gradient") { () -> (QFloat, [ParameterGradient], Int, QuantumSimulationMethod, Bool) in
+            let baseCircuit = try circuit.bind(parameters: parameters)
+
+            var shiftJobs: [(parameter: String, polarity: ShiftPolarity, scale: QFloat, circuit: QuantumCircuit)] = []
             shiftJobs.reserveCapacity(parameterNames.count * 2)
 
             for name in parameterNames {
-                let plusBindings = shiftedBindings(parameters: parameters, parameter: name, by: ParameterShift.shift)
-                let minusBindings = shiftedBindings(parameters: parameters, parameter: name, by: -ParameterShift.shift)
-                shiftJobs.append((name, .plus, try circuit.bind(parameters: plusBindings)))
-                shiftJobs.append((name, .minus, try circuit.bind(parameters: minusBindings)))
+                let scale = scales[name] ?? 1
+                let delta = ParameterShift.parameterShiftAmount(scale: scale)
+                let plusBindings = shiftedBindings(parameters: parameters, parameter: name, by: delta)
+                let minusBindings = shiftedBindings(parameters: parameters, parameter: name, by: -delta)
+                shiftJobs.append((name, .plus, scale, try circuit.bind(parameters: plusBindings)))
+                shiftJobs.append((name, .minus, scale, try circuit.bind(parameters: minusBindings)))
             }
 
-            let shiftedExpectations: [QFloat]
-            let method: QuantumSimulationMethod
-
-            if let statevectorBackend = backend as? StatevectorBackend {
-                method = .statevector
-                shiftedExpectations = try BatchExpectationExecutor.evaluate(
-                    circuits: shiftJobs.map(\.circuit),
-                    hamiltonian: hamiltonian,
-                    engine: statevectorBackend.engine,
-                    options: options,
-                    batchSize: gradientOptions.batchSize
-                )
-            } else if let densityBackend = backend as? DensityMatrixBackend {
-                method = .densityMatrix
-                shiftedExpectations = try BatchExpectationExecutor.evaluate(
-                    circuits: shiftJobs.map(\.circuit),
-                    hamiltonian: hamiltonian,
-                    engine: densityBackend.engine,
-                    options: options
-                )
-            } else {
-                throw GradientCalculatorError.unsupportedBackend
-            }
+            let allCircuits = [baseCircuit] + shiftJobs.map(\.circuit)
+            let evaluated = try ShiftedExpectationEvaluator.evaluate(
+                circuits: allCircuits,
+                hamiltonian: hamiltonian,
+                backend: backend,
+                options: options,
+                batchSize: gradientOptions.batchSize
+            )
+            let baseValue = evaluated.values[0]
+            let shiftedExpectations = Array(evaluated.values.dropFirst())
 
             var gradientsByName: [String: QFloat] = [:]
             gradientsByName.reserveCapacity(parameterNames.count)
@@ -130,11 +114,11 @@ public struct GradientCalculator: Sendable {
                 let expectation = shiftedExpectations[index]
                 switch job.polarity {
                 case .plus:
-                    let minusIndex = index + 1
-                    let minusExpectation = shiftedExpectations[minusIndex]
+                    let minusExpectation = shiftedExpectations[index + 1]
                     gradientsByName[job.parameter] = ParameterShift.gradient(
                         plusExpectation: expectation,
-                        minusExpectation: minusExpectation
+                        minusExpectation: minusExpectation,
+                        scale: job.scale
                     )
                 case .minus:
                     continue
@@ -148,24 +132,29 @@ public struct GradientCalculator: Sendable {
                 )
             }
 
-            return (baseResult.value, parameterGradients, 1 + shiftJobs.count, method)
+            return (
+                baseValue,
+                parameterGradients,
+                allCircuits.count,
+                evaluated.method,
+                evaluated.isCPU
+            )
         }
 
         let elapsed = DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds
         let metadata = QuantumResultMetadata(
             method: payload.3,
             seed: options.seed,
-            deviceName: MetalRuntime.deviceName,
+            deviceName: payload.4 ? "CPU" : MetalRuntime.deviceName,
             wallClockNanoseconds: elapsed,
             qubitCount: circuit.qubitCount,
             gateCount: circuit.gates.count,
             noiseSnapshot: options.noise,
-            // Metal-only backends (CPU throws unsupportedBackend above).
             profile: SimulationProfiling.finishProfile(
                 options: options,
                 circuit: circuit,
                 method: payload.3,
-                isCPU: false,
+                isCPU: payload.4,
                 elapsed: elapsed
             )
         )
