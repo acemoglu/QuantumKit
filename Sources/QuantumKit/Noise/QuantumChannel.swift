@@ -9,6 +9,14 @@ public enum QuantumChannelError: Error, Equatable {
     case emptyKrausSet
     case invalidKrausDimension(operatorIndex: Int, count: Int)
     case pauliProbabilitiesExceedOne(sum: QFloat)
+    /// Process matrix must be length 16 (row-major 4×4) for 1-qubit import.
+    case invalidProcessMatrixDimension(count: Int, expected: Int)
+    /// Only 1-qubit Choi / superoperator import is supported (no multi-qubit Kraus import kernel).
+    case multiQubitProcessMatrixUnsupported(qubitCount: Int)
+    /// Choi failed the practical hermiticity check `|H - H†|∞ > tol`.
+    case choiNotHermitian(maxDeviation: QFloat)
+    /// Choi had an eigenvalue below `-eigenvalueTolerance` (not positive semidefinite within tol).
+    case choiNotPositiveSemidefinite(minimumEigenvalue: QFloat)
 }
 
 /// A physical noise channel attachable to specific gates or qubits.

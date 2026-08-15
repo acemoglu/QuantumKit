@@ -37,7 +37,8 @@ public struct SamplerResult: Sendable, Equatable {
 ///
 /// When ``QuantumRunOptions/resilience`` includes ``ResilienceOptions/readoutMitigation``,
 /// host-side inverse readout correction is applied to shot histograms after sampling
-/// (exact Born paths are unchanged).
+/// (exact Born paths are unchanged). ``ResilienceOptions/zne`` and ``ResilienceOptions/pec``
+/// are Estimator-only and are ignored here (also omitted from ``pipelineHash``).
 public struct Sampler: Sendable {
     public init() {}
 
@@ -87,7 +88,12 @@ public struct Sampler: Sendable {
         let resolvedHash = pipelineHash ?? PipelineFingerprint.hash(
             circuit: circuit,
             method: method,
-            options: options
+            // Sampler applies readout mitigation only — do not hash Estimator-only ZNE/PEC.
+            options: {
+                var fingerprintOptions = options
+                fingerprintOptions.resilience = options.resilience.readoutOnly
+                return fingerprintOptions
+            }()
         )
         return SamplerResult(
             metadata: makeSamplerMetadata(
@@ -339,14 +345,15 @@ public struct Sampler: Sendable {
         // Successful `backend.run` always sets `shotCounts` when `options.shots` is set.
         // The empty histogram is a defensive fallback, not a physics path for a missing sample.
         let counts = result.shotCounts ?? ShotCounts(shots: shots, counts: [:])
+        // Do not reuse backend.run's pipelineHash: it folds full QuantumRunOptions.resilience
+        // (including Estimator-only ZNE/PEC). Sampler recomputes with readoutOnly.
         return try mitigatedShotResult(
             counts: counts,
             circuit: circuit,
             options: options,
             started: started,
             method: method,
-            deviceName: deviceName,
-            pipelineHash: result.metadata.pipelineHash
+            deviceName: deviceName
         )
     }
 }

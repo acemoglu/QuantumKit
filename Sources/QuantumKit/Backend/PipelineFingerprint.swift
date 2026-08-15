@@ -34,6 +34,14 @@ public enum PipelineFingerprint {
         if let matrix = options.resilience.readoutMitigation {
             hasher.combine("rm:\(matrix.qubitCount):\(matrix.probabilities)")
         }
+        if let zne = options.resilience.zne, zne.isActive {
+            hasher.combine(
+                "zne:\(ZNEScalingMethod.globalDepolarizing.rawValue):\(zne.extrapolator.rawValue):\(zne.scaleFactors)"
+            )
+        }
+        if let pec = options.resilience.pec {
+            hasher.combine(ProbabilisticErrorCancellation.fingerprintToken(for: pec))
+        }
         for token in extra {
             hasher.combine(token)
         }

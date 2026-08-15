@@ -282,6 +282,17 @@ public struct NoiseModel: Sendable, Equatable, Codable {
         return bits.map { flipReadoutBit($0, rng: &rng) }
     }
 
+    /// C13 ZNE helper: stretch **global** ``depolarizingProbability`` by `scale` (clamped to
+    /// `[0, 1]`). Other channels and localized rules are left unchanged.
+    ///
+    /// When `depolarizingProbability * scale > 1`, the clamp saturates at 1 and further
+    /// increases in `scale` no longer amplify noise — linear ZNE fits using such scales are biased.
+    public func scalingGlobalDepolarizing(by scale: QFloat) -> NoiseModel {
+        var copy = self
+        copy.depolarizingProbability = Self.clamp(depolarizingProbability * max(scale, 0))
+        return copy
+    }
+
     private static func clamp(_ value: QFloat) -> QFloat {
         min(max(value, 0), 1)
     }

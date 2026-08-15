@@ -20,8 +20,10 @@ public enum EstimatorError: Error, Equatable {
 ///
 /// ## Resilience
 /// ``resilience`` (when enabled) applies host-side readout mitigation to each shot
-/// ensemble before parity moments. If ``resilience`` is ``disabled``, the estimator
-/// falls back to ``QuantumRunOptions/resilience``. Exact paths ignore resilience.
+/// ensemble before parity moments, optionally **zero-noise extrapolation** (``ZNEOptions``),
+/// and/or **PEC lite** (``PECOptions``) on the shot path. ZNE and PEC cannot be combined
+/// in this MVP. If ``resilience`` is ``disabled``, the estimator falls back to
+/// ``QuantumRunOptions/resilience``. Exact paths ignore resilience (including ZNE/PEC).
 /// Resolved resilience is included in ``EstimatorResult/metadata`` ``pipelineHash``.
 ///
 /// ## QWC grouping
@@ -66,8 +68,21 @@ public struct EstimatorOptions: Sendable, Equatable {
     }
 
     /// Estimator resilience if set; otherwise the run-options resilience.
+    ///
+    /// When Estimator resilience is enabled (readout / active ZNE / PEC), missing
+    /// ``ResilienceOptions/readoutMitigation`` is inherited from ``QuantumRunOptions/resilience``
+    /// so enabling PEC or ZNE alone does not silently drop run-options readout correction.
     func resolvedResilience(runOptions: QuantumRunOptions) -> ResilienceOptions {
-        resilience.isEnabled ? resilience : runOptions.resilience
+        guard resilience.isEnabled else { return runOptions.resilience }
+        guard resilience.readoutMitigation == nil,
+              let runReadout = runOptions.resilience.readoutMitigation else {
+            return resilience
+        }
+        return ResilienceOptions(
+            readoutMitigation: runReadout,
+            zne: resilience.zne,
+            pec: resilience.pec
+        )
     }
 
     /// Tokens folded into ``PipelineFingerprint`` for Estimator jobs.
@@ -84,18 +99,30 @@ public struct EstimatorResult: Sendable, Equatable {
     public let shots: Int?
     /// Estimated standard error of the mean for shot-based runs (`≈ √(Var̂/shots)`).
     /// `Var̂` includes within-QWC-group covariances; see ``Estimator`` shot-path docs.
+    /// When ZNE is enabled this is the SE from the **nominal** (`λ` closest to 1, else first)
+    /// scale evaluation — not an extrapolated uncertainty.
+    /// When PEC is enabled this is an approximate SE from the signed sample variance
+    /// scaled by `Γ` (see ``PECMetadata/shotMultiplier``).
     public let standardError: QFloat?
+    /// Present when shot-path ``ResilienceOptions/zne`` ran; `nil` otherwise.
+    public let zne: ZNEExtrapolationMetadata?
+    /// Present when shot-path ``ResilienceOptions/pec`` ran; `nil` otherwise.
+    public let pec: PECMetadata?
 
     public init(
         value: QFloat,
         metadata: QuantumResultMetadata,
         shots: Int? = nil,
-        standardError: QFloat? = nil
+        standardError: QFloat? = nil,
+        zne: ZNEExtrapolationMetadata? = nil,
+        pec: PECMetadata? = nil
     ) {
         self.value = value
         self.metadata = metadata
         self.shots = shots
         self.standardError = standardError
+        self.zne = zne
+        self.pec = pec
     }
 }
 
@@ -295,8 +322,352 @@ public struct Estimator: Sendable {
     ) throws -> EstimatorResult {
         guard shots > 0 else { throw EstimatorError.invalidShotCount(shots) }
         let resilience = estimatorOptions.resolvedResilience(runOptions: options)
+        let activeZNE = resilience.activeZNE
 
-        let shotsBody = { () -> (QFloat, QFloat, QuantumSimulationMethod, String?) in
+        if activeZNE != nil, resilience.pec != nil {
+            throw PECError.incompatibleWithZNE
+        }
+
+        if let pecOptions = resilience.pec {
+            return try estimateShotsWithPEC(
+                circuit: circuit,
+                hamiltonian: hamiltonian,
+                backend: backend,
+                options: options,
+                estimatorOptions: estimatorOptions,
+                shots: shots,
+                started: started,
+                nestedUnderOuterRecorder: nestedUnderOuterRecorder,
+                resilience: resilience,
+                pecOptions: pecOptions
+            )
+        }
+
+        if let zneOptions = activeZNE {
+            try ZeroNoiseExtrapolation.validate(zneOptions)
+            return try estimateShotsWithZNE(
+                circuit: circuit,
+                hamiltonian: hamiltonian,
+                backend: backend,
+                options: options,
+                estimatorOptions: estimatorOptions,
+                shots: shots,
+                started: started,
+                nestedUnderOuterRecorder: nestedUnderOuterRecorder,
+                resilience: resilience,
+                zneOptions: zneOptions
+            )
+        }
+
+        // Strip inactive ZNE/PEC tokens so nested shot paths and fingerprints stay readout-clean.
+        let nestedResilience = resilience.readoutOnly
+        let boxed = try runShotExpectation(
+            circuit: circuit,
+            hamiltonian: hamiltonian,
+            backend: backend,
+            options: options,
+            estimatorOptions: estimatorOptions,
+            shots: shots,
+            noise: options.noise,
+            resilience: nestedResilience,
+            nestedUnderOuterRecorder: nestedUnderOuterRecorder
+        )
+
+        let standardError = sqrt(boxed.variance / QFloat(shots))
+        let elapsed = DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds
+        let metadata = makeShotMetadata(
+            circuit: circuit,
+            options: options,
+            estimatorOptions: estimatorOptions,
+            shots: shots,
+            resilience: nestedResilience,
+            method: boxed.method,
+            deviceName: boxed.deviceName,
+            elapsed: elapsed,
+            nestedUnderOuterRecorder: nestedUnderOuterRecorder
+        )
+
+        return EstimatorResult(
+            value: boxed.value,
+            metadata: metadata,
+            shots: shots,
+            standardError: standardError
+        )
+    }
+
+    private func estimateShotsWithPEC(
+        circuit: QuantumCircuit,
+        hamiltonian: Hamiltonian,
+        backend: any QuantumBackend,
+        options: QuantumRunOptions,
+        estimatorOptions: EstimatorOptions,
+        shots: Int,
+        started: DispatchTime,
+        nestedUnderOuterRecorder: Bool,
+        resilience: ResilienceOptions,
+        pecOptions: PECOptions
+    ) throws -> EstimatorResult {
+        guard let noise = options.noise else { throw PECError.missingNoiseModel }
+        let sites = try ProbabilisticErrorCancellation.validatedPECSites(
+            circuit: circuit,
+            noise: noise
+        )
+        let qpr = try ProbabilisticErrorCancellation.quasiprobability(
+            channel: pecOptions.channel,
+            noise: noise
+        )
+        let gammaPerSite = qpr.gamma
+        let siteCount = sites.count
+        let gammaTotal = pow(gammaPerSite, QFloat(siteCount))
+
+        let circuitSamples: Int
+        if let requested = pecOptions.circuitSamples {
+            guard requested > 0 else { throw PECError.invalidCircuitSampleCount(requested) }
+            guard requested <= shots else {
+                throw PECError.circuitSamplesExceedShots(samples: requested, shots: shots)
+            }
+            circuitSamples = requested
+        } else {
+            circuitSamples = shots
+        }
+        let shotsPerCircuit = max(1, shots / circuitSamples)
+        let effectiveShots = circuitSamples * shotsPerCircuit
+        let perSampleResilience = resilience.readoutOnly
+
+        var weightedSum: Double = 0
+        var weightedSumSq: Double = 0
+        var method: QuantumSimulationMethod = .statevector
+        var deviceName: String?
+
+        for sampleIndex in 0..<circuitSamples {
+            var sampleRNG = makePrimitiveRNG(
+                seed: options.seed.map { $0 &+ UInt64(sampleIndex) &+ 0x9E37_79B9 }
+            )
+            var paulish: [Pauli] = []
+            var sign: QFloat = 1
+            paulish.reserveCapacity(siteCount)
+            for _ in 0..<siteCount {
+                let draw = qpr.sample(rng: &sampleRNG)
+                paulish.append(draw.pauli)
+                sign *= draw.sign
+            }
+
+            let mitigated = try ProbabilisticErrorCancellation.circuitByInsertingMitigationPaulis(
+                circuit,
+                siteGateIndices: sites,
+                paulish: paulish
+            )
+
+            var sampleOptions = options
+            if let seed = options.seed {
+                sampleOptions.seed = seed &+ UInt64(sampleIndex)
+            }
+
+            let boxed = try runShotExpectation(
+                circuit: mitigated,
+                hamiltonian: hamiltonian,
+                backend: backend,
+                options: sampleOptions,
+                estimatorOptions: estimatorOptions,
+                shots: shotsPerCircuit,
+                noise: noise,
+                resilience: perSampleResilience,
+                nestedUnderOuterRecorder: nestedUnderOuterRecorder
+            )
+            let signed = Double(sign) * Double(boxed.value)
+            weightedSum += signed
+            weightedSumSq += signed * signed
+            method = boxed.method
+            deviceName = boxed.deviceName
+        }
+
+        let meanSigned = weightedSum / Double(circuitSamples)
+        let extrapolated = QFloat(Double(gammaTotal) * meanSigned)
+        let meanSq = weightedSumSq / Double(circuitSamples)
+        let varSigned = max(0, meanSq - meanSigned * meanSigned)
+        let standardError = QFloat(
+            Double(gammaTotal) * sqrt(varSigned / Double(circuitSamples))
+        )
+
+        let pecMeta = PECMetadata(
+            channel: pecOptions.channel,
+            gammaPerSite: gammaPerSite,
+            gammaTotal: gammaTotal,
+            siteCount: siteCount,
+            circuitSamples: circuitSamples
+        )
+
+        let elapsed = DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds
+        let metadata = makeShotMetadata(
+            circuit: circuit,
+            options: options,
+            estimatorOptions: estimatorOptions,
+            shots: effectiveShots,
+            resilience: resilience,
+            method: method,
+            deviceName: deviceName,
+            elapsed: elapsed,
+            nestedUnderOuterRecorder: nestedUnderOuterRecorder
+        )
+
+        return EstimatorResult(
+            value: extrapolated,
+            metadata: metadata,
+            shots: effectiveShots,
+            standardError: standardError,
+            pec: pecMeta
+        )
+    }
+
+    private func estimateShotsWithZNE(
+        circuit: QuantumCircuit,
+        hamiltonian: Hamiltonian,
+        backend: any QuantumBackend,
+        options: QuantumRunOptions,
+        estimatorOptions: EstimatorOptions,
+        shots: Int,
+        started: DispatchTime,
+        nestedUnderOuterRecorder: Bool,
+        resilience: ResilienceOptions,
+        zneOptions: ZNEOptions
+    ) throws -> EstimatorResult {
+        try ZeroNoiseExtrapolation.validate(zneOptions)
+        guard let noise = options.noise, noise.appliesDepolarizing else {
+            throw ZNEError.missingGlobalDepolarizing
+        }
+        let perScaleResilience = resilience.readoutOnly
+
+        var valuesAtScale: [QFloat] = []
+        valuesAtScale.reserveCapacity(zneOptions.scaleFactors.count)
+        var varianceAtScale: [QFloat] = []
+        varianceAtScale.reserveCapacity(zneOptions.scaleFactors.count)
+        var method: QuantumSimulationMethod = .statevector
+        var deviceName: String?
+
+        for (scaleIndex, scale) in zneOptions.scaleFactors.enumerated() {
+            let scaledNoise = options.noise.map { $0.scalingGlobalDepolarizing(by: scale) }
+            var scaleOptions = options
+            // Independent ensemble per scale; preserve seeded reproducibility.
+            if let seed = options.seed {
+                scaleOptions.seed = seed &+ UInt64(scaleIndex)
+            }
+            scaleOptions.noise = scaledNoise
+
+            let boxed = try runShotExpectation(
+                circuit: circuit,
+                hamiltonian: hamiltonian,
+                backend: backend,
+                options: scaleOptions,
+                estimatorOptions: estimatorOptions,
+                shots: shots,
+                noise: scaledNoise,
+                resilience: perScaleResilience,
+                nestedUnderOuterRecorder: nestedUnderOuterRecorder
+            )
+            valuesAtScale.append(boxed.value)
+            varianceAtScale.append(boxed.variance)
+            method = boxed.method
+            deviceName = boxed.deviceName
+        }
+
+        let extrapolated = try ZeroNoiseExtrapolation.extrapolate(
+            options: zneOptions,
+            valuesAtScale: valuesAtScale
+        )
+        let zneMeta = ZNEExtrapolationMetadata(
+            extrapolator: zneOptions.extrapolator,
+            scaleFactors: zneOptions.scaleFactors,
+            valuesAtScale: valuesAtScale,
+            extrapolatedValue: extrapolated
+        )
+
+        let seIndex = zneOptions.scaleFactors.firstIndex(where: { abs($0 - 1) < 1e-6 }) ?? 0
+        let standardError = sqrt(varianceAtScale[seIndex] / QFloat(shots))
+        let elapsed = DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds
+        let metadata = makeShotMetadata(
+            circuit: circuit,
+            options: options,
+            estimatorOptions: estimatorOptions,
+            shots: shots,
+            resilience: resilience,
+            method: method,
+            deviceName: deviceName,
+            elapsed: elapsed,
+            nestedUnderOuterRecorder: nestedUnderOuterRecorder
+        )
+
+        return EstimatorResult(
+            value: extrapolated,
+            metadata: metadata,
+            shots: shots,
+            standardError: standardError,
+            zne: zneMeta
+        )
+    }
+
+    private func makeShotMetadata(
+        circuit: QuantumCircuit,
+        options: QuantumRunOptions,
+        estimatorOptions: EstimatorOptions,
+        shots: Int,
+        resilience: ResilienceOptions,
+        method: QuantumSimulationMethod,
+        deviceName: String?,
+        elapsed: UInt64,
+        nestedUnderOuterRecorder: Bool
+    ) -> QuantumResultMetadata {
+        let fingerprintOptions = PipelineFingerprint.optionsForEstimatorFingerprint(
+            runOptions: options,
+            resolvedShots: shots,
+            resolvedResilience: resilience
+        )
+        return QuantumResultMetadata(
+            method: method,
+            seed: options.seed,
+            deviceName: deviceName,
+            wallClockNanoseconds: elapsed,
+            qubitCount: circuit.qubitCount,
+            gateCount: circuit.gates.count,
+            noiseSnapshot: options.noise,
+            pipelineHash: PipelineFingerprint.hash(
+                circuit: circuit,
+                method: method,
+                options: fingerprintOptions,
+                extra: estimatorOptions.fingerprintExtra
+            ),
+            profile: nestedUnderOuterRecorder
+                ? nil
+                : SimulationProfiling.finishProfile(
+                    options: options,
+                    circuit: circuit,
+                    method: method,
+                    isCPU: deviceName == "CPU",
+                    elapsed: elapsed,
+                    effectiveShots: shots,
+                    includeGateTimings: false
+                )
+        )
+    }
+
+    private struct ShotExpectationBox: Sendable {
+        let value: QFloat
+        let variance: QFloat
+        let method: QuantumSimulationMethod
+        let deviceName: String?
+    }
+
+    private func runShotExpectation(
+        circuit: QuantumCircuit,
+        hamiltonian: Hamiltonian,
+        backend: any QuantumBackend,
+        options: QuantumRunOptions,
+        estimatorOptions: EstimatorOptions,
+        shots: Int,
+        noise: NoiseModel?,
+        resilience: ResilienceOptions,
+        nestedUnderOuterRecorder: Bool
+    ) throws -> ShotExpectationBox {
+        let shotsBody = { () -> ShotExpectationBox in
             var rng = makePrimitiveRNG(seed: options.seed)
             let partition: PauliCommutingGroups.Partition
             if estimatorOptions.groupCommutingPaulis {
@@ -319,7 +690,7 @@ public struct Estimator: Sendable {
                         engine: statevectorBackend.engine,
                         shots: shots,
                         rng: &rng,
-                        noise: options.noise,
+                        noise: noise,
                         sampleOptions: options.sampleOptions,
                         resilience: resilience
                     )
@@ -340,7 +711,7 @@ public struct Estimator: Sendable {
                         engine: densityBackend.engine,
                         shots: shots,
                         rng: &rng,
-                        noise: options.noise,
+                        noise: noise,
                         resilience: resilience
                     )
                     accumulateGroupedMoments(
@@ -360,7 +731,7 @@ public struct Estimator: Sendable {
                         engine: cpuDensity.engine,
                         shots: shots,
                         rng: &rng,
-                        noise: options.noise,
+                        noise: noise,
                         resilience: resilience
                     )
                     accumulateGroupedMoments(
@@ -382,7 +753,7 @@ public struct Estimator: Sendable {
                         seedBase: options.seed,
                         groupIndex: groupIndex,
                         rng: &rng,
-                        noise: options.noise,
+                        noise: noise,
                         sampleOptions: options.sampleOptions,
                         resilience: resilience
                     )
@@ -403,7 +774,7 @@ public struct Estimator: Sendable {
                         engine: cpuSV.engine,
                         shots: shots,
                         rng: &rng,
-                        noise: options.noise,
+                        noise: noise,
                         resilience: resilience
                     )
                     accumulateGroupedMoments(
@@ -416,59 +787,20 @@ public struct Estimator: Sendable {
             } else {
                 throw EstimatorError.unsupportedBackend
             }
-            return (total, varianceAccumulator, method, deviceName)
+            return ShotExpectationBox(
+                value: total,
+                variance: varianceAccumulator,
+                method: method,
+                deviceName: deviceName
+            )
         }
-        // Never timeGate the basis-changed measure circuit into this (or an outer) recorder.
+
         let suppressedShotsBody = {
             try SimulationProfiling.withGateRecordingSuppressed(shotsBody)
         }
-        let boxed = try nestedUnderOuterRecorder
+        return try nestedUnderOuterRecorder
             ? suppressedShotsBody()
             : SimulationProfiling.timePhase("estimate", suppressedShotsBody)
-
-        let standardError = sqrt(boxed.1 / QFloat(shots))
-        let elapsed = DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds
-        let fingerprintOptions = PipelineFingerprint.optionsForEstimatorFingerprint(
-            runOptions: options,
-            resolvedShots: shots,
-            resolvedResilience: resilience
-        )
-        // Shot paths evolve a basis-changed measure circuit; do not publish those
-        // indices as the user circuit's ``gateTimings``.
-        let metadata = QuantumResultMetadata(
-            method: boxed.2,
-            seed: options.seed,
-            deviceName: boxed.3,
-            wallClockNanoseconds: elapsed,
-            qubitCount: circuit.qubitCount,
-            gateCount: circuit.gates.count,
-            noiseSnapshot: options.noise,
-            pipelineHash: PipelineFingerprint.hash(
-                circuit: circuit,
-                method: boxed.2,
-                options: fingerprintOptions,
-                extra: estimatorOptions.fingerprintExtra
-            ),
-            profile: nestedUnderOuterRecorder
-                ? nil
-                : SimulationProfiling.finishProfile(
-                    options: options,
-                    circuit: circuit,
-                    method: boxed.2,
-                    isCPU: boxed.3 == "CPU",
-                    elapsed: elapsed,
-                    effectiveShots: shots,
-                    // Basis-changed measure circuits are not the user circuit.
-                    includeGateTimings: false
-                )
-        )
-
-        return EstimatorResult(
-            value: boxed.0,
-            metadata: metadata,
-            shots: shots,
-            standardError: standardError
-        )
     }
 
     /// Fold group means into the energy and add the shared-ensemble variance of `Σ cᵢ Pᵢ`.
