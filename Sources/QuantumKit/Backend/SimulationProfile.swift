@@ -405,6 +405,10 @@ enum SimulationMemoryFootprint {
             stateBytes = dim * complexBytes
         case .densityMatrix:
             stateBytes = dim * dim * complexBytes
+        case .stabilizer:
+            let rows = 2 * qubitCount + 1
+            let bitCells = rows * 2 * qubitCount + rows
+            stateBytes = max((bitCells + 7) / 8, 64)
         }
 
         let liveCopies = liveCopiesForEstimate(
@@ -440,6 +444,13 @@ enum SimulationMemoryFootprint {
                 batchSize: batchSize,
                 isCPU: isCPU
             )
+        case .stabilizer:
+            // Independent stabilizer shots may keep one tableau per worker.
+            guard let shots, shots > 0 else { return 1 }
+            if ShotExecutionPolicy.mustSerial(circuit: circuit, noise: noise) {
+                return 1
+            }
+            return min(max(batchSize, 1), shots, max(ProcessInfo.processInfo.activeProcessorCount, 1))
         }
     }
 }

@@ -6,6 +6,13 @@ public enum QuantumSimulationMethod: String, Codable, Sendable, Equatable {
     case densityMatrix
     /// Monte-Carlo statevector unraveling ensemble (shared global noise channels).
     case trajectory
+    /// Host CPU stabilizer / tableau simulation for Clifford+measure circuits (B19).
+    ///
+    /// Not selected by ``QuantumBackendFactory/recommendMethod(qubitCount:noise:policy:)``.
+    /// Construct with ``QuantumBackendFactory/makeStabilizer()``, or opt in via
+    /// ``SimulationPolicy/preferStabilizerWhenClifford`` and the circuit-aware
+    /// ``QuantumBackendFactory/recommendMethod(circuit:noise:policy:)``.
+    case stabilizer
 }
 
 /// Options for a single ``QuantumBackend/run(circuit:options:)`` invocation.

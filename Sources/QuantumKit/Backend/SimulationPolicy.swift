@@ -54,6 +54,14 @@ public struct SimulationPolicy: Sendable, Equatable {
     public var maxPeakMemoryBytes: Int?
     /// Default ensemble size used for trajectory resource / runtime heuristics.
     public var defaultTrajectoryShots: Int
+    /// Opt-in stabilizer recommendation (default `false`).
+    ///
+    /// When `true`, ``QuantumBackendFactory/recommendMethod(circuit:noise:policy:)`` and
+    /// ``QuantumBackendFactory/makeRecommended(circuit:noise:policy:)`` may select
+    /// ``QuantumSimulationMethod/stabilizer`` for noiseless Clifford+measure circuits.
+    /// The width-only ``recommendMethod(qubitCount:noise:policy:)`` **never** returns
+    /// `.stabilizer` (no gate inspection) — defaults and existing callers stay unchanged.
+    public var preferStabilizerWhenClifford: Bool
 
     public init(
         statevectorQubitLimit: Int = StateVector.maxQubitCount,
@@ -65,7 +73,8 @@ public struct SimulationPolicy: Sendable, Equatable {
         cpuDensityMatrixQubitLimit: Int = CPUDensityMatrix.maxQubitCount,
         precision: SimulationPrecision = .float32,
         maxPeakMemoryBytes: Int? = nil,
-        defaultTrajectoryShots: Int = 1024
+        defaultTrajectoryShots: Int = 1024,
+        preferStabilizerWhenClifford: Bool = false
     ) {
         self.statevectorQubitLimit = statevectorQubitLimit
         self.densityMatrixQubitLimit = densityMatrixQubitLimit
@@ -77,6 +86,7 @@ public struct SimulationPolicy: Sendable, Equatable {
         self.precision = precision
         self.maxPeakMemoryBytes = maxPeakMemoryBytes
         self.defaultTrajectoryShots = max(1, defaultTrajectoryShots)
+        self.preferStabilizerWhenClifford = preferStabilizerWhenClifford
     }
 
     public static let `default` = SimulationPolicy()
@@ -232,7 +242,56 @@ extension QuantumBackendFactory {
                 policy: policy,
                 noise: noise
             )
+        case .stabilizer:
+            return makeStabilizer(maxQubitCount: StabilizerTableau.maxQubitCount)
         }
+    }
+
+    /// Circuit-aware recommendation. With ``SimulationPolicy/preferStabilizerWhenClifford``
+    /// (default `false`), may return ``QuantumSimulationMethod/stabilizer`` for noiseless
+    /// Clifford+measure circuits; otherwise identical to the width-only recommender.
+    public static func recommendMethod(
+        circuit: QuantumCircuit,
+        noise: NoiseModel? = nil,
+        policy: SimulationPolicy = .default
+    ) throws -> QuantumSimulationMethod {
+        if policy.preferStabilizerWhenClifford,
+           noise?.hasAnyChannel != true,
+           StabilizerCircuitValidator.isSupported(circuit)
+        {
+            return .stabilizer
+        }
+        return try recommendMethod(
+            qubitCount: circuit.qubitCount,
+            noise: noise,
+            policy: policy
+        )
+    }
+
+    /// Builds the backend from ``recommendMethod(circuit:noise:policy:)``.
+    public static func makeRecommended(
+        circuit: QuantumCircuit,
+        noise: NoiseModel? = nil,
+        policy: SimulationPolicy = .default,
+        renormalizationInterval: Int = 50
+    ) throws -> any QuantumBackend {
+        let method = try recommendMethod(circuit: circuit, noise: noise, policy: policy)
+        if method == .stabilizer {
+            return makeStabilizer(maxQubitCount: StabilizerTableau.maxQubitCount)
+        }
+        return try makeRecommended(
+            qubitCount: circuit.qubitCount,
+            noise: noise,
+            policy: policy,
+            renormalizationInterval: renormalizationInterval
+        )
+    }
+
+    /// Host CPU stabilizer / tableau backend (Clifford+measure only). Always CPU.
+    public static func makeStabilizer(
+        maxQubitCount: Int = StabilizerTableau.maxQubitCount
+    ) -> any QuantumBackend {
+        StabilizerBackend(maxQubitCount: maxQubitCount)
     }
 
     /// Builds a trajectory (SV Monte-Carlo ensemble) backend for the requested device preference.
@@ -400,6 +459,12 @@ extension QuantumBackendFactory {
             }
             let peakBytes = stateBytes * (2 + max(metalBatch - 1, 0))
             return (stateBytes, peakBytes, ensemble)
+        case .stabilizer:
+            // CHP tableau: (2n+1) rows × 2n X/Z bits + phase bits (packed estimate).
+            let rows = 2 * qubitCount + 1
+            let bitCells = rows * 2 * qubitCount + rows
+            let stateBytes = max((bitCells + 7) / 8, 64)
+            return (stateBytes, stateBytes * 2, nil)
         }
     }
 
@@ -453,6 +518,10 @@ extension QuantumBackendFactory {
             baseNS = gateFactor * dim * dim * 40.0
         case .trajectory:
             baseNS = gateFactor * dim * 20.0 * Double(max(trajectoryShots, 1))
+        case .stabilizer:
+            // ~O(gate · n²) tableau bit updates.
+            let n = Double(max(qubitCount, 1))
+            baseNS = gateFactor * n * n * 8.0
         }
         let clamped = min(max(baseNS * deviceScale, 1.0), Double(UInt64.max) * 0.5)
         return UInt64(clamped)

@@ -832,6 +832,10 @@ extension QuantumKitTests {
             expectedState = dim * complexBytes
         case .densityMatrix:
             expectedState = dim * dim * complexBytes
+        case .stabilizer:
+            let rows = 2 * qubitCount + 1
+            let bitCells = rows * 2 * qubitCount + rows
+            expectedState = max((bitCells + 7) / 8, 64)
         }
         XCTAssertEqual(profile.stateBytes, expectedState, file: file, line: line)
         XCTAssertGreaterThanOrEqual(profile.peakMemoryBytes, profile.stateBytes, file: file, line: line)
