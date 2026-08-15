@@ -9,7 +9,7 @@ extension QuantumKitTests {
     func testShorFactors15Accuracy() throws {
         let engine = try QuantumEngine()
 
-        guard let device = makeDevice() else {
+        guard makeDevice() != nil else {
             XCTFail("Apple Silicon GPU not found!")
             return
         }
@@ -48,7 +48,7 @@ extension QuantumKitTests {
 
         try circuit.applyInverseQFT(qubits: controlRange)
 
-        let state = try StateVector(qubitCount: qubitCount, device: device)
+        let state = try StateVector(qubitCount: qubitCount)
         try engine.execute(circuit, on: state)
 
         let shots = 512
@@ -98,7 +98,7 @@ extension QuantumKitTests {
     func testControlledModularMultiplyControlZeroLeavesNoTrace() throws {
         let engine = try QuantumEngine()
 
-        guard let device = makeDevice() else {
+        guard makeDevice() != nil else {
             XCTFail("Apple Silicon GPU not found!")
             return
         }
@@ -110,7 +110,7 @@ extension QuantumKitTests {
         let targetRange = 1...2
         let ancillaRange = 3...12
 
-        let state = try StateVector(qubitCount: qubitCount, device: device)
+        let state = try StateVector(qubitCount: qubitCount)
         var circuit = try QuantumCircuit(qubitCount: qubitCount)
 
         // control = |0⟩ (left untouched), |y⟩ = |1⟩ on the target register.
@@ -154,7 +154,7 @@ extension QuantumKitTests {
     func testControlledModularMultiplyAncillaUncomputeNoLeak() throws {
         let engine = try QuantumEngine()
 
-        guard let device = makeDevice() else {
+        guard makeDevice() != nil else {
             XCTFail("Apple Silicon GPU not found!")
             return
         }
@@ -167,7 +167,7 @@ extension QuantumKitTests {
         let base = 2
         let modulus = 3
 
-        let state = try StateVector(qubitCount: qubitCount, device: device)
+        let state = try StateVector(qubitCount: qubitCount)
         var circuit = try QuantumCircuit(qubitCount: qubitCount)
 
         // |y⟩ = |1⟩
@@ -218,7 +218,7 @@ extension QuantumKitTests {
     func testControlledModularMultiplyPreservesInterference() throws {
         let engine = try QuantumEngine()
 
-        guard let device = makeDevice() else {
+        guard makeDevice() != nil else {
             XCTFail("Apple Silicon GPU not found!")
             return
         }
@@ -228,7 +228,7 @@ extension QuantumKitTests {
         let targetRange = 1...2
         let ancillaRange = 3...12
 
-        let state = try StateVector(qubitCount: qubitCount, device: device)
+        let state = try StateVector(qubitCount: qubitCount)
         var circuit = try QuantumCircuit(qubitCount: qubitCount)
 
         // |y⟩ = |1⟩
@@ -264,7 +264,7 @@ extension QuantumKitTests {
     func testModularExponentiationOracleIsExactAndCleanForAllExponents() throws {
         let engine = try QuantumEngine()
 
-        guard let device = makeDevice() else {
+        guard makeDevice() != nil else {
             XCTFail("Apple Silicon GPU not found!")
             return
         }
@@ -278,7 +278,7 @@ extension QuantumKitTests {
         let base = 7, modulus = 15
 
         for c in 0..<(1 << controlN) {
-            let state = try StateVector(qubitCount: total, device: device)
+            let state = try StateVector(qubitCount: total)
             var circuit = try QuantumCircuit(qubitCount: total)
 
             try circuit.x(targetRange.lowerBound)   // |y⟩ = |1⟩
@@ -324,7 +324,7 @@ extension QuantumKitTests {
     func testModularExponentiationOracleGeneralModuli() throws {
         let engine = try QuantumEngine()
 
-        guard let device = makeDevice() else {
+        guard makeDevice() != nil else {
             XCTFail("Apple Silicon GPU not found!")
             return
         }
@@ -349,7 +349,7 @@ extension QuantumKitTests {
 
             for base in testCase.bases {
                 for c in 0..<(1 << controlN) {
-                    let state = try StateVector(qubitCount: total, device: device)
+                    let state = try StateVector(qubitCount: total)
                     var circuit = try QuantumCircuit(qubitCount: total)
 
                     // |y⟩ = |1⟩, then drive the counting register to the definite value c.

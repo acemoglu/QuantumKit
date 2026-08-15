@@ -34,8 +34,8 @@ extension QuantumKitTests {
 
         if MetalRuntime.isAvailable {
             let metalEngine = try QuantumEngine()
-            let metalComposed = try StateVector(qubitCount: 2, device: metalEngine.device)
-            let metalHand = try StateVector(qubitCount: 2, device: metalEngine.device)
+            let metalComposed = try StateVector(qubitCount: 2)
+            let metalHand = try StateVector(qubitCount: 2)
             _ = try metalEngine.execute(composed, on: metalComposed)
             _ = try metalEngine.execute(handBuilt, on: metalHand)
             let mComposed = try QuantumMeasurement.probabilities(state: metalComposed, engine: metalEngine)

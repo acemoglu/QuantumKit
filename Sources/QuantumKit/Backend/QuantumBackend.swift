@@ -165,9 +165,13 @@ public enum QuantumBackendFactory {
 
 /// GPU state-vector backend backed by ``QuantumEngine``.
 ///
+/// Construct with ``init(renormalizationInterval:)`` or ``QuantumBackendFactory`` — no
+/// ``MTLDevice`` is required. Explicit Metal device selection is an advanced path reserved
+/// for H6b / interop; prefer ``MetalRuntime`` when sharing a device is unavoidable.
+///
 /// Thread-safety: safe to share the backend/engine across threads. Do not mutate one
 /// ``StateVector`` concurrently; concurrent runs on distinct states (including batched shots)
-/// are supported. Prefer a shared ``MTLDevice`` via ``MetalRuntime``.
+/// are supported.
 public final class StatevectorBackend: QuantumBackend, @unchecked Sendable {
     public let engine: QuantumEngine
     public var method: QuantumSimulationMethod { .statevector }
@@ -249,6 +253,9 @@ public final class StatevectorBackend: QuantumBackend, @unchecked Sendable {
 }
 
 /// GPU density-matrix backend backed by ``DensityMatrixEngine``.
+///
+/// Construct with ``init(renormalizationInterval:)`` or ``QuantumBackendFactory`` — no
+/// ``MTLDevice`` is required.
 ///
 /// Thread-safety: share the backend across threads only with distinct ``DensityMatrix``
 /// instances per concurrent run.

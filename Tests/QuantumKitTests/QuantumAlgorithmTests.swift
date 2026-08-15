@@ -9,14 +9,14 @@ extension QuantumKitTests {
     func testDeutschJozsaConstantOracleYieldsAllZeros() throws {
         let engine = try QuantumEngine()
 
-        guard let device = makeDevice() else {
+        guard makeDevice() != nil else {
             XCTFail("Apple Silicon GPU not found!")
             return
         }
 
         let inputs = [0, 1, 2]
         let ancilla = 3
-        let state = try StateVector(qubitCount: 4, device: device)
+        let state = try StateVector(qubitCount: 4)
         var circuit = try QuantumCircuit(qubitCount: 4)
 
         // Constant f(x) = 0: the oracle does nothing at all.
@@ -30,14 +30,14 @@ extension QuantumKitTests {
     func testDeutschJozsaConstantOneOracleYieldsAllZeros() throws {
         let engine = try QuantumEngine()
 
-        guard let device = makeDevice() else {
+        guard makeDevice() != nil else {
             XCTFail("Apple Silicon GPU not found!")
             return
         }
 
         let inputs = [0, 1, 2]
         let ancilla = 3
-        let state = try StateVector(qubitCount: 4, device: device)
+        let state = try StateVector(qubitCount: 4)
         var circuit = try QuantumCircuit(qubitCount: 4)
 
         // Constant f(x) = 1: flip the ancilla unconditionally (global phase only).
@@ -53,14 +53,14 @@ extension QuantumKitTests {
     func testDeutschJozsaBalancedOracleYieldsNonZero() throws {
         let engine = try QuantumEngine()
 
-        guard let device = makeDevice() else {
+        guard makeDevice() != nil else {
             XCTFail("Apple Silicon GPU not found!")
             return
         }
 
         let inputs = [0, 1, 2]
         let ancilla = 3
-        let state = try StateVector(qubitCount: 4, device: device)
+        let state = try StateVector(qubitCount: 4)
         var circuit = try QuantumCircuit(qubitCount: 4)
 
         // Balanced f(x) = parity(x): CNOT each input into the ancilla.
@@ -88,14 +88,14 @@ extension QuantumKitTests {
     func testGroverFindsMarkedState() throws {
         let engine = try QuantumEngine()
 
-        guard let device = makeDevice() else {
+        guard makeDevice() != nil else {
             XCTFail("Apple Silicon GPU not found!")
             return
         }
 
         let qubits = [0, 1, 2]
         let target = 5 // 0b101: qubit0 = 1, qubit1 = 0, qubit2 = 1
-        let state = try StateVector(qubitCount: 3, device: device)
+        let state = try StateVector(qubitCount: 3)
         var circuit = try QuantumCircuit(qubitCount: 3)
 
         // Phase oracle marking |101⟩: open-control with X on the zero bits, MCZ, then undo the X's.
@@ -120,7 +120,7 @@ extension QuantumKitTests {
     func testPhaseEstimationRecoversTGatePhase() throws {
         let engine = try QuantumEngine()
 
-        guard let device = makeDevice() else {
+        guard makeDevice() != nil else {
             XCTFail("Apple Silicon GPU not found!")
             return
         }
@@ -128,7 +128,7 @@ extension QuantumKitTests {
         // 3 counting qubits [0,1,2]; eigenstate qubit 3 prepared in |1⟩, eigenvalue of T = e^{2πi·(1/8)}.
         let counting = [0, 1, 2]
         let eigenstate = 3
-        let state = try StateVector(qubitCount: 4, device: device)
+        let state = try StateVector(qubitCount: 4)
         var circuit = try QuantumCircuit(qubitCount: 4)
 
         try circuit.x(eigenstate) // |1⟩ eigenstate of T

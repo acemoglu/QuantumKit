@@ -17,6 +17,9 @@ public enum DensityMatrixEngineError: Error {
 
 /// Metal density-matrix engine.
 ///
+/// Construct with ``init(renormalizationInterval:)`` — the shared device comes from
+/// ``MetalRuntime``; callers need not import Metal or pass an ``MTLDevice``.
+///
 /// Thread-safety: the engine may be shared across threads (`MTLCommandQueue` + buffer pool are
 /// synchronized). A single ``DensityMatrix`` must not be mutated concurrently. Distinct matrices
 /// may run in parallel. Prefer one engine instance per concurrent worker when practical.
@@ -56,8 +59,12 @@ public final class DensityMatrixEngine: @unchecked Sendable {
     let pipelines: Pipelines
     public let renormalizationInterval: Int
 
+    /// Creates an engine on ``MetalRuntime/sharedDevice()`` (no caller Metal imports).
     public init(renormalizationInterval: Int = 50) throws {
-        guard let device = MTLCreateSystemDefaultDevice() else {
+        let device: MTLDevice
+        do {
+            device = try MetalRuntime.sharedDevice()
+        } catch {
             throw DensityMatrixEngineError.deviceNotFound
         }
         self.device = device

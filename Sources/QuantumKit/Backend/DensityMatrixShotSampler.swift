@@ -22,7 +22,7 @@ enum DensityMatrixShotSampler {
 
         if circuit.allowsPreparedDensityShotBatching(noise: noise) {
             try cancellationCheck?()
-            let density = try DensityMatrix(qubitCount: circuit.qubitCount, device: engine.device)
+            let density = try DensityMatrix(qubitCount: circuit.qubitCount, on: engine.device)
             _ = try engine.executeRNG(
                 circuit,
                 on: density,
@@ -45,7 +45,7 @@ enum DensityMatrixShotSampler {
         histogram.reserveCapacity(min(shots, 1 << circuit.qubitCount))
         for _ in 0..<shots {
             try cancellationCheck?()
-            let density = try DensityMatrix(qubitCount: circuit.qubitCount, device: engine.device)
+            let density = try DensityMatrix(qubitCount: circuit.qubitCount, on: engine.device)
             _ = try engine.executeRNG(
                 circuit,
                 on: density,

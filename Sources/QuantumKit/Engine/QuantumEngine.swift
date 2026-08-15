@@ -295,7 +295,10 @@ final class BufferPool: @unchecked Sendable {
 
 /// GPU-backed executor for quantum circuits.
 ///
-/// `QuantumEngine` is safe to share across threads: it holds immutable Metal objects (`MTLDevice`,
+/// Construct with ``init(renormalizationInterval:)`` — the shared device comes from
+/// ``MetalRuntime``; callers need not import Metal or pass an ``MTLDevice``.
+///
+/// `QuantumEngine` is safe to share across threads: it holds immutable Metal objects (device,
 /// a thread-safe `MTLCommandQueue`, and immutable pipeline states) plus a lock-guarded
 /// ``BufferPool`` for scratch reuse. Each call allocates its own command buffers, so distinct
 /// ``StateVector`` instances may be executed concurrently from different threads using the same
@@ -371,13 +374,14 @@ public final class QuantumEngine: @unchecked Sendable {
         return combined
     }
 
+    /// Creates an engine on ``MetalRuntime/sharedDevice()`` (no caller Metal imports).
     public init(renormalizationInterval: Int = 50) throws {
         let scanBlockSize = Self.scanBlockSize
         precondition(scanBlockSize > 0 && (scanBlockSize & (scanBlockSize - 1)) == 0, "Metal threadgroup dimensions MUST be exact powers of two for binary tree reductions to work.")
         let renormalizationBlockSize = Self.renormalizationBlockSize
         precondition(renormalizationBlockSize > 0 && (renormalizationBlockSize & (renormalizationBlockSize - 1)) == 0, "Metal threadgroup dimensions MUST be exact powers of two for binary tree reductions to work.")
 
-        guard let defaultDevice = MTLCreateSystemDefaultDevice() else { throw QuantumEngineError.deviceNotFound }
+        let defaultDevice = try MetalRuntime.sharedDevice()
         self.device = defaultDevice
         self.renormalizationInterval = max(0, renormalizationInterval)
 

@@ -7,11 +7,11 @@ extension QuantumKitTests {
     func testBellStateEntanglement() throws {
         let engine = try QuantumEngine()
 
-        guard let device = makeDevice() else {
+        guard makeDevice() != nil else {
             XCTFail("Apple Silicon GPU not found!")
             return
         }
-        let state = try StateVector(qubitCount: 2, device: device)
+        let state = try StateVector(qubitCount: 2)
 
         var circuit = try QuantumCircuit(qubitCount: 2)
         try circuit.applyBellState()
@@ -32,11 +32,11 @@ extension QuantumKitTests {
         let qubitCount = 3
         let engine = try QuantumEngine()
 
-        guard let device = makeDevice() else {
+        guard makeDevice() != nil else {
             XCTFail("Apple Silicon GPU not found!")
             return
         }
-        let state = try StateVector(qubitCount: qubitCount, device: device)
+        let state = try StateVector(qubitCount: qubitCount)
         var circuit = try QuantumCircuit(qubitCount: qubitCount)
 
         try circuit.applyQFT()
@@ -53,12 +53,12 @@ extension QuantumKitTests {
     func testCCXGate() throws {
         let engine = try QuantumEngine()
 
-        guard let device = makeDevice() else {
+        guard makeDevice() != nil else {
             XCTFail("Apple Silicon GPU not found!")
             return
         }
 
-        let state = try StateVector(qubitCount: 3, device: device)
+        let state = try StateVector(qubitCount: 3)
         var circuit = try QuantumCircuit(qubitCount: 3)
 
         try circuit.x(0)
@@ -77,12 +77,12 @@ extension QuantumKitTests {
     func testSwapGate() throws {
         let engine = try QuantumEngine()
 
-        guard let device = makeDevice() else {
+        guard makeDevice() != nil else {
             XCTFail("Apple Silicon GPU not found!")
             return
         }
 
-        let state = try StateVector(qubitCount: 2, device: device)
+        let state = try StateVector(qubitCount: 2)
         var circuit = try QuantumCircuit(qubitCount: 2)
 
         try circuit.x(0)
@@ -100,12 +100,12 @@ extension QuantumKitTests {
     func testRyPiRotatesZeroToOne() throws {
         let engine = try QuantumEngine()
 
-        guard let device = makeDevice() else {
+        guard makeDevice() != nil else {
             XCTFail("Apple Silicon GPU not found!")
             return
         }
 
-        let state = try StateVector(qubitCount: 1, device: device)
+        let state = try StateVector(qubitCount: 1)
         var circuit = try QuantumCircuit(qubitCount: 1)
         try circuit.ry(theta: QFloat(Double.pi), 0)
 
@@ -118,18 +118,18 @@ extension QuantumKitTests {
     func testSGateMatchesRzPiOverTwo() throws {
         let engine = try QuantumEngine()
 
-        guard let device = makeDevice() else {
+        guard makeDevice() != nil else {
             XCTFail("Apple Silicon GPU not found!")
             return
         }
 
-        let sState = try StateVector(qubitCount: 1, device: device)
+        let sState = try StateVector(qubitCount: 1)
         var sCircuit = try QuantumCircuit(qubitCount: 1)
         try sCircuit.h(0)
         try sCircuit.s(0)
         try engine.execute(sCircuit, on: sState)
 
-        let rzState = try StateVector(qubitCount: 1, device: device)
+        let rzState = try StateVector(qubitCount: 1)
         var rzCircuit = try QuantumCircuit(qubitCount: 1)
         try rzCircuit.h(0)
         try rzCircuit.rz(theta: QFloat(Double.pi / 2.0), 0)
@@ -147,18 +147,18 @@ extension QuantumKitTests {
     func testTGateMatchesRzPiOverFour() throws {
         let engine = try QuantumEngine()
 
-        guard let device = makeDevice() else {
+        guard makeDevice() != nil else {
             XCTFail("Apple Silicon GPU not found!")
             return
         }
 
-        let tState = try StateVector(qubitCount: 1, device: device)
+        let tState = try StateVector(qubitCount: 1)
         var tCircuit = try QuantumCircuit(qubitCount: 1)
         try tCircuit.h(0)
         try tCircuit.t(0)
         try engine.execute(tCircuit, on: tState)
 
-        let rzState = try StateVector(qubitCount: 1, device: device)
+        let rzState = try StateVector(qubitCount: 1)
         var rzCircuit = try QuantumCircuit(qubitCount: 1)
         try rzCircuit.h(0)
         try rzCircuit.rz(theta: QFloat(Double.pi / 4.0), 0)
@@ -176,19 +176,19 @@ extension QuantumKitTests {
     func testTSquaredEqualsS() throws {
         let engine = try QuantumEngine()
 
-        guard let device = makeDevice() else {
+        guard makeDevice() != nil else {
             XCTFail("Apple Silicon GPU not found!")
             return
         }
 
-        let ttState = try StateVector(qubitCount: 1, device: device)
+        let ttState = try StateVector(qubitCount: 1)
         var ttCircuit = try QuantumCircuit(qubitCount: 1)
         try ttCircuit.h(0)
         try ttCircuit.t(0)
         try ttCircuit.t(0)
         try engine.execute(ttCircuit, on: ttState)
 
-        let sState = try StateVector(qubitCount: 1, device: device)
+        let sState = try StateVector(qubitCount: 1)
         var sCircuit = try QuantumCircuit(qubitCount: 1)
         try sCircuit.h(0)
         try sCircuit.s(0)
@@ -207,9 +207,9 @@ extension QuantumKitTests {
 
     func testSDaggerInvertsS() throws {
         let engine = try QuantumEngine()
-        guard let device = makeDevice() else { XCTFail("Apple Silicon GPU not found!"); return }
+        guard makeDevice() != nil else { XCTFail("Apple Silicon GPU not found!"); return }
 
-        let state = try StateVector(qubitCount: 1, device: device)
+        let state = try StateVector(qubitCount: 1)
         var circuit = try QuantumCircuit(qubitCount: 1)
         try circuit.h(0)
         try circuit.s(0)
@@ -223,9 +223,9 @@ extension QuantumKitTests {
 
     func testTDaggerInvertsT() throws {
         let engine = try QuantumEngine()
-        guard let device = makeDevice() else { XCTFail("Apple Silicon GPU not found!"); return }
+        guard makeDevice() != nil else { XCTFail("Apple Silicon GPU not found!"); return }
 
-        let state = try StateVector(qubitCount: 1, device: device)
+        let state = try StateVector(qubitCount: 1)
         var circuit = try QuantumCircuit(qubitCount: 1)
         try circuit.h(0)
         try circuit.t(0)
@@ -239,9 +239,9 @@ extension QuantumKitTests {
 
     func testSXSquaredEqualsX() throws {
         let engine = try QuantumEngine()
-        guard let device = makeDevice() else { XCTFail("Apple Silicon GPU not found!"); return }
+        guard makeDevice() != nil else { XCTFail("Apple Silicon GPU not found!"); return }
 
-        let state = try StateVector(qubitCount: 1, device: device)
+        let state = try StateVector(qubitCount: 1)
         var circuit = try QuantumCircuit(qubitCount: 1)
         try circuit.sx(0)
         try circuit.sx(0)
@@ -253,9 +253,9 @@ extension QuantumKitTests {
 
     func testSingleSXProducesEqualSuperposition() throws {
         let engine = try QuantumEngine()
-        guard let device = makeDevice() else { XCTFail("Apple Silicon GPU not found!"); return }
+        guard makeDevice() != nil else { XCTFail("Apple Silicon GPU not found!"); return }
 
-        let state = try StateVector(qubitCount: 1, device: device)
+        let state = try StateVector(qubitCount: 1)
         var circuit = try QuantumCircuit(qubitCount: 1)
         try circuit.sx(0)
         try engine.execute(circuit, on: state)
@@ -267,9 +267,9 @@ extension QuantumKitTests {
 
     func testPhaseGatePiActsAsZ() throws {
         let engine = try QuantumEngine()
-        guard let device = makeDevice() else { XCTFail("Apple Silicon GPU not found!"); return }
+        guard makeDevice() != nil else { XCTFail("Apple Silicon GPU not found!"); return }
 
-        let state = try StateVector(qubitCount: 1, device: device)
+        let state = try StateVector(qubitCount: 1)
         var circuit = try QuantumCircuit(qubitCount: 1)
         try circuit.h(0)
         try circuit.p(theta: QFloat(Double.pi), 0)
@@ -282,9 +282,9 @@ extension QuantumKitTests {
 
     func testControlledZActsAsZWhenControlIsOne() throws {
         let engine = try QuantumEngine()
-        guard let device = makeDevice() else { XCTFail("Apple Silicon GPU not found!"); return }
+        guard makeDevice() != nil else { XCTFail("Apple Silicon GPU not found!"); return }
 
-        let state = try StateVector(qubitCount: 2, device: device)
+        let state = try StateVector(qubitCount: 2)
         var circuit = try QuantumCircuit(qubitCount: 2)
         try circuit.x(0)            // control = |1⟩
         try circuit.h(1)            // target = |+⟩
@@ -300,9 +300,9 @@ extension QuantumKitTests {
 
     func testControlledZLeavesTargetWhenControlIsZero() throws {
         let engine = try QuantumEngine()
-        guard let device = makeDevice() else { XCTFail("Apple Silicon GPU not found!"); return }
+        guard makeDevice() != nil else { XCTFail("Apple Silicon GPU not found!"); return }
 
-        let state = try StateVector(qubitCount: 2, device: device)
+        let state = try StateVector(qubitCount: 2)
         var circuit = try QuantumCircuit(qubitCount: 2)
         try circuit.h(1)            // target = |+⟩, control stays |0⟩
         try circuit.cz(0, 1)        // no-op since control = |0⟩
@@ -315,9 +315,9 @@ extension QuantumKitTests {
 
     func testNativeSwapExchangesQubits() throws {
         let engine = try QuantumEngine()
-        guard let device = makeDevice() else { XCTFail("Apple Silicon GPU not found!"); return }
+        guard makeDevice() != nil else { XCTFail("Apple Silicon GPU not found!"); return }
 
-        let state = try StateVector(qubitCount: 2, device: device)
+        let state = try StateVector(qubitCount: 2)
         var circuit = try QuantumCircuit(qubitCount: 2)
         try circuit.x(0)            // qubit0 = |1⟩, qubit1 = |0⟩
         try circuit.swap(0, 1)      // → qubit0 = |0⟩, qubit1 = |1⟩
@@ -331,9 +331,9 @@ extension QuantumKitTests {
 
     func testUniversalGateReproducesPauliX() throws {
         let engine = try QuantumEngine()
-        guard let device = makeDevice() else { XCTFail("Apple Silicon GPU not found!"); return }
+        guard makeDevice() != nil else { XCTFail("Apple Silicon GPU not found!"); return }
 
-        let state = try StateVector(qubitCount: 1, device: device)
+        let state = try StateVector(qubitCount: 1)
         var circuit = try QuantumCircuit(qubitCount: 1)
         try circuit.u(theta: QFloat(Double.pi), phi: 0, lambda: QFloat(Double.pi), 0)
         try engine.execute(circuit, on: state)
@@ -344,9 +344,9 @@ extension QuantumKitTests {
 
     func testUniversalGateReproducesHadamard() throws {
         let engine = try QuantumEngine()
-        guard let device = makeDevice() else { XCTFail("Apple Silicon GPU not found!"); return }
+        guard makeDevice() != nil else { XCTFail("Apple Silicon GPU not found!"); return }
 
-        let state = try StateVector(qubitCount: 1, device: device)
+        let state = try StateVector(qubitCount: 1)
         var circuit = try QuantumCircuit(qubitCount: 1)
         try circuit.u(theta: QFloat(Double.pi / 2), phi: 0, lambda: QFloat(Double.pi), 0)
         try engine.execute(circuit, on: state)
@@ -361,10 +361,10 @@ extension QuantumKitTests {
 
     func testUniversalGateMatchesPhaseGate() throws {
         let engine = try QuantumEngine()
-        guard let device = makeDevice() else { XCTFail("Apple Silicon GPU not found!"); return }
+        guard makeDevice() != nil else { XCTFail("Apple Silicon GPU not found!"); return }
 
         // U(0,0,λ) = P(λ): H · U(0,0,π) · H should behave like H · Z · H = X.
-        let state = try StateVector(qubitCount: 1, device: device)
+        let state = try StateVector(qubitCount: 1)
         var circuit = try QuantumCircuit(qubitCount: 1)
         try circuit.h(0)
         try circuit.u(theta: 0, phi: 0, lambda: QFloat(Double.pi), 0)
@@ -379,9 +379,9 @@ extension QuantumKitTests {
 
     func testControlledRYRotatesTargetWhenControlIsOne() throws {
         let engine = try QuantumEngine()
-        guard let device = makeDevice() else { XCTFail("Apple Silicon GPU not found!"); return }
+        guard makeDevice() != nil else { XCTFail("Apple Silicon GPU not found!"); return }
 
-        let state = try StateVector(qubitCount: 2, device: device)
+        let state = try StateVector(qubitCount: 2)
         var circuit = try QuantumCircuit(qubitCount: 2)
         try circuit.x(0)
         try circuit.cry(theta: QFloat(Double.pi), control: 0, target: 1)
@@ -393,9 +393,9 @@ extension QuantumKitTests {
 
     func testControlledRYLeavesTargetWhenControlIsZero() throws {
         let engine = try QuantumEngine()
-        guard let device = makeDevice() else { XCTFail("Apple Silicon GPU not found!"); return }
+        guard makeDevice() != nil else { XCTFail("Apple Silicon GPU not found!"); return }
 
-        let state = try StateVector(qubitCount: 2, device: device)
+        let state = try StateVector(qubitCount: 2)
         var circuit = try QuantumCircuit(qubitCount: 2)
         try circuit.cry(theta: QFloat(Double.pi), control: 0, target: 1)
         try engine.execute(circuit, on: state)
@@ -406,9 +406,9 @@ extension QuantumKitTests {
 
     func testControlledRXExcitesTargetWhenControlIsOne() throws {
         let engine = try QuantumEngine()
-        guard let device = makeDevice() else { XCTFail("Apple Silicon GPU not found!"); return }
+        guard makeDevice() != nil else { XCTFail("Apple Silicon GPU not found!"); return }
 
-        let state = try StateVector(qubitCount: 2, device: device)
+        let state = try StateVector(qubitCount: 2)
         var circuit = try QuantumCircuit(qubitCount: 2)
         try circuit.x(0)
         try circuit.crx(theta: QFloat(Double.pi), control: 0, target: 1)
@@ -420,9 +420,9 @@ extension QuantumKitTests {
 
     func testControlledRZActsAsZWhenControlIsOne() throws {
         let engine = try QuantumEngine()
-        guard let device = makeDevice() else { XCTFail("Apple Silicon GPU not found!"); return }
+        guard makeDevice() != nil else { XCTFail("Apple Silicon GPU not found!"); return }
 
-        let state = try StateVector(qubitCount: 2, device: device)
+        let state = try StateVector(qubitCount: 2)
         var circuit = try QuantumCircuit(qubitCount: 2)
         try circuit.x(0)
         try circuit.h(1)
@@ -436,9 +436,9 @@ extension QuantumKitTests {
 
     func testControlledPhasePiMatchesControlledZ() throws {
         let engine = try QuantumEngine()
-        guard let device = makeDevice() else { XCTFail("Apple Silicon GPU not found!"); return }
+        guard makeDevice() != nil else { XCTFail("Apple Silicon GPU not found!"); return }
 
-        let state = try StateVector(qubitCount: 2, device: device)
+        let state = try StateVector(qubitCount: 2)
         var circuit = try QuantumCircuit(qubitCount: 2)
         try circuit.x(0)
         try circuit.h(1)
@@ -452,9 +452,9 @@ extension QuantumKitTests {
 
     func testMultiControlledXFlipsTargetWhenAllControlsAreOne() throws {
         let engine = try QuantumEngine()
-        guard let device = makeDevice() else { XCTFail("Apple Silicon GPU not found!"); return }
+        guard makeDevice() != nil else { XCTFail("Apple Silicon GPU not found!"); return }
 
-        let state = try StateVector(qubitCount: 4, device: device)
+        let state = try StateVector(qubitCount: 4)
         var circuit = try QuantumCircuit(qubitCount: 4)
         try circuit.x(0)
         try circuit.x(1)
@@ -468,9 +468,9 @@ extension QuantumKitTests {
 
     func testMultiControlledXLeavesTargetWhenAControlIsZero() throws {
         let engine = try QuantumEngine()
-        guard let device = makeDevice() else { XCTFail("Apple Silicon GPU not found!"); return }
+        guard makeDevice() != nil else { XCTFail("Apple Silicon GPU not found!"); return }
 
-        let state = try StateVector(qubitCount: 4, device: device)
+        let state = try StateVector(qubitCount: 4)
         var circuit = try QuantumCircuit(qubitCount: 4)
         try circuit.x(0)
         try circuit.x(1)
@@ -484,9 +484,9 @@ extension QuantumKitTests {
 
     func testMultiControlledZActsAsZWhenAllControlsAreOne() throws {
         let engine = try QuantumEngine()
-        guard let device = makeDevice() else { XCTFail("Apple Silicon GPU not found!"); return }
+        guard makeDevice() != nil else { XCTFail("Apple Silicon GPU not found!"); return }
 
-        let state = try StateVector(qubitCount: 3, device: device)
+        let state = try StateVector(qubitCount: 3)
         var circuit = try QuantumCircuit(qubitCount: 3)
         try circuit.x(0)
         try circuit.x(1)

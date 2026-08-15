@@ -8,7 +8,7 @@ extension QuantumKitTests {
 
     private func makeDensitySetup(qubitCount: Int) throws -> (DensityMatrixEngine, DensityMatrix)? {
         let engine = try DensityMatrixEngine()
-        let density = try DensityMatrix(qubitCount: qubitCount, device: engine.device)
+        let density = try DensityMatrix(qubitCount: qubitCount)
         return (engine, density)
     }
 

@@ -21,6 +21,9 @@ public enum StateVectorError: Error {
 /// via ``resetToZero()`` or a kernel mutates the other). Create a fresh instance per independent
 /// state rather than copying.
 ///
+/// Prefer ``init(qubitCount:)`` (resolves ``MetalRuntime``) so callers never touch Metal.
+/// Explicit ``MTLDevice`` allocation remains available but is **deprecated** (H6b); removal is H6c.
+///
 /// - Important: A single `StateVector` is **not** safe to mutate from multiple threads at once.
 ///   Distinct `StateVector` instances may be operated on concurrently (see ``QuantumEngine``).
 public final class StateVector {
@@ -33,12 +36,21 @@ public final class StateVector {
     public let realBuffer: MTLBuffer
     public let imagBuffer: MTLBuffer
 
-    /// Creates a GPU state vector on the default system Metal device.
+    /// Creates a GPU state vector via ``MetalRuntime/sharedDevice()`` (no caller Metal imports).
     public convenience init(qubitCount: Int) throws {
-        try self.init(qubitCount: qubitCount, device: MetalRuntime.sharedDevice())
+        try self.init(qubitCount: qubitCount, on: MetalRuntime.sharedDevice())
     }
 
-    public init(qubitCount: Int, device: MTLDevice) throws {
+    /// Deprecated advanced path: allocate on an explicit ``MTLDevice``. Prefer ``init(qubitCount:)``.
+    ///
+    /// Still allocates on the **passed** device (not ignored). Scheduled for removal in a future major (H6c).
+    @available(*, deprecated, message: "Prefer init(qubitCount:). Explicit MTLDevice allocation is deprecated; removal planned for a future major (H6c).")
+    public convenience init(qubitCount: Int, device: MTLDevice) throws {
+        try self.init(qubitCount: qubitCount, on: device)
+    }
+
+    /// Package-internal designated initializer; always honors `device` for buffer correctness.
+    init(qubitCount: Int, on device: MTLDevice) throws {
         guard qubitCount > 0 else {
             throw StateVectorError.invalidQubitCount(qubitCount)
         }

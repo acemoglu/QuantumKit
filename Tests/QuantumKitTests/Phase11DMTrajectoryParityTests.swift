@@ -11,7 +11,7 @@ extension QuantumKitTests {
     /// Localized / coherent / crosstalk / `.dephasingOnly` remain DM-only (rejection covered elsewhere).
 
     func testParitySingleQubitDepolarizingDMVersusTrajectories() throws {
-        guard let device = makeDevice() else {
+        guard makeDevice() != nil else {
             throw XCTSkip("Metal device unavailable")
         }
 
@@ -29,7 +29,6 @@ extension QuantumKitTests {
         let svProbs = try averageTrajectoryProbabilities(
             circuit: circuit,
             noise: noise,
-            device: device,
             trajectories: 4000,
             seed: 42
         )
@@ -38,7 +37,7 @@ extension QuantumKitTests {
     }
 
     func testParityTwoQubitCorrelatedDepolarizingDMVersusTrajectories() throws {
-        guard let device = makeDevice() else {
+        guard makeDevice() != nil else {
             throw XCTSkip("Metal device unavailable")
         }
 
@@ -58,7 +57,6 @@ extension QuantumKitTests {
         let svProbs = try averageTrajectoryProbabilities(
             circuit: circuit,
             noise: noise,
-            device: device,
             trajectories: 6000,
             seed: 99
         )
@@ -68,7 +66,7 @@ extension QuantumKitTests {
     }
 
     func testParityAmplitudeDampingDMVersusTrajectories() throws {
-        guard let device = makeDevice() else {
+        guard makeDevice() != nil else {
             throw XCTSkip("Metal device unavailable")
         }
 
@@ -86,7 +84,6 @@ extension QuantumKitTests {
         let svProbs = try averageTrajectoryProbabilities(
             circuit: circuit,
             noise: noise,
-            device: device,
             trajectories: 4000,
             seed: 7
         )
@@ -95,7 +92,7 @@ extension QuantumKitTests {
     }
 
     func testParityPhaseDampingDMVersusTrajectories() throws {
-        guard let device = makeDevice() else {
+        guard makeDevice() != nil else {
             throw XCTSkip("Metal device unavailable")
         }
 
@@ -106,7 +103,7 @@ extension QuantumKitTests {
         try circuit.h(0)
 
         let dmEngine = try DensityMatrixEngine()
-        let density = try DensityMatrix(qubitCount: 1, device: dmEngine.device)
+        let density = try DensityMatrix(qubitCount: 1)
         var dmRNG: QuantumRNG = .seeded(4)
         _ = try dmEngine.executeRNG(circuit, on: density, rng: &dmRNG, noise: noise)
         let dmX = try QuantumMeasurement.expectationPauli(
@@ -122,7 +119,7 @@ extension QuantumKitTests {
         var accumulatedX: QFloat = 0
         let trajectories = 4000
         for _ in 0..<trajectories {
-            let state = try StateVector(qubitCount: 1, device: device)
+            let state = try StateVector(qubitCount: 1)
             _ = try svEngine.executeRNG(circuit, on: state, rng: &svRNG, noise: noise)
             accumulatedX += try QuantumMeasurement.expectationX(state: state, engine: svEngine, qubit: 0)
         }
@@ -131,7 +128,7 @@ extension QuantumKitTests {
     }
 
     func testParityFullAmplitudeDampingBothEngines() throws {
-        guard let device = makeDevice() else {
+        guard makeDevice() != nil else {
             throw XCTSkip("Metal device unavailable")
         }
 
@@ -143,7 +140,7 @@ extension QuantumKitTests {
         XCTAssertEqual(dmProbs[0], 1, accuracy: 1e-5)
 
         let svEngine = try QuantumEngine()
-        let state = try StateVector(qubitCount: 1, device: device)
+        let state = try StateVector(qubitCount: 1)
         var rng: QuantumRNG = .seeded(11)
         _ = try svEngine.executeRNG(circuit, on: state, rng: &rng, noise: noise)
         let z = try QuantumMeasurement.expectationZ(state: state, engine: svEngine, qubit: 0)
@@ -151,7 +148,7 @@ extension QuantumKitTests {
     }
 
     func testParityResetErrorBothEngines() throws {
-        guard let device = makeDevice() else {
+        guard makeDevice() != nil else {
             throw XCTSkip("Metal device unavailable")
         }
 
@@ -164,7 +161,7 @@ extension QuantumKitTests {
         XCTAssertEqual(dmProbs[1], 1, accuracy: 1e-5)
 
         let svEngine = try QuantumEngine()
-        let state = try StateVector(qubitCount: 1, device: device)
+        let state = try StateVector(qubitCount: 1)
         var rng: QuantumRNG = .seeded(8)
         _ = try svEngine.executeRNG(circuit, on: state, rng: &rng, noise: noise)
         let z = try QuantumMeasurement.expectationZ(state: state, engine: svEngine, qubit: 0)
@@ -172,7 +169,7 @@ extension QuantumKitTests {
     }
 
     func testParityIdleDelayThermalBothEngines() throws {
-        guard let device = makeDevice() else {
+        guard makeDevice() != nil else {
             throw XCTSkip("Metal device unavailable")
         }
 
@@ -185,7 +182,7 @@ extension QuantumKitTests {
         XCTAssertEqual(dmProbs[0], 1, accuracy: 1e-4)
 
         let svEngine = try QuantumEngine()
-        let state = try StateVector(qubitCount: 1, device: device)
+        let state = try StateVector(qubitCount: 1)
         var rng: QuantumRNG = .seeded(10)
         _ = try svEngine.executeRNG(circuit, on: state, rng: &rng, noise: noise)
         let z = try QuantumMeasurement.expectationZ(state: state, engine: svEngine, qubit: 0)
@@ -225,7 +222,7 @@ extension QuantumKitTests {
         seed: UInt64
     ) throws -> [QFloat] {
         let engine = try DensityMatrixEngine()
-        let density = try DensityMatrix(qubitCount: circuit.qubitCount, device: engine.device)
+        let density = try DensityMatrix(qubitCount: circuit.qubitCount)
         var rng: QuantumRNG = .seeded(seed)
         _ = try engine.executeRNG(circuit, on: density, rng: &rng, noise: noise)
         return engine.probabilities(of: density)
@@ -234,7 +231,6 @@ extension QuantumKitTests {
     private func averageTrajectoryProbabilities(
         circuit: QuantumCircuit,
         noise: NoiseModel,
-        device: MTLDevice,
         trajectories: Int,
         seed: UInt64
     ) throws -> [QFloat] {
@@ -244,7 +240,7 @@ extension QuantumKitTests {
         var sums = Array(repeating: QFloat(0), count: dim)
 
         for _ in 0..<trajectories {
-            let state = try StateVector(qubitCount: circuit.qubitCount, device: device)
+            let state = try StateVector(qubitCount: circuit.qubitCount)
             _ = try engine.executeRNG(circuit, on: state, rng: &rng, noise: noise)
             let probs = try QuantumMeasurement.probabilities(state: state, engine: engine)
             for index in 0..<dim {

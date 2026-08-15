@@ -33,21 +33,33 @@ public struct SampleCountOptions: Sendable, Equatable {
 }
 
 /// Pre-allocated state vectors reused across batched shots.
+///
+/// Prefer ``init(qubitCount:capacity:)`` (resolves ``MetalRuntime``). Explicit ``MTLDevice``
+/// allocation remains available but is **deprecated** (H6b); removal is H6c.
 public final class StateVectorBatch: @unchecked Sendable {
 
     public let qubitCount: Int
     public let capacity: Int
     public let states: [StateVector]
 
+    /// Creates a batch via ``MetalRuntime/sharedDevice()`` (no caller Metal imports).
     public convenience init(qubitCount: Int, capacity: Int) throws {
         try self.init(
             qubitCount: qubitCount,
-            device: MetalRuntime.sharedDevice(),
+            on: MetalRuntime.sharedDevice(),
             capacity: capacity
         )
     }
 
-    public init(qubitCount: Int, device: MTLDevice, capacity: Int) throws {
+    /// Deprecated advanced path: allocate all states on an explicit ``MTLDevice``.
+    /// Prefer ``init(qubitCount:capacity:)``. Still uses the **passed** device.
+    @available(*, deprecated, message: "Prefer init(qubitCount:capacity:). Explicit MTLDevice allocation is deprecated; removal planned for a future major (H6c).")
+    public convenience init(qubitCount: Int, device: MTLDevice, capacity: Int) throws {
+        try self.init(qubitCount: qubitCount, on: device, capacity: capacity)
+    }
+
+    /// Package-internal designated initializer; always honors `device` for buffer correctness.
+    init(qubitCount: Int, on device: MTLDevice, capacity: Int) throws {
         guard capacity > 0 else {
             throw BatchExecutionError.invalidBatchSize(capacity)
         }
@@ -55,7 +67,7 @@ public final class StateVectorBatch: @unchecked Sendable {
         self.qubitCount = qubitCount
         self.capacity = capacity
         self.states = try (0..<capacity).map { _ in
-            try StateVector(qubitCount: qubitCount, device: device)
+            try StateVector(qubitCount: qubitCount, on: device)
         }
     }
 }
@@ -178,7 +190,7 @@ enum BatchSampleExecutor {
             shots: shots
         )
 
-        let pool = try StateVectorBatch(qubitCount: circuit.qubitCount, device: device, capacity: batchSize)
+        let pool = try StateVectorBatch(qubitCount: circuit.qubitCount, on: device, capacity: batchSize)
         var completedShots = 0
 
         while completedShots < shots {

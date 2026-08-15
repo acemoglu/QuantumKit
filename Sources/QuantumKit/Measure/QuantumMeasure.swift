@@ -168,46 +168,6 @@ public struct QuantumMeasurement {
         )
     }
 
-    @available(*, deprecated, message: "Pass shots only; the default Metal device is resolved internally.")
-    public static func runSampleCounts(
-        circuit: QuantumCircuit,
-        engine: QuantumEngine,
-        device: MTLDevice,
-        shots: Int,
-        noise: NoiseModel? = nil,
-        options: SampleCountOptions = SampleCountOptions()
-    ) throws -> ShotCounts {
-        _ = device
-        return try runSampleCounts(
-            circuit: circuit,
-            engine: engine,
-            shots: shots,
-            noise: noise,
-            options: options
-        )
-    }
-
-    @available(*, deprecated, message: "Pass shots only; the default Metal device is resolved internally.")
-    public static func runSampleCountsRNG(
-        circuit: QuantumCircuit,
-        engine: QuantumEngine,
-        device: MTLDevice,
-        shots: Int,
-        rng: inout QuantumRNG,
-        noise: NoiseModel? = nil,
-        options: SampleCountOptions = SampleCountOptions()
-    ) throws -> ShotCounts {
-        _ = device
-        return try runSampleCountsRNG(
-            circuit: circuit,
-            engine: engine,
-            shots: shots,
-            rng: &rng,
-            noise: noise,
-            options: options
-        )
-    }
-
     static func pauliZEigenvalue(stateIndex: Int, qubit: Int) -> QFloat {
         ((stateIndex >> qubit) & 1) == 0 ? 1 : -1
     }

@@ -28,7 +28,7 @@ extension QuantumKitTests {
                 _ = try cpuEngine.execute(circuit, on: cpu)
                 let cpuProbs = cpu.probabilitiesDouble()
 
-                let metal = try StateVector(qubitCount: n, device: metalEngine.device)
+                let metal = try StateVector(qubitCount: n)
                 _ = try metalEngine.execute(circuit, on: metal)
                 let metalProbs = try QuantumMeasurement.probabilities(state: metal, engine: metalEngine)
                 let metalAmps = QuantumMeasurement.amplitudes(state: metal)

@@ -176,13 +176,13 @@ extension QuantumKitTests {
         let seed: UInt64 = 777
         let engine = try QuantumEngine()
 
-        let fullState = try StateVector(qubitCount: 2, device: engine.device)
+        let fullState = try StateVector(qubitCount: 2)
         var fullRNG: QuantumRNG = .seeded(seed)
         let fullResult = try engine.executeRNG(circuit, on: fullState, rng: &fullRNG)
         let fullProbs = try QuantumMeasurement.probabilities(state: fullState, engine: engine)
 
         let splitAt = 2
-        let partialState = try StateVector(qubitCount: 2, device: engine.device)
+        let partialState = try StateVector(qubitCount: 2)
         var partialRNG: QuantumRNG = .seeded(seed)
         let first = try engine.executeRNG(
             circuit,
@@ -353,7 +353,7 @@ extension QuantumKitTests {
             throw XCTSkip("Metal device unavailable")
         }
         let engine = try QuantumEngine()
-        let state = try StateVector(qubitCount: 2, device: engine.device)
+        let state = try StateVector(qubitCount: 2)
         var circuit = try QuantumCircuit(qubitCount: 2)
         try circuit.h(0)
         try circuit.cx(0, 1)
@@ -417,7 +417,7 @@ extension QuantumKitTests {
         try circuit.x(0)
 
         let engine = try DensityMatrixEngine()
-        let density = try DensityMatrix(qubitCount: 1, device: engine.device)
+        let density = try DensityMatrix(qubitCount: 1)
         var rng: QuantumRNG = .seeded(1)
         let result = try engine.executeRNG(circuit, on: density, rng: &rng)
         XCTAssertEqual(result.appliedGateCount, circuit.gates.count)
@@ -437,7 +437,7 @@ extension QuantumKitTests {
             throw XCTSkip("Metal device unavailable")
         }
         let engine = try QuantumEngine()
-        let state = try StateVector(qubitCount: 1, device: engine.device)
+        let state = try StateVector(qubitCount: 1)
         var circuit = try QuantumCircuit(qubitCount: 1)
         try circuit.h(0)
         let identity = [

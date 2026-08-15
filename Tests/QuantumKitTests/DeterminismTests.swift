@@ -117,8 +117,8 @@ extension QuantumKitTests {
         try circuit.cx(0, 1)
 
         let engine = try QuantumEngine()
-        let a = try StateVector(qubitCount: 2, device: engine.device)
-        let b = try StateVector(qubitCount: 2, device: engine.device)
+        let a = try StateVector(qubitCount: 2)
+        let b = try StateVector(qubitCount: 2)
         _ = try engine.execute(circuit, on: a)
         _ = try engine.execute(circuit, on: b)
 

@@ -53,12 +53,12 @@ extension QuantumKitTests {
     func testQuantumAdder() throws {
         let engine = try QuantumEngine()
 
-        guard let device = makeDevice() else {
+        guard makeDevice() != nil else {
             XCTFail("Apple Silicon GPU not found!")
             return
         }
 
-        let state = try StateVector(qubitCount: 6, device: device)
+        let state = try StateVector(qubitCount: 6)
         var circuit = try QuantumCircuit(qubitCount: 6)
 
         // Encode a = 1 (binary 01): set qubit 0 (LSB of registerA)
@@ -104,12 +104,12 @@ extension QuantumKitTests {
     func testQuantumSubtract() throws {
         let engine = try QuantumEngine()
 
-        guard let device = makeDevice() else {
+        guard makeDevice() != nil else {
             XCTFail("Apple Silicon GPU not found!")
             return
         }
 
-        let state = try StateVector(qubitCount: 8, device: device)
+        let state = try StateVector(qubitCount: 8)
         var circuit = try QuantumCircuit(qubitCount: 8)
 
         // Encode A = 2 (binary 010): set qubit 1 (middle bit of registerA)
@@ -159,12 +159,12 @@ extension QuantumKitTests {
     func testModularAdd() throws {
         let engine = try QuantumEngine()
 
-        guard let device = makeDevice() else {
+        guard makeDevice() != nil else {
             XCTFail("Apple Silicon GPU not found!")
             return
         }
 
-        let state = try StateVector(qubitCount: 13, device: device)
+        let state = try StateVector(qubitCount: 13)
         var circuit = try QuantumCircuit(qubitCount: 13)
 
         // Encode x = 4 (binary 0100): set qubit 2 (bit 2 of 4-bit registerX)
@@ -222,7 +222,7 @@ extension QuantumKitTests {
     func testModularAddExhaustiveReversibility() throws {
         let engine = try QuantumEngine()
 
-        guard let device = makeDevice() else {
+        guard makeDevice() != nil else {
             XCTFail("Apple Silicon GPU not found!")
             return
         }
@@ -237,7 +237,7 @@ extension QuantumKitTests {
 
             for x in 0..<N {
                 for a in 0..<N {
-                    let state = try StateVector(qubitCount: qubitCount, device: device)
+                    let state = try StateVector(qubitCount: qubitCount)
                     var circuit = try QuantumCircuit(qubitCount: qubitCount)
 
                     for i in 0..<n where (x >> i) & 1 == 1 { try circuit.x(registerX[i]) }

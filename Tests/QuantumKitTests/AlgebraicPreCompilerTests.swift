@@ -290,7 +290,7 @@ extension QuantumKitTests {
     func testAlgebraicPreCompilerPreservesBellStateProbabilities() throws {
         let engine = try QuantumEngine()
 
-        guard let device = makeDevice() else {
+        guard makeDevice() != nil else {
             XCTFail("Apple Silicon GPU not found!")
             return
         }
@@ -307,10 +307,10 @@ extension QuantumKitTests {
 
         let optimized = try redundant.algebraicallyOptimized()
 
-        let originalState = try StateVector(qubitCount: 2, device: device)
+        let originalState = try StateVector(qubitCount: 2)
         try engine.execute(original, on: originalState)
 
-        let optimizedState = try StateVector(qubitCount: 2, device: device)
+        let optimizedState = try StateVector(qubitCount: 2)
         try engine.execute(optimized, on: optimizedState)
 
         let originalProbabilities = try QuantumMeasurement.probabilities(state: originalState, engine: engine)

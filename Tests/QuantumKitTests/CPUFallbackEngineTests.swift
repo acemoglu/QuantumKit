@@ -111,7 +111,7 @@ extension QuantumKitTests {
         let cpuProbs = cpuState.probabilities()
 
         let metalEngine = try QuantumEngine()
-        let metalState = try StateVector(qubitCount: 2, device: metalEngine.device)
+        let metalState = try StateVector(qubitCount: 2)
         _ = try metalEngine.execute(circuit, on: metalState)
         let metalProbs = try QuantumMeasurement.probabilities(state: metalState, engine: metalEngine)
 
@@ -136,7 +136,7 @@ extension QuantumKitTests {
         let cpuProbs = cpuDensity.probabilities()
 
         let metalEngine = try DensityMatrixEngine()
-        let metalDensity = try DensityMatrix(qubitCount: 1, device: metalEngine.device)
+        let metalDensity = try DensityMatrix(qubitCount: 1)
         _ = try metalEngine.execute(circuit, on: metalDensity, noise: noise)
         let metalProbs = metalEngine.probabilities(of: metalDensity)
 

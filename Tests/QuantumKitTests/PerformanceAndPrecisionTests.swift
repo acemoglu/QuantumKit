@@ -543,7 +543,7 @@ extension QuantumKitTests {
 
         for qubitCount in scales {
             let iterations = iterationsByScale[qubitCount] ?? 4
-            let state = try StateVector(qubitCount: qubitCount, device: device)
+            let state = try StateVector(qubitCount: qubitCount)
             let pairCount = state.stateCount / 2
 
             // Build a moderately non-trivial state so controlled-path arithmetic and phase paths are active.
@@ -654,14 +654,14 @@ extension QuantumKitTests {
     func testMassiveGHZStateGPUPerformance() throws {
             let engine = try QuantumEngine()
 
-            guard let device = makeDevice() else {
-                XCTFail("Apple Silicon GPU not found!")
-                return
-            }
+            guard makeDevice() != nil else {
+            XCTFail("Apple Silicon GPU not found!")
+            return
+        }
 
             // 24 Kübit = Yaklaşık 16.7 Milyon Paralel Durum (State)
             let qubitCount = 28
-            let state = try StateVector(qubitCount: qubitCount, device: device)
+            let state = try StateVector(qubitCount: qubitCount)
             var circuit = try QuantumCircuit(qubitCount: qubitCount)
 
             // 1. Evreni tam ortadan iki ihtimale bölüyoruz
@@ -703,7 +703,7 @@ extension QuantumKitTests {
     /// - no-renorm path accumulates measurable L2 drift,
     /// - renorm path clamps ||psi||^2 back to 1 within tight tolerance.
     func testDeepCircuitNormDriftRegressionWithPeriodicRenormalization() throws {
-        guard let device = makeDevice() else {
+        guard makeDevice() != nil else {
             XCTFail("Apple Silicon GPU not found!")
             return
         }
@@ -724,8 +724,8 @@ extension QuantumKitTests {
         let noRenormEngine = try QuantumEngine(renormalizationInterval: 0)
         let renormEngine = try QuantumEngine(renormalizationInterval: renormInterval)
 
-        let noRenormState = try StateVector(qubitCount: qubitCount, device: device)
-        let renormState = try StateVector(qubitCount: qubitCount, device: device)
+        let noRenormState = try StateVector(qubitCount: qubitCount)
+        let renormState = try StateVector(qubitCount: qubitCount)
 
         try noRenormEngine.execute(circuit, on: noRenormState)
         try renormEngine.execute(circuit, on: renormState)
@@ -770,7 +770,7 @@ extension QuantumKitTests {
     /// The production path should keep norm drift in a mathematically safe envelope while still
     /// offering substantial protection relative to the disabled baseline.
     func testDeepCircuitNormDriftRegressionWithProductionRenormalizationCadence() throws {
-        guard let device = makeDevice() else {
+        guard makeDevice() != nil else {
             XCTFail("Apple Silicon GPU not found!")
             return
         }
@@ -789,8 +789,8 @@ extension QuantumKitTests {
         let baselineEngine = try QuantumEngine(renormalizationInterval: 0)
         let productionEngine = try QuantumEngine(renormalizationInterval: productionInterval)
 
-        let baselineState = try StateVector(qubitCount: qubitCount, device: device)
-        let productionState = try StateVector(qubitCount: qubitCount, device: device)
+        let baselineState = try StateVector(qubitCount: qubitCount)
+        let productionState = try StateVector(qubitCount: qubitCount)
 
         try baselineEngine.execute(circuit, on: baselineState)
         try productionEngine.execute(circuit, on: productionState)
@@ -841,7 +841,7 @@ extension QuantumKitTests {
     func testKahanCDFSurvivesFloat32PlateauAt25Qubits() throws {
         let engine = try QuantumEngine()
 
-        guard let device = makeDevice() else {
+        guard makeDevice() != nil else {
             XCTFail("Apple Silicon GPU not found!")
             return
         }
@@ -851,7 +851,7 @@ extension QuantumKitTests {
 
         // Tüm kübitlere H → yoğun, neredeyse uniform süperpozisyon (durum başına olasılık ≈ 2⁻²⁵).
         func makeUniformState() throws -> StateVector {
-            let state = try StateVector(qubitCount: qubitCount, device: device)
+            let state = try StateVector(qubitCount: qubitCount)
             var circuit = try QuantumCircuit(qubitCount: qubitCount)
             for qubit in 0..<qubitCount {
                 try circuit.h(qubit)

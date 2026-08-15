@@ -9,12 +9,12 @@ extension QuantumKitTests {
     func testPauliExpectationXOnPlusState() throws {
         let engine = try QuantumEngine()
 
-        guard let device = makeDevice() else {
+        guard makeDevice() != nil else {
             XCTFail("Apple Silicon GPU not found!")
             return
         }
 
-        let state = try StateVector(qubitCount: 1, device: device)
+        let state = try StateVector(qubitCount: 1)
         var circuit = try QuantumCircuit(qubitCount: 1)
         try circuit.h(0)
         try engine.execute(circuit, on: state)
@@ -30,12 +30,12 @@ extension QuantumKitTests {
     func testPauliExpectationZOnZeroState() throws {
         let engine = try QuantumEngine()
 
-        guard let device = makeDevice() else {
+        guard makeDevice() != nil else {
             XCTFail("Apple Silicon GPU not found!")
             return
         }
 
-        let state = try StateVector(qubitCount: 1, device: device)
+        let state = try StateVector(qubitCount: 1)
         // |0⟩: no gates applied.
         let expectation = try QuantumMeasurement.expectation(state: state, engine: engine, paulis: [0: .z])
         XCTAssertEqual(expectation, 1, accuracy: 1e-5)
@@ -47,12 +47,12 @@ extension QuantumKitTests {
     func testPauliExpectationOnBellState() throws {
         let engine = try QuantumEngine()
 
-        guard let device = makeDevice() else {
+        guard makeDevice() != nil else {
             XCTFail("Apple Silicon GPU not found!")
             return
         }
 
-        let state = try StateVector(qubitCount: 2, device: device)
+        let state = try StateVector(qubitCount: 2)
         var circuit = try QuantumCircuit(qubitCount: 2)
         try circuit.applyBellState()
         try engine.execute(circuit, on: state)
@@ -73,12 +73,12 @@ extension QuantumKitTests {
     func testPauliExpectationIdentityFactorsAreIgnored() throws {
         let engine = try QuantumEngine()
 
-        guard let device = makeDevice() else {
+        guard makeDevice() != nil else {
             XCTFail("Apple Silicon GPU not found!")
             return
         }
 
-        let state = try StateVector(qubitCount: 2, device: device)
+        let state = try StateVector(qubitCount: 2)
         var circuit = try QuantumCircuit(qubitCount: 2)
         try circuit.applyBellState()
         try engine.execute(circuit, on: state)
@@ -94,13 +94,13 @@ extension QuantumKitTests {
     func testPauliExpectationStringMatchesDictionary() throws {
         let engine = try QuantumEngine()
 
-        guard let device = makeDevice() else {
+        guard makeDevice() != nil else {
             XCTFail("Apple Silicon GPU not found!")
             return
         }
 
         // |+⟩ on qubit 0, |1⟩ on qubit 1, |0⟩ on qubit 2.
-        let state = try StateVector(qubitCount: 3, device: device)
+        let state = try StateVector(qubitCount: 3)
         var circuit = try QuantumCircuit(qubitCount: 3)
         try circuit.h(0)
         try circuit.x(1)
@@ -122,7 +122,7 @@ extension QuantumKitTests {
     func testPauliExpectationMixedXYZString() throws {
         let engine = try QuantumEngine()
 
-        guard let device = makeDevice() else {
+        guard makeDevice() != nil else {
             XCTFail("Apple Silicon GPU not found!")
             return
         }
@@ -132,7 +132,7 @@ extension QuantumKitTests {
         //   qubit1 = Y eigenstate |+i⟩ = (|0⟩ + i|1⟩)/√2  (⟨Y⟩ = +1)
         //   qubit0 = Z eigenstate |0⟩  (⟨Z⟩ = +1)
         // For a product state ⟨X₂Y₁Z₀⟩ = ⟨X⟩·⟨Y⟩·⟨Z⟩ = +1.
-        let state = try StateVector(qubitCount: 3, device: device)
+        let state = try StateVector(qubitCount: 3)
         var circuit = try QuantumCircuit(qubitCount: 3)
         try circuit.h(2)          // qubit2 → |+⟩
         try circuit.h(1)          // qubit1 → |+⟩
@@ -143,7 +143,7 @@ extension QuantumKitTests {
         XCTAssertEqual(xyz, 1, accuracy: 1e-5)
 
         // Flipping the Y eigenstate to |−i⟩ negates ⟨Y⟩, hence the whole product.
-        let stateMinus = try StateVector(qubitCount: 3, device: device)
+        let stateMinus = try StateVector(qubitCount: 3)
         var circuitMinus = try QuantumCircuit(qubitCount: 3)
         try circuitMinus.h(2)
         try circuitMinus.h(1)
@@ -155,13 +155,13 @@ extension QuantumKitTests {
     }
 
     func testPauliExpectationRejectsWrongLengthString() throws {
-        guard let device = makeDevice() else {
+        guard makeDevice() != nil else {
             XCTFail("Apple Silicon GPU not found!")
             return
         }
 
         let engine = try QuantumEngine()
-        let state = try StateVector(qubitCount: 2, device: device)
+        let state = try StateVector(qubitCount: 2)
 
         XCTAssertThrowsError(try QuantumMeasurement.expectation(state: state, engine: engine, pauliString: "XYZ")) { error in
             guard case QuantumMeasurementError.invalidPauliString = error else {

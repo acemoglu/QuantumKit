@@ -13,9 +13,12 @@ public enum DensityMatrixError: Error {
 /// Stores a `2^n x 2^n` complex matrix in row-major order using two shared Metal buffers
 /// (real + imaginary components). Designed for low-qubit, high-fidelity noisy simulation.
 ///
+/// Prefer ``init(qubitCount:)`` (resolves ``MetalRuntime``) so callers never touch Metal.
+/// Explicit ``MTLDevice`` allocation and ``device`` remain available but are **deprecated** (H6b).
+///
 /// Thread-safety: a single ``DensityMatrix`` must not be mutated concurrently. Distinct matrices
 /// may be evolved in parallel with the same or separate ``DensityMatrixEngine`` instances.
-/// Prefer one engine per concurrent worker when sharing an ``MTLDevice``.
+/// Prefer one engine per concurrent worker when sharing the runtime device.
 public final class DensityMatrix {
     public static let maxQubitCount = 14
 
@@ -23,16 +26,31 @@ public final class DensityMatrix {
     public let stateCount: Int
     public let elementCount: Int
 
-    public let device: MTLDevice
+    /// Owning Metal device for buffer allocation (package-internal; prefer device-free construction).
+    let metalDevice: MTLDevice
+
+    /// Deprecated accessor for the owning Metal device. Prefer device-free construction.
+    @available(*, deprecated, message: "Prefer device-free init(qubitCount:). Reading MTLDevice is deprecated; removal planned for a future major (H6c).")
+    public var device: MTLDevice { metalDevice }
+
     public let realBuffer: MTLBuffer
     public let imagBuffer: MTLBuffer
 
-    /// Creates a GPU density matrix on the default system Metal device.
+    /// Creates a GPU density matrix via ``MetalRuntime/sharedDevice()`` (no caller Metal imports).
     public convenience init(qubitCount: Int) throws {
-        try self.init(qubitCount: qubitCount, device: MetalRuntime.sharedDevice())
+        try self.init(qubitCount: qubitCount, on: MetalRuntime.sharedDevice())
     }
 
-    public init(qubitCount: Int, device: MTLDevice) throws {
+    /// Deprecated advanced path: allocate on an explicit ``MTLDevice``. Prefer ``init(qubitCount:)``.
+    ///
+    /// Still allocates on the **passed** device (not ignored). Scheduled for removal in a future major (H6c).
+    @available(*, deprecated, message: "Prefer init(qubitCount:). Explicit MTLDevice allocation is deprecated; removal planned for a future major (H6c).")
+    public convenience init(qubitCount: Int, device: MTLDevice) throws {
+        try self.init(qubitCount: qubitCount, on: device)
+    }
+
+    /// Package-internal designated initializer; always honors `device` for buffer correctness.
+    init(qubitCount: Int, on device: MTLDevice) throws {
         guard qubitCount > 0 else {
             throw DensityMatrixError.invalidQubitCount(qubitCount)
         }
@@ -55,7 +73,7 @@ public final class DensityMatrix {
         self.qubitCount = qubitCount
         self.stateCount = stateCount
         self.elementCount = elementCount
-        self.device = device
+        self.metalDevice = device
         self.realBuffer = realBuffer
         self.imagBuffer = imagBuffer
 

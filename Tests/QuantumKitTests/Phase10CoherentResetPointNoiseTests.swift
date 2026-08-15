@@ -266,7 +266,7 @@ extension QuantumKitTests {
 
     func testLongerDelayDampsMoreThanShortDelay() throws {
         guard let (engine, shortDensity) = try makeDensitySetupForPointNoise(qubitCount: 1) else { return }
-        let longDensity = try DensityMatrix(qubitCount: 1, device: engine.device)
+        let longDensity = try DensityMatrix(qubitCount: 1)
 
         var shortCircuit = try QuantumCircuit(qubitCount: 1)
         try shortCircuit.x(0)
@@ -449,7 +449,7 @@ extension QuantumKitTests {
         qubitCount: Int
     ) throws -> (DensityMatrixEngine, DensityMatrix)? {
         let engine = try DensityMatrixEngine()
-        let density = try DensityMatrix(qubitCount: qubitCount, device: engine.device)
+        let density = try DensityMatrix(qubitCount: qubitCount)
         return (engine, density)
     }
 }
