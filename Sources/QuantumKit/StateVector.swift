@@ -23,8 +23,8 @@ public enum StateVectorError: Error {
 ///
 /// Prefer ``init(qubitCount:)`` (resolves ``MetalRuntime``) so callers never touch Metal.
 /// Read state via ``QuantumMeasurement/amplitudes(state:)``, ``QuantumMeasurement/probabilities(state:engine:)``,
-/// or ``snapshotHostAmplitudes()`` — raw buffers are package-`internal` `metal*` (H7 soft; not Swift `private`).
-/// Explicit ``MTLDevice`` allocation remains available but is **deprecated** (H6b); removal is H6c.
+/// or ``snapshotHostAmplitudes()`` — raw buffers are package-`internal` `metal*` (not Swift `private`).
+/// Engine / batch pairing uses package-`internal` ``init(qubitCount:on:)``.
 ///
 /// - Important: A single `StateVector` is **not** safe to mutate from multiple threads at once.
 ///   Distinct `StateVector` instances may be operated on concurrently (see ``QuantumEngine``).
@@ -40,29 +40,9 @@ public final class StateVector {
     /// Package-internal imaginary-amplitude storage (engine / measure only).
     let metalImagBuffer: MTLBuffer
 
-    /// Deprecated raw buffer accessor. Prefer amplitudes / probabilities APIs; storage is package-`internal`.
-    ///
-    /// Scheduled for removal in a future major (H7b).
-    @available(*, deprecated, message: "Use amplitudes/probabilities APIs; buffers are package-internal. Removal planned for a future major (H7b).")
-    public var realBuffer: MTLBuffer { metalRealBuffer }
-
-    /// Deprecated raw buffer accessor. Prefer amplitudes / probabilities APIs; storage is package-`internal`.
-    ///
-    /// Scheduled for removal in a future major (H7b).
-    @available(*, deprecated, message: "Use amplitudes/probabilities APIs; buffers are package-internal. Removal planned for a future major (H7b).")
-    public var imagBuffer: MTLBuffer { metalImagBuffer }
-
     /// Creates a GPU state vector via ``MetalRuntime/sharedDevice()`` (no caller Metal imports).
     public convenience init(qubitCount: Int) throws {
         try self.init(qubitCount: qubitCount, on: MetalRuntime.sharedDevice())
-    }
-
-    /// Deprecated advanced path: allocate on an explicit ``MTLDevice``. Prefer ``init(qubitCount:)``.
-    ///
-    /// Still allocates on the **passed** device (not ignored). Scheduled for removal in a future major (H6c).
-    @available(*, deprecated, message: "Prefer init(qubitCount:). Explicit MTLDevice allocation is deprecated; removal planned for a future major (H6c).")
-    public convenience init(qubitCount: Int, device: MTLDevice) throws {
-        try self.init(qubitCount: qubitCount, on: device)
     }
 
     /// Package-internal designated initializer; always honors `device` for buffer correctness.

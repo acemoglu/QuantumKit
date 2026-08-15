@@ -8,10 +8,12 @@
 import Foundation
 import Security
 
-public struct TRNGCollapse {
-    
+/// Hardware entropy helpers used by ``QuantumRNG``. Package-internal (H4 audit);
+/// prefer ``QuantumRNG/hardware`` from client code.
+struct TRNGCollapse {
+
     /// A hardware-entropy `Float32` uniformly distributed in the half-open range `[0, 1)`.
-    public static func generateHardwareFloat() -> Float32 {
+    static func generateHardwareFloat() -> Float32 {
 
         var randomBytes = [UInt8](repeating: 0, count: 4)
         let status = SecRandomCopyBytes(kSecRandomDefault, randomBytes.count, &randomBytes)
@@ -27,7 +29,7 @@ public struct TRNGCollapse {
     }
 
     /// A hardware-entropy `Double` uniformly distributed in the half-open range `[0, 1)`.
-    public static func generateHardwareDouble() -> Double {
+    static func generateHardwareDouble() -> Double {
 
         var randomBytes = [UInt8](repeating: 0, count: 8)
         let status = SecRandomCopyBytes(kSecRandomDefault, randomBytes.count, &randomBytes)

@@ -34,8 +34,8 @@ public struct SampleCountOptions: Sendable, Equatable {
 
 /// Pre-allocated state vectors reused across batched shots.
 ///
-/// Prefer ``init(qubitCount:capacity:)`` (resolves ``MetalRuntime``). Explicit ``MTLDevice``
-/// allocation remains available but is **deprecated** (H6b); removal is H6c.
+/// Prefer ``init(qubitCount:capacity:)`` (resolves ``MetalRuntime``). Engine pairing uses
+/// package-`internal` ``init(qubitCount:on:capacity:)``.
 public final class StateVectorBatch: @unchecked Sendable {
 
     public let qubitCount: Int
@@ -49,13 +49,6 @@ public final class StateVectorBatch: @unchecked Sendable {
             on: MetalRuntime.sharedDevice(),
             capacity: capacity
         )
-    }
-
-    /// Deprecated advanced path: allocate all states on an explicit ``MTLDevice``.
-    /// Prefer ``init(qubitCount:capacity:)``. Still uses the **passed** device.
-    @available(*, deprecated, message: "Prefer init(qubitCount:capacity:). Explicit MTLDevice allocation is deprecated; removal planned for a future major (H6c).")
-    public convenience init(qubitCount: Int, device: MTLDevice, capacity: Int) throws {
-        try self.init(qubitCount: qubitCount, on: device, capacity: capacity)
     }
 
     /// Package-internal designated initializer; always honors `device` for buffer correctness.

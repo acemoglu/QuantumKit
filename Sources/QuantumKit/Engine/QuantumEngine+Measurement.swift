@@ -527,12 +527,4 @@ extension QuantumEngine {
             throw QuantumEngineError.commandBufferExecutionFailed(underlying: error)
         }
     }
-
-    /// Deprecated raw MTLBuffer probability encoding. Prefer ``QuantumMeasurement/probabilities(state:engine:)``.
-    ///
-    /// Scheduled for removal in a future major (H7b).
-    @available(*, deprecated, message: "Use QuantumMeasurement.probabilities; raw MTLBuffer probability encoding is package-internal. Removal planned for a future major (H7b).")
-    public func executeProbabilityKernel(on state: StateVector, outputBuffer: MTLBuffer) throws {
-        try executeProbabilityKernel(on: state, into: outputBuffer)
-    }
 }

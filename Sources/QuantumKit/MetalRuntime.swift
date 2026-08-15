@@ -8,15 +8,28 @@ import Metal
 /// ``QuantumEngine/init(renormalizationInterval:)``, backends via ``QuantumBackendFactory``)
 /// so callers never touch Metal.
 ///
-/// ``sharedDevice()`` is retained for advanced interop (sharing an ``MTLDevice`` with other
-/// Metal code). Prefer not to call it from application code.
+/// ## Advanced interop — ``sharedDevice()``
 ///
-/// ## Public `MTLDevice` inventory (H6b)
+/// ``sharedDevice()`` is the **only** public ``MTLDevice`` entry point. Keep it for rare cases
+/// where application Metal code must share the same GPU as QuantumKit (custom command queues,
+/// external buffer interop, diagnostics). Prefer **not** to call it from ordinary simulation
+/// paths — use device-free inits instead.
+///
+/// ## Public `MTLDevice` inventory (H6c)
 /// - ``MetalRuntime/sharedDevice()`` — **kept** (advanced / discouraged)
-/// - ``StateVector/init(qubitCount:device:)`` — **deprecated** (honors passed device; H6c removal)
-/// - ``DensityMatrix/init(qubitCount:device:)`` — **deprecated** (honors passed device; H6c removal)
-/// - ``DensityMatrix/device`` — **deprecated** accessor (H6c removal)
-/// - ``StateVectorBatch/init(qubitCount:device:capacity:)`` — **deprecated** (honors passed device; H6c removal)
+/// - ``MetalRuntime/deviceName`` — **kept** (diagnostics; wraps ``sharedDevice()``)
+///
+/// Removed in H6c (previously soft-deprecated public device surfaces):
+/// - `StateVector.init(qubitCount:device:)`
+/// - `DensityMatrix.init(qubitCount:device:)`
+/// - `StateVectorBatch.init(qubitCount:device:capacity:)`
+/// - `DensityMatrix.device`
+///
+/// Kept package-`internal` for engine / batch pairing:
+/// - `StateVector.init(qubitCount:on:)`
+/// - `DensityMatrix.init(qubitCount:on:)` / `metalDevice`
+/// - `StateVectorBatch.init(qubitCount:on:capacity:)`
+/// - engine `device` properties (`QuantumEngine`, `DensityMatrixEngine`)
 ///
 /// Removed in H6b (previously deprecated **ignore-device** shims — `_ = device`; not honored):
 /// - `QuantumMeasurement.runSampleCounts(...device:...)`
@@ -24,24 +37,19 @@ import Metal
 /// - `QuantumEngine.executeTrajectorySampleCounts(...device:...)`
 /// - `QuantumEngine.executeTrajectorySampleCountsRNG(...device:...)`
 ///
-/// In-repo test callers that used the measure `device:` overloads (and other explicit-device
-/// construction) were migrated in H6b to the device-free APIs. Do not treat “no remaining
-/// labeled call sites” as proof that external clients never used those overloads.
+/// ## Public `MTLBuffer` inventory (H7b)
+/// Amplitude storage is package-`internal` `metalRealBuffer` / `metalImagBuffer`
+/// (same-module / `@testable` visible — not Swift `private`). Normal clients use
+/// amplitudes / probabilities / snapshot APIs — no public `MTLBuffer`.
 ///
-/// ## Public `MTLBuffer` inventory (H7 soft)
-/// Soft encapsulation: amplitude storage is package-`internal` `metalRealBuffer` /
-/// `metalImagBuffer` (same-module / `@testable` visible — not Swift `private`). Public
-/// `realBuffer` / `imagBuffer` are deprecated same-instance wrappers until H7b.
-/// - ``StateVector/realBuffer`` / ``StateVector/imagBuffer`` — **deprecated** wrappers over
-///   package-`internal` `metalRealBuffer` / `metalImagBuffer` (H7b removal)
-/// - ``DensityMatrix/realBuffer`` / ``DensityMatrix/imagBuffer`` — **deprecated** wrappers over
-///   package-`internal` `metalRealBuffer` / `metalImagBuffer` (H7b removal)
-/// - ``QuantumEngine/executeProbabilityKernel(on:outputBuffer:)`` — **deprecated**; prefer
-///   ``QuantumMeasurement/probabilities(state:engine:)``; package-`internal`
-///   `executeProbabilityKernel(on:into:)` remains for engines
+/// Removed in H7b (previously soft-deprecated public shims):
+/// - `StateVector.realBuffer` / `StateVector.imagBuffer`
+/// - `DensityMatrix.realBuffer` / `DensityMatrix.imagBuffer`
+/// - `QuantumEngine.executeProbabilityKernel(on:outputBuffer:)`
 ///
-/// H6c (future major): remove the deprecated public `device:` inits / ``DensityMatrix/device``.
-/// H7b (future major): remove deprecated public `MTLBuffer` accessors / probability-kernel shim.
+/// Kept package-`internal`:
+/// - `metalRealBuffer` / `metalImagBuffer` on ``StateVector`` / ``DensityMatrix``
+/// - `QuantumEngine.executeProbabilityKernel(on:into:)` for engines / measure
 public enum MetalRuntime: Sendable {
 
     private static let lock = NSLock()
@@ -50,7 +58,8 @@ public enum MetalRuntime: Sendable {
     /// Returns the default system Metal device, creating and caching it on first use.
     ///
     /// - Important: Prefer device-free inits on state / engine / backend types. Call this only
-    ///   when you must share an explicit ``MTLDevice`` with other Metal code (advanced).
+    ///   when you must share an explicit ``MTLDevice`` with other Metal code (advanced interop).
+    ///   Ordinary clients should never need this API.
     public static func sharedDevice() throws -> MTLDevice {
         lock.lock()
         defer { lock.unlock() }

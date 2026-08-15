@@ -28,7 +28,8 @@ public enum QuantumEngineError: Error {
 
 }
 
-public struct Pipelines: @unchecked Sendable {
+/// Metal compute pipeline cache for ``QuantumEngine``. Package-internal (H4 audit).
+struct Pipelines: @unchecked Sendable {
 
     let hadamard: MTLComputePipelineState
     let pauliX: MTLComputePipelineState

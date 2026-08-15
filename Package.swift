@@ -3,6 +3,35 @@
 
 import PackageDescription
 
+// MARK: - H11 lite (packaging MVP)
+//
+// Choice: **A** — single library product / target `QuantumKit`.
+//
+// Why not B (multi-product split) in this session:
+// - Sources are one Swift module today; Circuit / Transpiler / Engine / CPU / Backend /
+//   Primitives / Algorithms / Noise freely share types with no internal import graph.
+// - Metal `.metalsrc` shaders are loaded at runtime via `Bundle.module` from
+//   `QuantumEngine` / `DensityMatrixEngine`. Splitting those types off the resource
+//   target would break shader discovery unless resources move with them and every
+//   loader stays on that same target.
+// - A half-split (folders moved, products declared, umbrella incomplete) risks circular
+//   target deps and broken Xcode/CLI resource bundling. Honesty over fake modularization.
+//
+// Follow-up split plan (when the graph is made explicit — do not half-do this):
+// 1. Extract `QuantumKitCore` first: Gate, QuantumCircuit, IR, parameters, public errors,
+//    QuantumKitInfo / APIPolicy — no Metal, no Bundle.module.
+// 2. Then `QuantumKitSimulator`: Engine/, CPU/, Backend/, Measure/, StateVector,
+//    DensityMatrix*, MetalRuntime, BatchExecution, plus **all** `.metalsrc` resources
+//    on that target only (loaders must stay here).
+// 3. Then `QuantumKitTranspiler` (depends on Core) and `QuantumKitAlgorithms`
+//    (depends on Core + Simulator and/or Primitives as needed).
+// 4. Keep product `QuantumKit` as an umbrella target that `@_exported import`s the
+//    pieces so existing `import QuantumKit` and `QuantumKitTests` stay one entry product.
+// 5. Re-validate macOS 13 / iOS 16 platforms and Metal resource copy rules after any split.
+//
+// Product aliases / documentation-only modules remain optional later; they are not required
+// for H11 lite while the single target remains the shipped surface.
+
 let package = Package(
     name: "QuantumKit",
     platforms: [
@@ -10,7 +39,9 @@ let package = Package(
         .iOS(.v16),
     ],
     products: [
-        // Products define the executables and libraries a package produces, making them visible to other packages.
+        // Single shipped library. Future multi-target layout (if any) must keep this
+        // product name and continue to expose the full public API via one entry module
+        // or an umbrella that re-exports the split modules.
         .library(
             name: "QuantumKit",
             targets: ["QuantumKit"]
@@ -27,6 +58,9 @@ let package = Package(
                 // with fast-math disabled to preserve the compensated (Kahan) summation in the
                 // scan/collapse path. Using a non-`.metal` extension keeps the raw text in the
                 // bundle on every toolchain, so CLI and Xcode behave identically.
+                //
+                // H11: these resources MUST remain on whichever target owns QuantumEngine /
+                // DensityMatrixEngine (today: this single QuantumKit target).
                 .copy("Metal/Gates.metalsrc"),
                 .copy("Metal/GateKernels.metalsrc"),
                 .copy("Metal/Renormalization.metalsrc"),
