@@ -64,9 +64,10 @@ public struct OpenQASMImporterOptions: Equatable, Sendable {
 /// ## Coverage
 /// qreg / creg, builtin `include "qelib1.inc"`, measure / reset / barrier, the
 /// qelib1 gate map in ``OpenQASMQelib1`` including numeric-angle parametric gates
-/// (`u`/`u1`/`u2`/`u3`, `p`, `rx`/`ry`/`rz`, `crx`/`cry`/`crz`/`cp`, `cswap`),
-/// OpenQASM 2 `if (creg == imm) <stmt>` lowered via ``Gate/c_if``, and
-/// user-defined `gate` expand/inline (numeric params, recursive nesting).
+/// (`u`/`u1`/`u2`/`u3`, `p`, `rx`/`ry`/`rz`, `crx`/`cry`/`crz`/`cp`/`cu1`, `cswap`),
+/// decompositions for `ch` / `cy`, and `mcx` / `mcz` → ``Gate/mcx`` / ``Gate/mcz``
+/// (2-control `mcx` → ``Gate/ccx``), OpenQASM 2 `if (creg == imm) <stmt>` lowered via
+/// ``Gate/c_if``, and user-defined `gate` expand/inline (numeric params, recursive nesting).
 /// Angle expressions evaluate `pi` and arithmetic; formal gate parameters are
 /// substituted during expansion. `opaque`, `while`, and non-qelib1 includes
 /// are rejected with ``OpenQASMError``. OpenQASM 3 `qubit`/`bit` declarations
@@ -738,14 +739,12 @@ private final class LoweringContext {
         location: SourceLocation
     ) throws -> [Gate] {
         if OpenQASMQelib1.mappedGateNames.contains(name) {
-            return [
-                try mapBuiltinGate(
-                    name: name,
-                    params: params,
-                    qubits: qubits,
-                    location: location
-                )
-            ]
+            return try mapBuiltinGate(
+                name: name,
+                params: params,
+                qubits: qubits,
+                location: location
+            )
         }
         if userGates[name] != nil {
             return try expandUserGate(
@@ -1010,23 +1009,23 @@ private final class LoweringContext {
         params: [OpenQASMExpr],
         qubits: [OpenQASMArgument],
         location: SourceLocation
-    ) throws -> Gate {
+    ) throws -> [Gate] {
         switch name {
         case "id", "x", "y", "z", "h", "s", "sdg", "t", "tdg", "sx", "sxdg":
             try requireParamCount(params, expected: 0, gate: name, location: location)
             let target = try requireSingleQubit(qubits, gate: name, location: location)
             switch name {
-            case "id": return .id(target: target)
-            case "x": return .x(target: target)
-            case "y": return .y(target: target)
-            case "z": return .z(target: target)
-            case "h": return .h(target: target)
-            case "s": return .s(target: target)
-            case "sdg": return .sdg(target: target)
-            case "t": return .t(target: target)
-            case "tdg": return .tdg(target: target)
-            case "sx": return .sx(target: target)
-            case "sxdg": return .sxdg(target: target)
+            case "id": return [.id(target: target)]
+            case "x": return [.x(target: target)]
+            case "y": return [.y(target: target)]
+            case "z": return [.z(target: target)]
+            case "h": return [.h(target: target)]
+            case "s": return [.s(target: target)]
+            case "sdg": return [.sdg(target: target)]
+            case "t": return [.t(target: target)]
+            case "tdg": return [.tdg(target: target)]
+            case "sx": return [.sx(target: target)]
+            case "sxdg": return [.sxdg(target: target)]
             default:
                 preconditionFailure("unreachable single-qubit map")
             }
@@ -1034,27 +1033,80 @@ private final class LoweringContext {
         case "cx":
             try requireParamCount(params, expected: 0, gate: name, location: location)
             let pair = try requireTwoQubits(qubits, gate: name, location: location)
-            return .cx(control: pair.0, target: pair.1)
+            return [.cx(control: pair.0, target: pair.1)]
 
         case "cz":
             try requireParamCount(params, expected: 0, gate: name, location: location)
             let pair = try requireTwoQubits(qubits, gate: name, location: location)
-            return .cz(control: pair.0, target: pair.1)
+            return [.cz(control: pair.0, target: pair.1)]
+
+        case "cy":
+            // qelib1: cy a,b { sdg b; cx a,b; s b; }  (Y = S X S† on target)
+            try requireParamCount(params, expected: 0, gate: name, location: location)
+            let pair = try requireTwoQubits(qubits, gate: name, location: location)
+            let control = pair.0
+            let target = pair.1
+            return [
+                .sdg(target: target),
+                .cx(control: control, target: target),
+                .s(target: target),
+            ]
+
+        case "ch":
+            // Compact controlled-H into existing 1q/2q gates (Qiskit/qelib1-equivalent):
+            //   s t; h t; t t; cx c,t; tdg t; h t; sdg t;
+            try requireParamCount(params, expected: 0, gate: name, location: location)
+            let pair = try requireTwoQubits(qubits, gate: name, location: location)
+            let control = pair.0
+            let target = pair.1
+            return [
+                .s(target: target),
+                .h(target: target),
+                .t(target: target),
+                .cx(control: control, target: target),
+                .tdg(target: target),
+                .h(target: target),
+                .sdg(target: target),
+            ]
 
         case "swap":
             try requireParamCount(params, expected: 0, gate: name, location: location)
             let pair = try requireTwoQubits(qubits, gate: name, location: location)
-            return .swap(q1: pair.0, q2: pair.1)
+            return [.swap(q1: pair.0, q2: pair.1)]
 
         case "ccx":
             try requireParamCount(params, expected: 0, gate: name, location: location)
             let triple = try requireThreeQubits(qubits, gate: name, location: location)
-            return .ccx(control1: triple.0, control2: triple.1, target: triple.2)
+            return [.ccx(control1: triple.0, control2: triple.1, target: triple.2)]
 
         case "cswap":
             try requireParamCount(params, expected: 0, gate: name, location: location)
             let triple = try requireThreeQubits(qubits, gate: name, location: location)
-            return .cswap(control: triple.0, q1: triple.1, q2: triple.2)
+            return [.cswap(control: triple.0, q1: triple.1, q2: triple.2)]
+
+        case "mcx":
+            try requireParamCount(params, expected: 0, gate: name, location: location)
+            let wires = try requireIndexedQubitList(qubits, gate: name, location: location, minCount: 2)
+            let target = wires.last!
+            let controls = Array(wires.dropLast())
+            switch controls.count {
+            case 1:
+                return [.cx(control: controls[0], target: target)]
+            case 2:
+                return [.ccx(control1: controls[0], control2: controls[1], target: target)]
+            default:
+                return [.mcx(controls: controls, target: target)]
+            }
+
+        case "mcz":
+            try requireParamCount(params, expected: 0, gate: name, location: location)
+            let wires = try requireIndexedQubitList(qubits, gate: name, location: location, minCount: 2)
+            let target = wires.last!
+            let controls = Array(wires.dropLast())
+            if controls.count == 1 {
+                return [.cz(control: controls[0], target: target)]
+            }
+            return [.mcz(controls: controls, target: target)]
 
         case "u", "u3":
             try requireParamCount(params, expected: 3, gate: name, location: location)
@@ -1062,7 +1114,7 @@ private final class LoweringContext {
             let theta = try evaluateAngle(params[0], location: location)
             let phi = try evaluateAngle(params[1], location: location)
             let lambda = try evaluateAngle(params[2], location: location)
-            return .u(theta: theta, phi: phi, lambda: lambda, target: target)
+            return [.u(theta: theta, phi: phi, lambda: lambda, target: target)]
 
         case "u2":
             try requireParamCount(params, expected: 2, gate: name, location: location)
@@ -1070,61 +1122,62 @@ private final class LoweringContext {
             let phi = try evaluateAngle(params[0], location: location)
             let lambda = try evaluateAngle(params[1], location: location)
             let halfPi = QFloatExpr.literal(QFloat(Double.pi / 2))
-            return .u(theta: halfPi, phi: phi, lambda: lambda, target: target)
+            return [.u(theta: halfPi, phi: phi, lambda: lambda, target: target)]
 
         case "u1":
             try requireParamCount(params, expected: 1, gate: name, location: location)
             let target = try requireSingleQubit(qubits, gate: name, location: location)
             let lambda = try evaluateAngle(params[0], location: location)
-            return .p(theta: lambda, target: target)
+            return [.p(theta: lambda, target: target)]
 
         case "p":
             try requireParamCount(params, expected: 1, gate: name, location: location)
             let target = try requireSingleQubit(qubits, gate: name, location: location)
             let theta = try evaluateAngle(params[0], location: location)
-            return .p(theta: theta, target: target)
+            return [.p(theta: theta, target: target)]
 
         case "rx":
             try requireParamCount(params, expected: 1, gate: name, location: location)
             let target = try requireSingleQubit(qubits, gate: name, location: location)
             let theta = try evaluateAngle(params[0], location: location)
-            return .rx(theta: theta, target: target)
+            return [.rx(theta: theta, target: target)]
 
         case "ry":
             try requireParamCount(params, expected: 1, gate: name, location: location)
             let target = try requireSingleQubit(qubits, gate: name, location: location)
             let theta = try evaluateAngle(params[0], location: location)
-            return .ry(theta: theta, target: target)
+            return [.ry(theta: theta, target: target)]
 
         case "rz":
             try requireParamCount(params, expected: 1, gate: name, location: location)
             let target = try requireSingleQubit(qubits, gate: name, location: location)
             let theta = try evaluateAngle(params[0], location: location)
-            return .rz(theta: theta, target: target)
+            return [.rz(theta: theta, target: target)]
 
         case "crx":
             try requireParamCount(params, expected: 1, gate: name, location: location)
             let pair = try requireTwoQubits(qubits, gate: name, location: location)
             let theta = try evaluateAngle(params[0], location: location)
-            return .crx(theta: theta, control: pair.0, target: pair.1)
+            return [.crx(theta: theta, control: pair.0, target: pair.1)]
 
         case "cry":
             try requireParamCount(params, expected: 1, gate: name, location: location)
             let pair = try requireTwoQubits(qubits, gate: name, location: location)
             let theta = try evaluateAngle(params[0], location: location)
-            return .cry(theta: theta, control: pair.0, target: pair.1)
+            return [.cry(theta: theta, control: pair.0, target: pair.1)]
 
         case "crz":
             try requireParamCount(params, expected: 1, gate: name, location: location)
             let pair = try requireTwoQubits(qubits, gate: name, location: location)
             let theta = try evaluateAngle(params[0], location: location)
-            return .crz(theta: theta, control: pair.0, target: pair.1)
+            return [.crz(theta: theta, control: pair.0, target: pair.1)]
 
-        case "cp":
+        case "cp", "cu1":
+            // cu1(λ) is the legacy qelib1 name for the controlled phase; same as cp.
             try requireParamCount(params, expected: 1, gate: name, location: location)
             let pair = try requireTwoQubits(qubits, gate: name, location: location)
             let theta = try evaluateAngle(params[0], location: location)
-            return .cp(theta: theta, control: pair.0, target: pair.1)
+            return [.cp(theta: theta, control: pair.0, target: pair.1)]
 
         default:
             throw OpenQASMError.semanticError(
@@ -1477,5 +1530,34 @@ private final class LoweringContext {
             )
         }
         return (a[0], b[0], c[0])
+    }
+
+    /// Resolves a list of indexed qubit arguments (no whole-register shorthand).
+    private func requireIndexedQubitList(
+        _ qubits: [OpenQASMArgument],
+        gate: String,
+        location: SourceLocation,
+        minCount: Int
+    ) throws -> [Int] {
+        guard qubits.count >= minCount else {
+            throw OpenQASMError.semanticError(
+                line: location.line,
+                column: location.column,
+                message: "Gate '\(gate)' expects at least \(minCount) qubit arguments, got \(qubits.count)"
+            )
+        }
+        var indices: [Int] = []
+        for arg in qubits {
+            let resolved = try resolveQubitIndices(arg, location: location)
+            guard resolved.count == 1 else {
+                throw OpenQASMError.semanticError(
+                    line: location.line,
+                    column: location.column,
+                    message: "Gate '\(gate)' expects indexed qubits, not whole registers"
+                )
+            }
+            indices.append(resolved[0])
+        }
+        return indices
     }
 }
