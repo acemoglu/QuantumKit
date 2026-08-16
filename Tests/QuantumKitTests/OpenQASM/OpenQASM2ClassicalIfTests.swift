@@ -99,6 +99,28 @@ extension QuantumKitTests {
         ])
     }
 
+    func testOpenQASM2ImporterBracedIfMultiGate() throws {
+        let source = """
+        OPENQASM 2.0;
+        include "qelib1.inc";
+        qreg q[2];
+        creg c[1];
+        if (c == 1) {
+          h q[0];
+          cx q[0],q[1];
+        }
+        """
+        let circuit = try OpenQASM2Importer().`import`(source: source)
+        XCTAssertEqual(circuit.gates, [
+            .c_if(classicalRegister: 0, expectedValue: 1, gate: .h(target: 0)),
+            .c_if(
+                classicalRegister: 0,
+                expectedValue: 1,
+                gate: .cx(control: 0, target: 1)
+            ),
+        ])
+    }
+
     func testOpenQASM2ImporterClassicalIfUnknownCregFailsWithLocation() {
         let source = """
         OPENQASM 2.0;

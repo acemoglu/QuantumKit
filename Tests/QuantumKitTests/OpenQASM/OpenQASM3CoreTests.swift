@@ -77,6 +77,118 @@ extension QuantumKitTests {
         )
     }
 
+    func testOpenQASM3ImporterBracedIfMultiGate() throws {
+        let source = """
+        OPENQASM 3.0;
+        qubit[2] q;
+        bit[1] c;
+        if (c == 1) {
+          h q[0];
+          cx q[0], q[1];
+        }
+        """
+        let circuit = try OpenQASM3Importer().`import`(source: source)
+        XCTAssertEqual(circuit.gates, [
+            .c_if(classicalRegister: 0, expectedValue: 1, gate: .h(target: 0)),
+            .c_if(
+                classicalRegister: 0,
+                expectedValue: 1,
+                gate: .cx(control: 0, target: 1)
+            ),
+        ])
+    }
+
+    func testOpenQASM3ImporterNestedBracedIf() throws {
+        let source = """
+        OPENQASM 3.0;
+        qubit[1] q;
+        bit[1] c;
+        bit[1] d;
+        if (c == 1) {
+          if (d == 0) {
+            x q[0];
+            h q[0];
+          }
+        }
+        """
+        let circuit = try OpenQASM3Importer().`import`(source: source)
+        XCTAssertEqual(circuit.gates, [
+            .c_if(
+                classicalRegister: 0,
+                expectedValue: 1,
+                gate: .c_if(
+                    classicalRegister: 1,
+                    expectedValue: 0,
+                    gate: .x(target: 0)
+                )
+            ),
+            .c_if(
+                classicalRegister: 0,
+                expectedValue: 1,
+                gate: .c_if(
+                    classicalRegister: 1,
+                    expectedValue: 0,
+                    gate: .h(target: 0)
+                )
+            ),
+        ])
+    }
+
+    func testOpenQASM3ImporterBracedIfMeasureAndReset() throws {
+        let source = """
+        OPENQASM 3.0;
+        qubit[2] q;
+        bit[1] c;
+        if (c == 1) {
+          measure q[0] -> c[0];
+          reset q[1];
+        }
+        """
+        let circuit = try OpenQASM3Importer().`import`(source: source)
+        XCTAssertEqual(circuit.gates.count, 2)
+        guard case .c_if(let mReg, let mExpected, let measureGate) = circuit.gates[0] else {
+            return XCTFail("Expected c_if(measure)")
+        }
+        XCTAssertEqual(mReg, 0)
+        XCTAssertEqual(mExpected, 1)
+        guard case .measure(let spec) = measureGate else {
+            return XCTFail("Expected measure body")
+        }
+        XCTAssertEqual(spec.qubits, [0])
+        XCTAssertEqual(spec.classicalRegister, 0)
+        XCTAssertEqual(spec.classicalBitOffset, 0)
+        XCTAssertEqual(
+            circuit.gates[1],
+            .c_if(classicalRegister: 0, expectedValue: 1, gate: .reset(qubit: 1))
+        )
+    }
+
+    func testOpenQASM3ImporterBracedIfContainingWhile() throws {
+        let source = """
+        OPENQASM 3.0;
+        qubit[1] q;
+        bit[1] c;
+        if (c == 1) {
+          // @quantumkit.max_while_iterations 4
+          while (c == 1) { x q[0]; }
+        }
+        """
+        let circuit = try OpenQASM3Importer().`import`(source: source)
+        XCTAssertEqual(circuit.gates.count, 1)
+        guard case .c_if(let reg, let expected, let inner) = circuit.gates[0] else {
+            return XCTFail("Expected outer c_if")
+        }
+        XCTAssertEqual(reg, 0)
+        XCTAssertEqual(expected, 1)
+        guard case .while_c(let wReg, let wExpected, let body, let maxIterations) = inner else {
+            return XCTFail("Expected while_c under c_if")
+        }
+        XCTAssertEqual(wReg, 0)
+        XCTAssertEqual(wExpected, 1)
+        XCTAssertEqual(maxIterations, 4)
+        XCTAssertEqual(body, [.x(target: 0)])
+    }
+
     // MARK: - Unified importer dispatches on version
 
     func testOpenQASMImporterDispatchesV3() throws {
