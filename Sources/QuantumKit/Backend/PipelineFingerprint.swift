@@ -42,6 +42,9 @@ public enum PipelineFingerprint {
         if let pec = options.resilience.pec {
             hasher.combine(ProbabilisticErrorCancellation.fingerprintToken(for: pec))
         }
+        if let twirl = options.resilience.pauliTwirling {
+            hasher.combine(PauliTwirling.fingerprintToken(for: twirl))
+        }
         for token in extra {
             hasher.combine(token)
         }

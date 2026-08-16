@@ -408,7 +408,7 @@ extension TranspilerError: LocalizedError {
     }
 }
 
-// MARK: PEC / ZNE
+// MARK: PEC / ZNE / Pauli twirling
 
 extension PECError: LocalizedError {
     public var errorDescription: String? {
@@ -452,6 +452,36 @@ extension PECError: LocalizedError {
             return "Ensure the circuit contains noisy gate sites covered by the NoiseModel."
         case .pauliChannelMismatch:
             return "Align NoiseModel Pauli rates with the depolarizing probability used for PEC."
+        }
+    }
+}
+
+extension PauliTwirlingError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .incompatibleWithZNE:
+            return "Pauli twirling and ZNE cannot be enabled together in ResilienceOptions."
+        case .incompatibleWithPEC:
+            return "Pauli twirling and PEC cannot be enabled together in ResilienceOptions."
+        case .emptyCircuitNoTwirlSites:
+            return "Circuit has no Clifford 1Q/2Q sites for Pauli twirling."
+        case .invalidEnsembleSize(let count):
+            return "Invalid Pauli twirling ensembleSize \(count); must be > 0."
+        case .ensembleExceedsShots(let ensemble, let shots):
+            return "Pauli twirling ensembleSize \(ensemble) exceeds Estimator shot budget \(shots)."
+        }
+    }
+
+    public var recoverySuggestion: String? {
+        switch self {
+        case .incompatibleWithZNE, .incompatibleWithPEC:
+            return "Enable only one of active ZNE, PEC, or Pauli twirling in ResilienceOptions."
+        case .emptyCircuitNoTwirlSites:
+            return "Include at least one Clifford 1Q/2Q gate (H, Pauli, S/SX, CX/CZ/SWAP/…)."
+        case .invalidEnsembleSize:
+            return "Set PauliTwirlingOptions.ensembleSize to a positive integer."
+        case .ensembleExceedsShots:
+            return "Lower ensembleSize or increase EstimatorOptions.shots so ensemble ≤ shots."
         }
     }
 }

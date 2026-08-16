@@ -16,9 +16,10 @@ import Foundation
 
  Deferred (not this MVP)
  -----------------------
- Full gate-set PEC, 2Q/correlated depolarizing inverses, unitary folding, twirling,
- stacking with ZNE, noise-free recovery unitaries (recovery Paulis also see global
+ Full gate-set PEC, 2Q/correlated depolarizing inverses, unitary folding, stacking with
+ ZNE or Pauli twirling, noise-free recovery unitaries (recovery Paulis also see global
  dep ⇒ O(p²) residual), and Sampler quasiprobability histograms.
+ (Layer Pauli twirling ships separately under ``ResilienceOptions/pauliTwirling``.)
 
  Overhead
  --------

@@ -299,20 +299,29 @@ extension QuantumKitTests {
         let options = ResilienceOptions(
             readoutMitigation: matrix,
             zne: .default,
-            pec: .default
+            pec: .default,
+            pauliTwirling: .default
         )
         let stripped = options.withoutZNE()
         XCTAssertNil(stripped.zne)
         XCTAssertEqual(stripped.pec, .default)
+        XCTAssertEqual(stripped.pauliTwirling, .default)
         XCTAssertEqual(stripped.readoutMitigation, matrix)
 
         let strippedPEC = options.withoutPEC()
         XCTAssertEqual(strippedPEC.zne, .default)
         XCTAssertNil(strippedPEC.pec)
+        XCTAssertEqual(strippedPEC.pauliTwirling, .default)
         XCTAssertEqual(strippedPEC.readoutMitigation, matrix)
+
+        let strippedTwirl = options.withoutPauliTwirling()
+        XCTAssertEqual(strippedTwirl.zne, .default)
+        XCTAssertEqual(strippedTwirl.pec, .default)
+        XCTAssertNil(strippedTwirl.pauliTwirling)
+        XCTAssertEqual(strippedTwirl.readoutMitigation, matrix)
     }
 
-    func testSamplerFingerprintIgnoresZNEAndPEC() throws {
+    func testSamplerFingerprintIgnoresZNEPECAndPauliTwirling() throws {
         var circuit = try QuantumCircuit(qubitCount: 1)
         try circuit.h(0)
         let base = QuantumRunOptions(seed: 9, shots: 64)
@@ -326,15 +335,23 @@ extension QuantumKitTests {
             shots: 64,
             resilience: ResilienceOptions(pec: .default)
         )
+        let withTwirl = QuantumRunOptions(
+            seed: 9,
+            shots: 64,
+            resilience: ResilienceOptions(pauliTwirling: .default)
+        )
 
         let backend = CPUStatevectorBackend()
         let r0 = try Sampler().run(circuit: circuit, backend: backend, options: base)
         let r1 = try Sampler().run(circuit: circuit, backend: backend, options: withZNE)
         let r2 = try Sampler().run(circuit: circuit, backend: backend, options: withPEC)
+        let r3 = try Sampler().run(circuit: circuit, backend: backend, options: withTwirl)
 
         XCTAssertEqual(r0.metadata.pipelineHash, r1.metadata.pipelineHash)
         XCTAssertEqual(r0.metadata.pipelineHash, r2.metadata.pipelineHash)
+        XCTAssertEqual(r0.metadata.pipelineHash, r3.metadata.pipelineHash)
         XCTAssertEqual(r0.shotCounts, r1.shotCounts)
         XCTAssertEqual(r0.shotCounts, r2.shotCounts)
+        XCTAssertEqual(r0.shotCounts, r3.shotCounts)
     }
 }

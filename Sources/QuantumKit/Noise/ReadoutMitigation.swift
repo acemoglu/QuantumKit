@@ -13,7 +13,7 @@ public enum ReadoutMitigationError: Error, Equatable, Sendable {
 /// `n_m = Σ_p N_p C[p][m]`. This solves for prepared counts `N` via `A N = n` with
 /// `A[m][p] = C[p][m]`, then clamps negatives and renormalizes to the original shot budget.
 ///
-/// Not a full mitigation suite — no twirling, ZNE, or PEC.
+/// Not a full mitigation suite — no twirling, ZNE, or PEC (those live on ``ResilienceOptions``).
 public enum ReadoutMitigation {
 
     /// Apply inverse readout correction. Returns a new histogram with the same ``ShotCounts/shots``

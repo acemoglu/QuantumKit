@@ -21,9 +21,10 @@ public enum EstimatorError: Error, Equatable {
 /// ## Resilience
 /// ``resilience`` (when enabled) applies host-side readout mitigation to each shot
 /// ensemble before parity moments, optionally **zero-noise extrapolation** (``ZNEOptions``),
-/// and/or **PEC lite** (``PECOptions``) on the shot path. ZNE and PEC cannot be combined
-/// in this MVP. If ``resilience`` is ``disabled``, the estimator falls back to
-/// ``QuantumRunOptions/resilience``. Exact paths ignore resilience (including ZNE/PEC).
+/// **PEC lite** (``PECOptions``), and/or **Pauli twirling** (``PauliTwirlingOptions``) on
+/// the shot path. Active ZNE, PEC, and twirling are pairwise incompatible in this MVP.
+/// If ``resilience`` is ``disabled``, the estimator falls back to
+/// ``QuantumRunOptions/resilience``. Exact paths ignore resilience (including ZNE/PEC/twirl).
 /// Resolved resilience is included in ``EstimatorResult/metadata`` ``pipelineHash``.
 ///
 /// ## QWC grouping
@@ -69,9 +70,9 @@ public struct EstimatorOptions: Sendable, Equatable {
 
     /// Estimator resilience if set; otherwise the run-options resilience.
     ///
-    /// When Estimator resilience is enabled (readout / active ZNE / PEC), missing
+    /// When Estimator resilience is enabled (readout / active ZNE / PEC / twirling), missing
     /// ``ResilienceOptions/readoutMitigation`` is inherited from ``QuantumRunOptions/resilience``
-    /// so enabling PEC or ZNE alone does not silently drop run-options readout correction.
+    /// so enabling PEC, ZNE, or twirling alone does not silently drop run-options readout correction.
     func resolvedResilience(runOptions: QuantumRunOptions) -> ResilienceOptions {
         guard resilience.isEnabled else { return runOptions.resilience }
         guard resilience.readoutMitigation == nil,
@@ -81,7 +82,8 @@ public struct EstimatorOptions: Sendable, Equatable {
         return ResilienceOptions(
             readoutMitigation: runReadout,
             zne: resilience.zne,
-            pec: resilience.pec
+            pec: resilience.pec,
+            pauliTwirling: resilience.pauliTwirling
         )
     }
 
@@ -103,11 +105,14 @@ public struct EstimatorResult: Sendable, Equatable {
     /// scale evaluation — not an extrapolated uncertainty.
     /// When PEC is enabled this is an approximate SE from the signed sample variance
     /// scaled by `Γ` (see ``PECMetadata/shotMultiplier``).
+    /// When Pauli twirling is enabled this is the SE across the twirl ensemble mean.
     public let standardError: QFloat?
     /// Present when shot-path ``ResilienceOptions/zne`` ran; `nil` otherwise.
     public let zne: ZNEExtrapolationMetadata?
     /// Present when shot-path ``ResilienceOptions/pec`` ran; `nil` otherwise.
     public let pec: PECMetadata?
+    /// Present when shot-path ``ResilienceOptions/pauliTwirling`` ran; `nil` otherwise.
+    public let pauliTwirling: PauliTwirlingMetadata?
 
     public init(
         value: QFloat,
@@ -115,7 +120,8 @@ public struct EstimatorResult: Sendable, Equatable {
         shots: Int? = nil,
         standardError: QFloat? = nil,
         zne: ZNEExtrapolationMetadata? = nil,
-        pec: PECMetadata? = nil
+        pec: PECMetadata? = nil,
+        pauliTwirling: PauliTwirlingMetadata? = nil
     ) {
         self.value = value
         self.metadata = metadata
@@ -123,6 +129,7 @@ public struct EstimatorResult: Sendable, Equatable {
         self.standardError = standardError
         self.zne = zne
         self.pec = pec
+        self.pauliTwirling = pauliTwirling
     }
 }
 
@@ -327,6 +334,12 @@ public struct Estimator: Sendable {
         if activeZNE != nil, resilience.pec != nil {
             throw PECError.incompatibleWithZNE
         }
+        if resilience.pauliTwirling != nil, activeZNE != nil {
+            throw PauliTwirlingError.incompatibleWithZNE
+        }
+        if resilience.pauliTwirling != nil, resilience.pec != nil {
+            throw PauliTwirlingError.incompatibleWithPEC
+        }
 
         if let pecOptions = resilience.pec {
             return try estimateShotsWithPEC(
@@ -359,7 +372,22 @@ public struct Estimator: Sendable {
             )
         }
 
-        // Strip inactive ZNE/PEC tokens so nested shot paths and fingerprints stay readout-clean.
+        if let twirlOptions = resilience.pauliTwirling {
+            return try estimateShotsWithPauliTwirling(
+                circuit: circuit,
+                hamiltonian: hamiltonian,
+                backend: backend,
+                options: options,
+                estimatorOptions: estimatorOptions,
+                shots: shots,
+                started: started,
+                nestedUnderOuterRecorder: nestedUnderOuterRecorder,
+                resilience: resilience,
+                twirlOptions: twirlOptions
+            )
+        }
+
+        // Strip inactive ZNE/PEC/twirl tokens so nested shot paths and fingerprints stay readout-clean.
         let nestedResilience = resilience.readoutOnly
         let boxed = try runShotExpectation(
             circuit: circuit,
@@ -392,6 +420,114 @@ public struct Estimator: Sendable {
             metadata: metadata,
             shots: shots,
             standardError: standardError
+        )
+    }
+
+    private func estimateShotsWithPauliTwirling(
+        circuit: QuantumCircuit,
+        hamiltonian: Hamiltonian,
+        backend: any QuantumBackend,
+        options: QuantumRunOptions,
+        estimatorOptions: EstimatorOptions,
+        shots: Int,
+        started: DispatchTime,
+        nestedUnderOuterRecorder: Bool,
+        resilience: ResilienceOptions,
+        twirlOptions: PauliTwirlingOptions
+    ) throws -> EstimatorResult {
+        let sites = try PauliTwirling.twirlSites(in: circuit)
+        let siteCount = sites.count
+
+        let ensembleSize: Int
+        if let requested = twirlOptions.ensembleSize {
+            guard requested > 0 else { throw PauliTwirlingError.invalidEnsembleSize(requested) }
+            guard requested <= shots else {
+                throw PauliTwirlingError.ensembleExceedsShots(ensemble: requested, shots: shots)
+            }
+            ensembleSize = requested
+        } else {
+            ensembleSize = shots
+        }
+        let shotsPerMember = max(1, shots / ensembleSize)
+        let effectiveShots = ensembleSize * shotsPerMember
+        let perMemberResilience = resilience.readoutOnly
+
+        var sum: Double = 0
+        var sumSq: Double = 0
+        var method: QuantumSimulationMethod = .statevector
+        var deviceName: String?
+
+        for memberIndex in 0..<ensembleSize {
+            var sampleRNG = makePrimitiveRNG(
+                seed: options.seed.map { $0 &+ UInt64(memberIndex) &+ 0xC2B2_AE3D }
+            )
+            var leftPaulis: [[Pauli]] = []
+            leftPaulis.reserveCapacity(siteCount)
+            for siteIndex in sites {
+                let gate = circuit.gates[siteIndex]
+                let n = gate.affectedQubits.count
+                leftPaulis.append(PauliTwirling.samplePauliString(qubitCount: n, rng: &sampleRNG))
+            }
+
+            let twirled = try PauliTwirling.circuitByTwirlingSites(
+                circuit,
+                siteGateIndices: sites,
+                leftPaulis: leftPaulis
+            )
+
+            var memberOptions = options
+            if let seed = options.seed {
+                memberOptions.seed = seed &+ UInt64(memberIndex)
+            }
+
+            let boxed = try runShotExpectation(
+                circuit: twirled,
+                hamiltonian: hamiltonian,
+                backend: backend,
+                options: memberOptions,
+                estimatorOptions: estimatorOptions,
+                shots: shotsPerMember,
+                noise: options.noise,
+                resilience: perMemberResilience,
+                nestedUnderOuterRecorder: nestedUnderOuterRecorder
+            )
+            let v = Double(boxed.value)
+            sum += v
+            sumSq += v * v
+            method = boxed.method
+            deviceName = boxed.deviceName
+        }
+
+        let mean = sum / Double(ensembleSize)
+        let meanSq = sumSq / Double(ensembleSize)
+        let varEnsemble = max(0, meanSq - mean * mean)
+        let standardError = QFloat(sqrt(varEnsemble / Double(ensembleSize)))
+
+        let twirlMeta = PauliTwirlingMetadata(
+            siteCount: siteCount,
+            ensembleSize: ensembleSize,
+            shotsPerMember: shotsPerMember
+        )
+
+        let elapsed = DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds
+        let metadata = makeShotMetadata(
+            circuit: circuit,
+            options: options,
+            estimatorOptions: estimatorOptions,
+            shots: effectiveShots,
+            resilience: resilience,
+            method: method,
+            deviceName: deviceName,
+            elapsed: elapsed,
+            nestedUnderOuterRecorder: nestedUnderOuterRecorder
+        )
+
+        return EstimatorResult(
+            value: QFloat(mean),
+            metadata: metadata,
+            shots: effectiveShots,
+            standardError: standardError,
+            pauliTwirling: twirlMeta
         )
     }
 
