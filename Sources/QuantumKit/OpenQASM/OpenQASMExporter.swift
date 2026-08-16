@@ -41,7 +41,8 @@ public struct OpenQASMExportOptions: Equatable, Sendable {
 ///
 /// ## Unsupported
 /// `unitary1`, `customUnitary`, `initialize`, `delay`, `mcx`/`mcz`,
-/// Ising / ECR / iSWAP / DCX, and other non-qelib1 gates; `while_c` under QASM2.
+/// ECR / iSWAP / DCX / `ryy` (no qelib1 name), and other non-qelib1 gates;
+/// `while_c` under QASM2. `rxx` / `rzz` export as qelib1 names.
 public struct OpenQASMExporter: Sendable {
     public var options: OpenQASMExportOptions
 
@@ -345,20 +346,22 @@ private struct ExportContext {
                 feature: "ecr",
                 message: "\(dialectLabel) / qelib1 export does not support ecr"
             )
-        case .rxx:
-            throw unsupported(
-                feature: "rxx",
-                message: "\(dialectLabel) / qelib1 export does not support rxx"
+        case .rxx(let theta, let q1, let q2):
+            let angle = try requireLiteralAngle(theta, gate: "rxx")
+            return try wrap(
+                "rxx(\(angle)) \(q(q1)),\(q(q2));",
+                conditioned: conditioned
             )
         case .ryy:
             throw unsupported(
                 feature: "ryy",
                 message: "\(dialectLabel) / qelib1 export does not support ryy"
             )
-        case .rzz:
-            throw unsupported(
-                feature: "rzz",
-                message: "\(dialectLabel) / qelib1 export does not support rzz"
+        case .rzz(let theta, let q1, let q2):
+            let angle = try requireLiteralAngle(theta, gate: "rzz")
+            return try wrap(
+                "rzz(\(angle)) \(q(q1)),\(q(q2));",
+                conditioned: conditioned
             )
         case .dcx:
             throw unsupported(

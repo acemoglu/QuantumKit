@@ -73,6 +73,38 @@ extension QuantumKitTests {
         try assertOpenQASM2RoundTrip(exported)
     }
 
+    // MARK: - Round-trip: rxx / rzz (qelib1-aligned Gate cases)
+
+    func testOpenQASM2RoundTripRXXRZZ() throws {
+        let source = """
+        OPENQASM 2.0;
+        include "qelib1.inc";
+        qreg q[2];
+        rxx(pi/4) q[0],q[1];
+        rzz(0.5) q[0],q[1];
+        """
+        try assertOpenQASM2RoundTrip(source)
+
+        var circuit = try QuantumCircuit(qubitCount: 2)
+        try circuit.apply(.rxx(theta: .literal(QFloat(Double.pi / 4)), q1: 0, q2: 1))
+        try circuit.apply(.rzz(theta: .literal(QFloat(0.5)), q1: 0, q2: 1))
+        let exported = try OpenQASM2Exporter().export(circuit)
+        XCTAssertTrue(exported.contains("rxx("), exported)
+        XCTAssertTrue(exported.contains("rzz("), exported)
+        try assertOpenQASM2RoundTrip(exported)
+    }
+
+    func testOpenQASM2ExporterRejectsRYY() throws {
+        var circuit = try QuantumCircuit(qubitCount: 2)
+        try circuit.apply(.ryy(theta: .literal(QFloat(0.1)), q1: 0, q2: 1))
+        XCTAssertThrowsError(try OpenQASM2Exporter().export(circuit)) { error in
+            guard case OpenQASMError.unsupported(_, _, let feature, _) = error else {
+                return XCTFail("Expected unsupported, got \(error)")
+            }
+            XCTAssertEqual(feature, "ryy")
+        }
+    }
+
     // MARK: - Round-trip: classical if
 
     func testOpenQASM2RoundTripClassicalIf() throws {
