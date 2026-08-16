@@ -4,7 +4,7 @@ import Foundation
 
 /// Fixed discrete generators for approximate **1-qubit** synthesis (ε₀-net foundation).
 ///
-/// Recursive Solovay–Kitaev is **not** implemented here — only the basic net + nearest neighbor.
+/// Iterative Solovay–Kitaev lives in ``SolovayKitaev`` / ``SolovayKitaevPass`` — this type is only the basic net + nearest neighbor.
 public enum Discrete1QGeneratingSet: String, Sendable, Equatable, CaseIterable {
     /// `{H, T}` — Dawson–Nielsen / classic Clifford+T generators.
     ///
@@ -249,6 +249,19 @@ public struct Discrete1QNet: Sendable {
         let overlap = absTraceOverlap(u, v)
         return (2.0 + overlap * overlap) / 6.0
     }
+
+    /// Retarget a Clifford+T letter (`H` / `T` / `T†` / `S` / `S†`) to `qubit`.
+    public static func retargetGate(_ gate: Gate, to qubit: Int) -> Gate {
+        switch gate {
+        case .h: return .h(target: qubit)
+        case .t: return .t(target: qubit)
+        case .tdg: return .tdg(target: qubit)
+        case .s: return .s(target: qubit)
+        case .sdg: return .sdg(target: qubit)
+        default:
+            preconditionFailure("Discrete1QNet only retargets H/T/T†/S/S†")
+        }
+    }
 }
 
 // MARK: - Internals
@@ -297,18 +310,6 @@ private extension Discrete1QNet {
             }
         }
         return false
-    }
-
-    static func retargetGate(_ gate: Gate, to qubit: Int) -> Gate {
-        switch gate {
-        case .h: return .h(target: qubit)
-        case .t: return .t(target: qubit)
-        case .tdg: return .tdg(target: qubit)
-        case .s: return .s(target: qubit)
-        case .sdg: return .sdg(target: qubit)
-        default:
-            preconditionFailure("Discrete1QNet only retargets H/T/T†/S/S†")
-        }
     }
 
     static func phaseAlignedFrobenius(_ u: [C2], _ v: [C2]) -> Double {

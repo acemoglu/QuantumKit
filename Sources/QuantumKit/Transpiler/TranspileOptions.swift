@@ -14,7 +14,8 @@ import Foundation
 ///   after basis translation). Measurably fewer gates/depth on Clifford / adjacent-rotation fixtures.
 ///
 /// Opt-in flags (default off): ``enableGateFusion``, ``enableTemplateMatching`` (A6 lite exact
-/// catalog — not Solovay–Kitaev / J1), ``enableKAKSynthesis`` (2Q Cartan / KAK).
+/// catalog — not Solovay–Kitaev / J1), ``enableKAKSynthesis`` (2Q Cartan / KAK),
+/// ``enableSolovayKitaev`` (1Q approximate Clifford+T).
 public struct TranspileOptions: Sendable, Equatable {
     public var targetBasis: BasisGateSet
     public var couplingMap: CouplingMap?
@@ -47,13 +48,23 @@ public struct TranspileOptions: Sendable, Equatable {
     /// Opt-in fixed-catalog multi-gate template rewrite (``TemplateMatchingPass``, A6 lite).
     /// Default `false` — default transpile / optimization levels are unchanged. When enabled,
     /// runs after algebraic / Clifford / local (and after fusion if that is also on). Exact
-    /// identities only; **not** Solovay–Kitaev / approximate synthesis (J1 deferred).
+    /// identities only; **not** Solovay–Kitaev / approximate synthesis.
     public var enableTemplateMatching: Bool
     /// Opt-in 2Q Cartan / KAK rewrite (``KAKSynthesisPass``). Default `false` — default
     /// transpile / optimization levels are unchanged. When enabled, runs after fusion /
     /// templates (if those are on) and before unroll / route / basis, so Haar /
     /// ``Gate/customUnitary`` pairs become locals + ≤3 CX before basis translation.
     public var enableKAKSynthesis: Bool
+    /// Opt-in 1Q Solovay–Kitaev rewrite (``SolovayKitaevPass``). Default `false`. When enabled,
+    /// runs after KAK (if on) and before unroll / route / basis. Uses
+    /// ``solovayKitaevEpsilon`` / ``solovayKitaevMaxRefinementIterations`` / ``solovayKitaevRewriteU``.
+    public var enableSolovayKitaev: Bool
+    /// Phase-aligned Frobenius tolerance for ``SolovayKitaevPass`` (when enabled).
+    public var solovayKitaevEpsilon: Double
+    /// Residual-GC refinement iteration limit for ``SolovayKitaevPass`` (when enabled).
+    public var solovayKitaevMaxRefinementIterations: Int
+    /// When `true` and SK is enabled, also rewrite literal ``Gate/u``.
+    public var solovayKitaevRewriteU: Bool
 
     public init(
         targetBasis: BasisGateSet = .ibmEagle,
@@ -70,7 +81,11 @@ public struct TranspileOptions: Sendable, Equatable {
         preserveInstructionMetadata: Bool = false,
         enableGateFusion: Bool = false,
         enableTemplateMatching: Bool = false,
-        enableKAKSynthesis: Bool = false
+        enableKAKSynthesis: Bool = false,
+        enableSolovayKitaev: Bool = false,
+        solovayKitaevEpsilon: Double = SolovayKitaev.defaultEpsilon,
+        solovayKitaevMaxRefinementIterations: Int = SolovayKitaev.defaultMaxRefinementIterations,
+        solovayKitaevRewriteU: Bool = false
     ) {
         self.targetBasis = targetBasis
         self.couplingMap = couplingMap
@@ -87,6 +102,10 @@ public struct TranspileOptions: Sendable, Equatable {
         self.enableGateFusion = enableGateFusion
         self.enableTemplateMatching = enableTemplateMatching
         self.enableKAKSynthesis = enableKAKSynthesis
+        self.enableSolovayKitaev = enableSolovayKitaev
+        self.solovayKitaevEpsilon = solovayKitaevEpsilon
+        self.solovayKitaevMaxRefinementIterations = solovayKitaevMaxRefinementIterations
+        self.solovayKitaevRewriteU = solovayKitaevRewriteU
     }
 
     /// Builds the ordered pass list for these options.
@@ -114,6 +133,15 @@ public struct TranspileOptions: Sendable, Equatable {
         }
         if enableKAKSynthesis {
             passes.append(KAKSynthesisPass())
+        }
+        if enableSolovayKitaev {
+            passes.append(
+                SolovayKitaevPass(
+                    epsilon: solovayKitaevEpsilon,
+                    maxRefinementIterations: solovayKitaevMaxRefinementIterations,
+                    rewriteU: solovayKitaevRewriteU
+                )
+            )
         }
 
         let unroll = UnrollMultiQubitPass(
