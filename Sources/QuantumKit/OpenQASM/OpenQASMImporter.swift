@@ -15,11 +15,13 @@ public struct OpenQASM2ImporterOptions: Equatable, Sendable {
 /// linearized in declaration order: the first register’s `r[0]` is global qubit 0,
 /// then contiguous indices for subsequent registers.
 ///
-/// ## Slice 03 coverage
+/// ## Slice 04 coverage
 /// qreg / creg, builtin `include "qelib1.inc"`, measure / reset / barrier, and the
-/// parameter-free qelib1 gate map in ``OpenQASMQelib1``. Parametric gates, `if`,
-/// `opaque`, user gate expansion, and non-qelib1 includes are rejected with
-/// ``OpenQASMError``.
+/// qelib1 gate map in ``OpenQASMQelib1`` including numeric-angle parametric gates
+/// (`u`/`u1`/`u2`/`u3`, `p`, `rx`/`ry`/`rz`, `crx`/`cry`/`crz`/`cp`, `cswap`).
+/// Angle expressions evaluate `pi` and arithmetic; symbolic gate params are not
+/// inlined yet. `if`, `opaque`, user gate expansion, and non-qelib1 includes are
+/// rejected with ``OpenQASMError``.
 public struct OpenQASM2Importer: Sendable {
     public var options: OpenQASM2ImporterOptions
 
@@ -254,15 +256,6 @@ private final class LoweringContext {
         location: SourceLocation,
         to circuit: inout QuantumCircuit
     ) throws {
-        if !params.isEmpty {
-            throw OpenQASMError.unsupported(
-                line: location.line,
-                column: location.column,
-                feature: name,
-                message: "Parametric / angle gates are not supported in this import path yet"
-            )
-        }
-
         if declaredUserGates.contains(name) {
             throw OpenQASMError.unsupported(
                 line: location.line,
@@ -284,7 +277,12 @@ private final class LoweringContext {
         // include still marks availability for tooling.
         _ = qelib1Available
 
-        let gate = try mapBuiltinGate(name: name, qubits: qubits, location: location)
+        let gate = try mapBuiltinGate(
+            name: name,
+            params: params,
+            qubits: qubits,
+            location: location
+        )
         do {
             try circuit.apply(gate)
         } catch {
@@ -298,11 +296,13 @@ private final class LoweringContext {
 
     private func mapBuiltinGate(
         name: String,
+        params: [OpenQASMExpr],
         qubits: [OpenQASMArgument],
         location: SourceLocation
     ) throws -> Gate {
         switch name {
         case "id", "x", "y", "z", "h", "s", "sdg", "t", "tdg", "sx", "sxdg":
+            try requireParamCount(params, expected: 0, gate: name, location: location)
             let target = try requireSingleQubit(qubits, gate: name, location: location)
             switch name {
             case "id": return .id(target: target)
@@ -321,26 +321,176 @@ private final class LoweringContext {
             }
 
         case "cx":
+            try requireParamCount(params, expected: 0, gate: name, location: location)
             let pair = try requireTwoQubits(qubits, gate: name, location: location)
             return .cx(control: pair.0, target: pair.1)
 
         case "cz":
+            try requireParamCount(params, expected: 0, gate: name, location: location)
             let pair = try requireTwoQubits(qubits, gate: name, location: location)
             return .cz(control: pair.0, target: pair.1)
 
         case "swap":
+            try requireParamCount(params, expected: 0, gate: name, location: location)
             let pair = try requireTwoQubits(qubits, gate: name, location: location)
             return .swap(q1: pair.0, q2: pair.1)
 
         case "ccx":
+            try requireParamCount(params, expected: 0, gate: name, location: location)
             let triple = try requireThreeQubits(qubits, gate: name, location: location)
             return .ccx(control1: triple.0, control2: triple.1, target: triple.2)
+
+        case "cswap":
+            try requireParamCount(params, expected: 0, gate: name, location: location)
+            let triple = try requireThreeQubits(qubits, gate: name, location: location)
+            return .cswap(control: triple.0, q1: triple.1, q2: triple.2)
+
+        case "u", "u3":
+            try requireParamCount(params, expected: 3, gate: name, location: location)
+            let target = try requireSingleQubit(qubits, gate: name, location: location)
+            let theta = try evaluateAngle(params[0], location: location)
+            let phi = try evaluateAngle(params[1], location: location)
+            let lambda = try evaluateAngle(params[2], location: location)
+            return .u(theta: theta, phi: phi, lambda: lambda, target: target)
+
+        case "u2":
+            try requireParamCount(params, expected: 2, gate: name, location: location)
+            let target = try requireSingleQubit(qubits, gate: name, location: location)
+            let phi = try evaluateAngle(params[0], location: location)
+            let lambda = try evaluateAngle(params[1], location: location)
+            let halfPi = QFloatExpr.literal(QFloat(Double.pi / 2))
+            return .u(theta: halfPi, phi: phi, lambda: lambda, target: target)
+
+        case "u1":
+            try requireParamCount(params, expected: 1, gate: name, location: location)
+            let target = try requireSingleQubit(qubits, gate: name, location: location)
+            let lambda = try evaluateAngle(params[0], location: location)
+            return .p(theta: lambda, target: target)
+
+        case "p":
+            try requireParamCount(params, expected: 1, gate: name, location: location)
+            let target = try requireSingleQubit(qubits, gate: name, location: location)
+            let theta = try evaluateAngle(params[0], location: location)
+            return .p(theta: theta, target: target)
+
+        case "rx":
+            try requireParamCount(params, expected: 1, gate: name, location: location)
+            let target = try requireSingleQubit(qubits, gate: name, location: location)
+            let theta = try evaluateAngle(params[0], location: location)
+            return .rx(theta: theta, target: target)
+
+        case "ry":
+            try requireParamCount(params, expected: 1, gate: name, location: location)
+            let target = try requireSingleQubit(qubits, gate: name, location: location)
+            let theta = try evaluateAngle(params[0], location: location)
+            return .ry(theta: theta, target: target)
+
+        case "rz":
+            try requireParamCount(params, expected: 1, gate: name, location: location)
+            let target = try requireSingleQubit(qubits, gate: name, location: location)
+            let theta = try evaluateAngle(params[0], location: location)
+            return .rz(theta: theta, target: target)
+
+        case "crx":
+            try requireParamCount(params, expected: 1, gate: name, location: location)
+            let pair = try requireTwoQubits(qubits, gate: name, location: location)
+            let theta = try evaluateAngle(params[0], location: location)
+            return .crx(theta: theta, control: pair.0, target: pair.1)
+
+        case "cry":
+            try requireParamCount(params, expected: 1, gate: name, location: location)
+            let pair = try requireTwoQubits(qubits, gate: name, location: location)
+            let theta = try evaluateAngle(params[0], location: location)
+            return .cry(theta: theta, control: pair.0, target: pair.1)
+
+        case "crz":
+            try requireParamCount(params, expected: 1, gate: name, location: location)
+            let pair = try requireTwoQubits(qubits, gate: name, location: location)
+            let theta = try evaluateAngle(params[0], location: location)
+            return .crz(theta: theta, control: pair.0, target: pair.1)
+
+        case "cp":
+            try requireParamCount(params, expected: 1, gate: name, location: location)
+            let pair = try requireTwoQubits(qubits, gate: name, location: location)
+            let theta = try evaluateAngle(params[0], location: location)
+            return .cp(theta: theta, control: pair.0, target: pair.1)
 
         default:
             throw OpenQASMError.semanticError(
                 line: location.line,
                 column: location.column,
                 message: "Unknown or unmapped gate '\(name)'"
+            )
+        }
+    }
+
+    // MARK: Angle expression evaluation
+
+    /// Evaluates a numeric (non-parameterized) angle expression to ``QFloatExpr/literal``.
+    private func evaluateAngle(_ expr: OpenQASMExpr, location: SourceLocation) throws -> QFloatExpr {
+        let value = try evaluateNumeric(expr, location: location)
+        return .literal(QFloat(value))
+    }
+
+    private func evaluateNumeric(_ expr: OpenQASMExpr, location: SourceLocation) throws -> Double {
+        switch expr {
+        case .integer(let value):
+            return Double(value)
+        case .float(let value):
+            return value
+        case .identifier(let name):
+            switch name {
+            case "pi", "π":
+                return Double.pi
+            case "tau":
+                return 2 * Double.pi
+            case "euler", "e":
+                return Foundation.exp(1.0)
+            default:
+                throw OpenQASMError.semanticError(
+                    line: location.line,
+                    column: location.column,
+                    message: "Unknown identifier '\(name)' in angle expression"
+                )
+            }
+        case .unaryMinus(let inner):
+            return -(try evaluateNumeric(inner, location: location))
+        case .paren(let inner):
+            return try evaluateNumeric(inner, location: location)
+        case .binary(let op, let lhs, let rhs):
+            let left = try evaluateNumeric(lhs, location: location)
+            let right = try evaluateNumeric(rhs, location: location)
+            switch op {
+            case .add:
+                return left + right
+            case .subtract:
+                return left - right
+            case .multiply:
+                return left * right
+            case .divide:
+                guard right != 0 else {
+                    throw OpenQASMError.semanticError(
+                        line: location.line,
+                        column: location.column,
+                        message: "Division by zero in angle expression"
+                    )
+                }
+                return left / right
+            }
+        }
+    }
+
+    private func requireParamCount(
+        _ params: [OpenQASMExpr],
+        expected: Int,
+        gate: String,
+        location: SourceLocation
+    ) throws {
+        guard params.count == expected else {
+            throw OpenQASMError.semanticError(
+                line: location.line,
+                column: location.column,
+                message: "Gate '\(gate)' expects \(expected) parameter(s), got \(params.count)"
             )
         }
     }

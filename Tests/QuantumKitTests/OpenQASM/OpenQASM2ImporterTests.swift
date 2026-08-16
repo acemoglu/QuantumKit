@@ -158,25 +158,23 @@ extension QuantumKitTests {
         XCTAssertEqual(spec.classicalBitOffset, 1)
     }
 
-    // MARK: - Parametric / unsupported
+    // MARK: - Parameter-free multi-qubit (cz / swap / ccx)
 
-    func testOpenQASM2ImporterParametricGateUnsupported() {
+    func testOpenQASM2ImporterCZSwapCCX() throws {
         let source = """
         OPENQASM 2.0;
         include "qelib1.inc";
-        qreg q[1];
-        rx(pi/2) q[0];
+        qreg q[3];
+        cz q[0],q[1];
+        swap q[1],q[2];
+        ccx q[0],q[1],q[2];
         """
-        XCTAssertThrowsError(try OpenQASM2Importer().`import`(source: source)) { error in
-            guard let e = error as? OpenQASMError else {
-                return XCTFail("Expected OpenQASMError, got \(error)")
-            }
-            guard case .unsupported(_, _, let feature, let message) = e else {
-                return XCTFail("Expected unsupported, got \(e)")
-            }
-            XCTAssertEqual(feature, "rx")
-            XCTAssertTrue(message.lowercased().contains("parametric") || message.lowercased().contains("angle"), message)
-        }
+        let circuit = try OpenQASM2Importer().`import`(source: source)
+        XCTAssertEqual(circuit.gates, [
+            .cz(control: 0, target: 1),
+            .swap(q1: 1, q2: 2),
+            .ccx(control1: 0, control2: 1, target: 2),
+        ])
     }
 
     // MARK: - Multi-qreg linearization
