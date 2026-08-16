@@ -269,6 +269,65 @@ extension QuantumKitTests {
         XCTAssertEqual(again.gates, circuit.gates)
     }
 
+    func testOpenQASM3RoundTripBracedIf() throws {
+        let source = """
+        OPENQASM 3.0;
+        qubit[2] q;
+        bit[1] c;
+        if (c == 1) {
+          h q[0];
+          cx q[0], q[1];
+        }
+        """
+        let first = try OpenQASM3Importer().`import`(source: source)
+        XCTAssertEqual(first.gates.count, 2)
+        let exported = try OpenQASMExporter().export(first)
+        XCTAssertTrue(exported.contains("if(c==1) {"), exported)
+        XCTAssertTrue(exported.contains("h q[0];"), exported)
+        XCTAssertTrue(exported.contains("cx q[0],q[1];"), exported)
+        let second = try OpenQASM3Importer().`import`(source: exported)
+        XCTAssertEqual(second.gates, first.gates)
+    }
+
+    func testOpenQASM3ExporterCoalescesConsecutiveCIfIntoBracedBlock() throws {
+        var circuit = try QuantumCircuit(
+            qubitCount: 2,
+            classicalRegisters: [try ClassicalRegisterSpec(bitCount: 1)]
+        )
+        try circuit.apply(.c_if(classicalRegister: 0, expectedValue: 1, gate: .h(target: 0)))
+        try circuit.apply(
+            .c_if(
+                classicalRegister: 0,
+                expectedValue: 1,
+                gate: .cx(control: 0, target: 1)
+            )
+        )
+        let exported = try OpenQASMExporter().export(circuit)
+        XCTAssertTrue(exported.contains("if(c==1) {"), exported)
+        XCTAssertFalse(exported.contains("if(c==1) h"), exported)
+        let again = try OpenQASM3Importer().`import`(source: exported)
+        XCTAssertEqual(again.gates, circuit.gates)
+    }
+
+    func testOpenQASM2ExporterKeepsBraceLessMultiCIf() throws {
+        var circuit = try QuantumCircuit(
+            qubitCount: 2,
+            classicalRegisters: [try ClassicalRegisterSpec(bitCount: 1)]
+        )
+        try circuit.apply(.c_if(classicalRegister: 0, expectedValue: 1, gate: .h(target: 0)))
+        try circuit.apply(
+            .c_if(
+                classicalRegister: 0,
+                expectedValue: 1,
+                gate: .cx(control: 0, target: 1)
+            )
+        )
+        let exported = try OpenQASM2Exporter().export(circuit)
+        XCTAssertFalse(exported.contains("if(c==1) {"), exported)
+        XCTAssertTrue(exported.contains("if(c==1) h q[0];"), exported)
+        XCTAssertTrue(exported.contains("if(c==1) cx q[0],q[1];"), exported)
+    }
+
     // MARK: - while requires maxIterations (options or pragma)
 
     func testOpenQASM3ImporterWhileRequiresBound() {

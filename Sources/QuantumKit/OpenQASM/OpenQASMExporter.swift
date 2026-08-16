@@ -27,8 +27,10 @@ public struct OpenQASMExportOptions: Equatable, Sendable {
 /// structured expressions throw ``OpenQASMError/unsupported``.
 ///
 /// ## Classical if
-/// Emitted as OpenQASM 2-compatible `if(c==imm) <stmt>;` (no braces) so the
-/// shared parser can round-trip both dialects.
+/// OpenQASM 3: consecutive ``Gate/c_if`` with the same condition are coalesced into a
+/// braced `if (c==imm) { … }` block when there is more than one statement; a single
+/// conditioned statement stays brace-less. OpenQASM 2 always emits brace-less
+/// `if(c==imm) <stmt>;` lines (including one line per gate in a multi-gate chain).
 ///
 /// ## Bounded while (OpenQASM 3 only)
 /// ``Gate/while_c`` exports as a QASM3 `while` plus a comment pragma
@@ -97,9 +99,7 @@ public struct OpenQASMExporter: Sendable {
             cregNames: cregNames,
             dialectLabel: dialectLabel
         )
-        for gate in circuit.gates {
-            try lines.append(contentsOf: ctx.emitGate(gate, conditioned: nil))
-        }
+        try lines.append(contentsOf: ctx.emitGates(circuit.gates))
     }
 
     /// `c` for a single classical register; `c0`, `c1`, … when there are several.
@@ -140,6 +140,44 @@ private struct ExportContext {
     let classicalRegisters: [ClassicalRegisterSpec]
     let cregNames: [String]
     let dialectLabel: String
+
+    /// Emits the full gate list, coalescing consecutive same-condition `c_if` into
+    /// braced OpenQASM 3 `if` blocks when helpful.
+    func emitGates(_ gates: [Gate]) throws -> [String] {
+        var lines: [String] = []
+        var index = 0
+        let coalesceBracedIf = dialectLabel.hasPrefix("OpenQASM 3")
+        while index < gates.count {
+            if coalesceBracedIf,
+               case .c_if(let register, let value, _) = gates[index] {
+                var runEnd = index + 1
+                while runEnd < gates.count,
+                      case .c_if(let r, let v, _) = gates[runEnd],
+                      r == register,
+                      v == value {
+                    runEnd += 1
+                }
+                if runEnd - index > 1 {
+                    let name = try classicalName(register)
+                    lines.append("if(\(name)==\(value)) {")
+                    for gateIndex in index..<runEnd {
+                        guard case .c_if(_, _, let inner) = gates[gateIndex] else {
+                            continue
+                        }
+                        for bodyLine in try emitGate(inner, conditioned: nil) {
+                            lines.append("  \(bodyLine)")
+                        }
+                    }
+                    lines.append("}")
+                    index = runEnd
+                    continue
+                }
+            }
+            lines.append(contentsOf: try emitGate(gates[index], conditioned: nil))
+            index += 1
+        }
+        return lines
+    }
 
     /// Emits one or more OpenQASM statements for `gate`.
     /// When `conditioned` is set, each statement is wrapped as `if(creg==imm) <stmt>`.
@@ -402,7 +440,7 @@ private struct ExportContext {
     ) throws -> [String] {
         guard let conditioned else { return [statement] }
         let name = try classicalName(conditioned.register)
-        // Brace-less form: parser only supports `if (c==imm) <stmt>;` (no `{ ... }`).
+        // Single-statement form stays brace-less (QASM2-compatible / compact QASM3).
         return ["if(\(name)==\(conditioned.value)) \(statement)"]
     }
 
@@ -411,9 +449,19 @@ private struct ExportContext {
         conditioned: (register: Int, value: Int)
     ) throws -> [String] {
         let name = try classicalName(conditioned.register)
-        return statements.map { stmt in
-            "if(\(name)==\(conditioned.value)) \(stmt)"
+        if statements.isEmpty { return [] }
+        if statements.count == 1 || dialectLabel.hasPrefix("OpenQASM 2") {
+            return statements.map { stmt in
+                "if(\(name)==\(conditioned.value)) \(stmt)"
+            }
         }
+        // OpenQASM 3 multi-statement conditioned region → braced block.
+        var lines: [String] = ["if(\(name)==\(conditioned.value)) {"]
+        for stmt in statements {
+            lines.append("  \(stmt)")
+        }
+        lines.append("}")
+        return lines
     }
 
     private func q(_ index: Int) -> String {
