@@ -9,19 +9,29 @@ public struct OpenQASM2ImporterOptions: Equatable, Sendable {
 
 /// Lowers an OpenQASM 2 program into a ``QuantumCircuit``.
 ///
-/// ## Bit / qubit order
+/// ## Bit / qubit order (linear addressing)
 /// QuantumKit uses LSB = qubit 0. An OpenQASM subscript `q[0]` maps directly to
-/// engine qubit `0` (same for classical bits). Multiple `qreg` declarations are
-/// linearized in declaration order: the first register’s `r[0]` is global qubit 0,
-/// then contiguous indices for subsequent registers.
+/// engine qubit `0` (same for classical bit offsets within a creg).
 ///
-/// ## Slice 04 coverage
-/// qreg / creg, builtin `include "qelib1.inc"`, measure / reset / barrier, and the
+/// Multiple `qreg` declarations are linearized in declaration order into one
+/// contiguous global qubit address space:
+/// `qreg a[2]; qreg b[3];` → `a[0]=0`, `a[1]=1`, `b[0]=2`, `b[1]=3`, `b[2]=4`.
+/// So `cx a[1], b[0]` lowers to `cx(control: 1, target: 2)`.
+///
+/// Multiple `creg` declarations become separate ``ClassicalRegisterSpec`` entries
+/// in declaration order (not bit-linearized across registers):
+/// `creg c[2]; creg d[1];` → `classicalRegisters[0].bitCount == 2`,
+/// `classicalRegisters[1].bitCount == 1`. Measure targets the creg index plus
+/// bit offset; `if (d == 1)` uses `classicalRegister` index `1`.
+///
+/// ## Slice 05 coverage
+/// qreg / creg, builtin `include "qelib1.inc"`, measure / reset / barrier, the
 /// qelib1 gate map in ``OpenQASMQelib1`` including numeric-angle parametric gates
-/// (`u`/`u1`/`u2`/`u3`, `p`, `rx`/`ry`/`rz`, `crx`/`cry`/`crz`/`cp`, `cswap`).
+/// (`u`/`u1`/`u2`/`u3`, `p`, `rx`/`ry`/`rz`, `crx`/`cry`/`crz`/`cp`, `cswap`),
+/// and OpenQASM 2 `if (creg == imm) <stmt>` lowered via ``Gate/c_if``.
 /// Angle expressions evaluate `pi` and arithmetic; symbolic gate params are not
-/// inlined yet. `if`, `opaque`, user gate expansion, and non-qelib1 includes are
-/// rejected with ``OpenQASMError``.
+/// inlined yet. `opaque`, user gate expansion, `while`, and non-qelib1 includes
+/// are rejected with ``OpenQASMError``.
 public struct OpenQASM2Importer: Sendable {
     public var options: OpenQASM2ImporterOptions
 
@@ -149,13 +159,10 @@ private final class LoweringContext {
                 message: "opaque declarations are not supported yet"
             )
 
-        case .ifStatement(_, _, let location):
-            throw OpenQASMError.unsupported(
-                line: location.line,
-                column: location.column,
-                feature: "if",
-                message: "classical if statements are not supported in this import path yet"
-            )
+        case .ifStatement:
+            // Executable; lowered in pass 2. Nested declarations inside `if` are not
+            // OpenQASM 2 style and are rejected when lowering the body.
+            return
 
         case .whileStatement(_, _, let location):
             throw OpenQASMError.unsupported(
@@ -231,7 +238,7 @@ private final class LoweringContext {
         case .version, .empty, .include, .qreg, .creg, .qubitDecl, .bitDecl, .gateDecl:
             return
 
-        case .opaqueDecl, .ifStatement, .whileStatement:
+        case .opaqueDecl, .whileStatement:
             // Already rejected in collectDeclarations.
             return
 
@@ -246,6 +253,143 @@ private final class LoweringContext {
 
         case .barrier(let qubits, let location):
             try applyBarrier(qubits: qubits, location: location, to: &circuit)
+
+        case .ifStatement(let condition, let body, let location):
+            try applyIfStatement(condition: condition, body: body, location: location, to: &circuit)
+        }
+    }
+
+    // MARK: Classical if → Gate.c_if
+
+    /// Lowers `if (creg == imm) <statement>` to one or more ``Gate/c_if`` wrappers.
+    ///
+    /// The condition register name resolves to the declaration-order classical
+    /// register index. The body must lower to gate(s); each resulting gate is
+    /// wrapped as `.c_if(classicalRegister:idx, expectedValue:imm, gate:)`.
+    /// Whole-register `reset` expands to one `c_if` per qubit. Nested `if`
+    /// wraps an inner `c_if` gate.
+    private func applyIfStatement(
+        condition: OpenQASMCondition,
+        body: OpenQASMStatement,
+        location: SourceLocation,
+        to circuit: inout QuantumCircuit
+    ) throws {
+        let (cregIndex, expectedValue) = try resolveCondition(condition, location: location)
+        let bodyGates = try lowerStatementToGates(body, wrappingLocation: location)
+        guard !bodyGates.isEmpty else {
+            throw OpenQASMError.semanticError(
+                line: location.line,
+                column: location.column,
+                message: "if body produced no gates"
+            )
+        }
+        for gate in bodyGates {
+            try applyGate(
+                .c_if(
+                    classicalRegister: cregIndex,
+                    expectedValue: expectedValue,
+                    gate: gate
+                ),
+                location: location,
+                to: &circuit
+            )
+        }
+    }
+
+    private func resolveCondition(
+        _ condition: OpenQASMCondition,
+        location: SourceLocation
+    ) throws -> (Int, Int) {
+        switch condition {
+        case .equals(let register, let value):
+            guard let binding = classicalRegs[register] else {
+                throw OpenQASMError.semanticError(
+                    line: location.line,
+                    column: location.column,
+                    message: "Undeclared classical register '\(register)' in if condition"
+                )
+            }
+            return (binding.base, value)
+        }
+    }
+
+    /// Lowers a single statement that may appear as an `if` body into one or more gates
+    /// (without applying them to the circuit).
+    private func lowerStatementToGates(
+        _ statement: OpenQASMStatement,
+        wrappingLocation: SourceLocation
+    ) throws -> [Gate] {
+        switch statement {
+        case .gateCall(let name, let params, let qubits, let location):
+            if declaredUserGates.contains(name) {
+                throw OpenQASMError.unsupported(
+                    line: location.line,
+                    column: location.column,
+                    feature: name,
+                    message: "User-defined gate '\(name)' is declared but not expanded yet"
+                )
+            }
+            guard OpenQASMQelib1.mappedGateNames.contains(name) else {
+                throw OpenQASMError.semanticError(
+                    line: location.line,
+                    column: location.column,
+                    message: "Unknown or unmapped gate '\(name)'"
+                )
+            }
+            let gate = try mapBuiltinGate(
+                name: name,
+                params: params,
+                qubits: qubits,
+                location: location
+            )
+            return [gate]
+
+        case .measure(let qubits, let classical, let location):
+            return [try buildMeasureGate(qubits: qubits, classical: classical, location: location)]
+
+        case .reset(let qubits, let location):
+            return try buildResetGates(qubits: qubits, location: location)
+
+        case .barrier(let qubits, let location):
+            return [try buildBarrierGate(qubits: qubits, location: location)]
+
+        case .ifStatement(let condition, let body, let location):
+            // Nested if: lower inner body, wrap each gate, return as gates for outer wrap.
+            let (cregIndex, expectedValue) = try resolveCondition(condition, location: location)
+            let innerGates = try lowerStatementToGates(body, wrappingLocation: location)
+            guard !innerGates.isEmpty else {
+                throw OpenQASMError.semanticError(
+                    line: location.line,
+                    column: location.column,
+                    message: "if body produced no gates"
+                )
+            }
+            return innerGates.map { gate in
+                .c_if(
+                    classicalRegister: cregIndex,
+                    expectedValue: expectedValue,
+                    gate: gate
+                )
+            }
+
+        case .empty:
+            return []
+
+        case .version, .include, .qreg, .creg, .qubitDecl, .bitDecl, .gateDecl, .opaqueDecl:
+            throw OpenQASMError.unsupported(
+                line: wrappingLocation.line,
+                column: wrappingLocation.column,
+                feature: "if",
+                message: "if body must be a gate, measure, reset, barrier, or nested if"
+            )
+
+        case .whileStatement(_, _, let location):
+            throw OpenQASMError.unsupported(
+                line: location.line,
+                column: location.column,
+                feature: "while",
+                message: "while statements are not supported yet"
+            )
         }
     }
 
@@ -503,6 +647,18 @@ private final class LoweringContext {
         location: SourceLocation,
         to circuit: inout QuantumCircuit
     ) throws {
+        try applyGate(
+            try buildMeasureGate(qubits: qubits, classical: classical, location: location),
+            location: location,
+            to: &circuit
+        )
+    }
+
+    private func buildMeasureGate(
+        qubits: [OpenQASMArgument],
+        classical: [OpenQASMArgument],
+        location: SourceLocation
+    ) throws -> Gate {
         guard qubits.count == 1, classical.count == 1 else {
             throw OpenQASMError.semanticError(
                 line: location.line,
@@ -530,8 +686,7 @@ private final class LoweringContext {
                 classicalRegister: cregIndex,
                 classicalBitOffset: 0
             )
-            try applyGate(.measure(spec), location: location, to: &circuit)
-            return
+            return .measure(spec)
         }
 
         if qArg.index != nil && cArg.index != nil {
@@ -547,8 +702,7 @@ private final class LoweringContext {
                 classicalRegister: cregIndex,
                 classicalBitOffset: bitOffset
             )
-            try applyGate(.measure(spec), location: location, to: &circuit)
-            return
+            return .measure(spec)
         }
 
         throw OpenQASMError.semanticError(
@@ -563,6 +717,15 @@ private final class LoweringContext {
         location: SourceLocation,
         to circuit: inout QuantumCircuit
     ) throws {
+        for gate in try buildResetGates(qubits: qubits, location: location) {
+            try applyGate(gate, location: location, to: &circuit)
+        }
+    }
+
+    private func buildResetGates(
+        qubits: [OpenQASMArgument],
+        location: SourceLocation
+    ) throws -> [Gate] {
         var indices: [Int] = []
         for arg in qubits {
             indices.append(contentsOf: try resolveQubitIndices(arg, location: location))
@@ -574,9 +737,7 @@ private final class LoweringContext {
                 message: "reset requires at least one qubit"
             )
         }
-        for index in indices {
-            try applyGate(.reset(qubit: index), location: location, to: &circuit)
-        }
+        return indices.map { .reset(qubit: $0) }
     }
 
     private func applyBarrier(
@@ -584,16 +745,26 @@ private final class LoweringContext {
         location: SourceLocation,
         to circuit: inout QuantumCircuit
     ) throws {
+        try applyGate(
+            try buildBarrierGate(qubits: qubits, location: location),
+            location: location,
+            to: &circuit
+        )
+    }
+
+    private func buildBarrierGate(
+        qubits: [OpenQASMArgument],
+        location: SourceLocation
+    ) throws -> Gate {
         if qubits.isEmpty {
             // Empty barrier means all circuit qubits.
-            try applyGate(.barrier(qubits: []), location: location, to: &circuit)
-            return
+            return .barrier(qubits: [])
         }
         var indices: [Int] = []
         for arg in qubits {
             indices.append(contentsOf: try resolveQubitIndices(arg, location: location))
         }
-        try applyGate(.barrier(qubits: indices), location: location, to: &circuit)
+        return .barrier(qubits: indices)
     }
 
     private func applyGate(
