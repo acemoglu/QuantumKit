@@ -7,6 +7,16 @@ public struct OpenQASM2ImporterOptions: Equatable, Sendable {
     public init() {}
 }
 
+/// Options for OpenQASM 3 → ``QuantumCircuit`` import.
+public struct OpenQASM3ImporterOptions: Equatable, Sendable {
+    public init() {}
+}
+
+/// Options for version-dispatching ``OpenQASMImporter``.
+public struct OpenQASMImporterOptions: Equatable, Sendable {
+    public init() {}
+}
+
 /// Lowers an OpenQASM 2 program into a ``QuantumCircuit``.
 ///
 /// ## Bit / qubit order (linear addressing)
@@ -24,7 +34,7 @@ public struct OpenQASM2ImporterOptions: Equatable, Sendable {
 /// `classicalRegisters[1].bitCount == 1`. Measure targets the creg index plus
 /// bit offset; `if (d == 1)` uses `classicalRegister` index `1`.
 ///
-/// ## Slice 06 coverage
+/// ## Coverage
 /// qreg / creg, builtin `include "qelib1.inc"`, measure / reset / barrier, the
 /// qelib1 gate map in ``OpenQASMQelib1`` including numeric-angle parametric gates
 /// (`u`/`u1`/`u2`/`u3`, `p`, `rx`/`ry`/`rz`, `crx`/`cry`/`crz`/`cp`, `cswap`),
@@ -32,7 +42,8 @@ public struct OpenQASM2ImporterOptions: Equatable, Sendable {
 /// user-defined `gate` expand/inline (numeric params, recursive nesting).
 /// Angle expressions evaluate `pi` and arithmetic; formal gate parameters are
 /// substituted during expansion. `opaque`, `while`, and non-qelib1 includes
-/// are rejected with ``OpenQASMError``.
+/// are rejected with ``OpenQASMError``. OpenQASM 3 `qubit`/`bit` declarations
+/// are rejected here (use ``OpenQASM3Importer`` / ``OpenQASMImporter``).
 public struct OpenQASM2Importer: Sendable {
     public var options: OpenQASM2ImporterOptions
 
@@ -49,14 +60,77 @@ public struct OpenQASM2Importer: Sendable {
 
     /// Lowers an already-parsed program to a circuit.
     public func `import`(program: OpenQASMProgram) throws -> QuantumCircuit {
-        try LoweringContext(program: program).lower()
+        try LoweringContext(program: program, dialect: .v2).lower()
     }
 }
 
-/// Alias matching the generic “importer” naming used in slice docs.
-public typealias OpenQASMImporter = OpenQASM2Importer
+/// Lowers an OpenQASM 3 core-subset program into a ``QuantumCircuit``.
+///
+/// ## Slice 08 coverage
+/// `OPENQASM 3` / `3.0`, `qubit` / `bit` (size omitted → 1), plus compatibility
+/// `qreg` / `creg`. Optional qelib1-style `include` only; gate calls reuse the
+/// same map as OpenQASM 2. `measure` / `reset` / `barrier` / `if` → ``Gate`` /
+/// ``Gate/c_if``. User `gate` expand is shared with the v2 path. `while`,
+/// `opaque`, `defcal`, and non-builtin includes are rejected.
+public struct OpenQASM3Importer: Sendable {
+    public var options: OpenQASM3ImporterOptions
+
+    public init(options: OpenQASM3ImporterOptions = OpenQASM3ImporterOptions()) {
+        self.options = options
+    }
+
+    /// Parses `source` and lowers it to a circuit.
+    public func `import`(source: String) throws -> QuantumCircuit {
+        var parser = try OpenQASMParser(source: source)
+        let program = try parser.parse()
+        return try `import`(program: program)
+    }
+
+    /// Lowers an already-parsed program to a circuit.
+    public func `import`(program: OpenQASMProgram) throws -> QuantumCircuit {
+        try LoweringContext(program: program, dialect: .v3).lower()
+    }
+}
+
+/// Version-dispatching OpenQASM → ``QuantumCircuit`` importer.
+///
+/// Detects ``OpenQASMVersion`` from source (or uses ``OpenQASMProgram/version``)
+/// and lowers via ``OpenQASM2Importer`` or ``OpenQASM3Importer``.
+public struct OpenQASMImporter: Sendable {
+    public var options: OpenQASMImporterOptions
+
+    public init(options: OpenQASMImporterOptions = OpenQASMImporterOptions()) {
+        self.options = options
+    }
+
+    /// Parses `source`, detects version, and lowers to a circuit.
+    public func `import`(source: String) throws -> QuantumCircuit {
+        let version = try OpenQASMVersion.detect(from: source)
+        switch version {
+        case .v2:
+            return try OpenQASM2Importer().`import`(source: source)
+        case .v3:
+            return try OpenQASM3Importer().`import`(source: source)
+        }
+    }
+
+    /// Lowers an already-parsed program using ``OpenQASMProgram/version`` (defaults to `.v2`).
+    public func `import`(program: OpenQASMProgram) throws -> QuantumCircuit {
+        switch program.version ?? .v2 {
+        case .v2:
+            return try OpenQASM2Importer().`import`(program: program)
+        case .v3:
+            return try OpenQASM3Importer().`import`(program: program)
+        }
+    }
+}
 
 // MARK: - Lowering
+
+private enum LoweringDialect: Equatable, Sendable {
+    case v2
+    case v3
+}
 
 private struct RegisterBinding: Equatable {
     var name: String
@@ -67,7 +141,7 @@ private struct RegisterBinding: Equatable {
     var isClassical: Bool
 }
 
-/// Stored user-defined OpenQASM 2 gate (`gate name(params) qubits { body }`).
+/// Stored user-defined OpenQASM gate (`gate name(params) qubits { body }`).
 private struct UserGateDefinition: Equatable {
     var name: String
     var params: [String]
@@ -78,6 +152,7 @@ private struct UserGateDefinition: Equatable {
 
 private final class LoweringContext {
     let program: OpenQASMProgram
+    let dialect: LoweringDialect
     var qelib1Available = false
     var qubitRegs: [String: RegisterBinding] = [:]
     var classicalRegs: [String: RegisterBinding] = [:]
@@ -90,8 +165,9 @@ private final class LoweringContext {
     /// Gate names currently being expanded (cycle detection).
     var expansionStack: Set<String> = []
 
-    init(program: OpenQASMProgram) {
+    init(program: OpenQASMProgram, dialect: LoweringDialect) {
         self.program = program
+        self.dialect = dialect
     }
 
     func lower() throws -> QuantumCircuit {
@@ -104,7 +180,9 @@ private final class LoweringContext {
             throw OpenQASMError.semanticError(
                 line: 1,
                 column: 1,
-                message: "Program must declare at least one qubit (qreg)"
+                message: dialect == .v3
+                    ? "Program must declare at least one qubit (qubit or qreg)"
+                    : "Program must declare at least one qubit (qreg)"
             )
         }
 
@@ -146,13 +224,27 @@ private final class LoweringContext {
         case .creg(let name, let size, let location):
             try declareCreg(name: name, size: size, location: location)
 
-        case .qubitDecl(_, _, let location), .bitDecl(_, _, let location):
-            throw OpenQASMError.unsupported(
-                line: location.line,
-                column: location.column,
-                feature: "OpenQASM 3 declarations",
-                message: "OpenQASM 2 importer does not accept qubit/bit declarations yet"
-            )
+        case .qubitDecl(let name, let size, let location):
+            guard dialect == .v3 else {
+                throw OpenQASMError.unsupported(
+                    line: location.line,
+                    column: location.column,
+                    feature: "OpenQASM 3 declarations",
+                    message: "OpenQASM 2 importer does not accept qubit/bit declarations"
+                )
+            }
+            try declareQubit(name: name, size: size, location: location)
+
+        case .bitDecl(let name, let size, let location):
+            guard dialect == .v3 else {
+                throw OpenQASMError.unsupported(
+                    line: location.line,
+                    column: location.column,
+                    feature: "OpenQASM 3 declarations",
+                    message: "OpenQASM 2 importer does not accept qubit/bit declarations"
+                )
+            }
+            try declareBit(name: name, size: size, location: location)
 
         case .gateDecl(let name, let params, let qubits, let body, let location):
             if OpenQASMQelib1.mappedGateNames.contains(name) {
@@ -202,11 +294,35 @@ private final class LoweringContext {
     }
 
     private func declareQreg(name: String, size: Int, location: SourceLocation) throws {
+        try declareQubitRegister(
+            name: name,
+            size: size,
+            location: location,
+            kindLabel: "qreg"
+        )
+    }
+
+    /// OpenQASM 3 `qubit[n] q;` / `qubit q;` — `size == nil` means a single qubit.
+    private func declareQubit(name: String, size: Int?, location: SourceLocation) throws {
+        try declareQubitRegister(
+            name: name,
+            size: size ?? 1,
+            location: location,
+            kindLabel: "qubit"
+        )
+    }
+
+    private func declareQubitRegister(
+        name: String,
+        size: Int,
+        location: SourceLocation,
+        kindLabel: String
+    ) throws {
         guard size > 0 else {
             throw OpenQASMError.semanticError(
                 line: location.line,
                 column: location.column,
-                message: "qreg '\(name)' size must be positive"
+                message: "\(kindLabel) '\(name)' size must be positive"
             )
         }
         guard qubitRegs[name] == nil, classicalRegs[name] == nil else {
@@ -226,11 +342,35 @@ private final class LoweringContext {
     }
 
     private func declareCreg(name: String, size: Int, location: SourceLocation) throws {
+        try declareClassicalRegister(
+            name: name,
+            size: size,
+            location: location,
+            kindLabel: "creg"
+        )
+    }
+
+    /// OpenQASM 3 `bit[n] c;` / `bit c;` — `size == nil` means a single bit.
+    private func declareBit(name: String, size: Int?, location: SourceLocation) throws {
+        try declareClassicalRegister(
+            name: name,
+            size: size ?? 1,
+            location: location,
+            kindLabel: "bit"
+        )
+    }
+
+    private func declareClassicalRegister(
+        name: String,
+        size: Int,
+        location: SourceLocation,
+        kindLabel: String
+    ) throws {
         guard size > 0 else {
             throw OpenQASMError.semanticError(
                 line: location.line,
                 column: location.column,
-                message: "creg '\(name)' size must be positive"
+                message: "\(kindLabel) '\(name)' size must be positive"
             )
         }
         guard qubitRegs[name] == nil, classicalRegs[name] == nil else {
@@ -253,7 +393,7 @@ private final class LoweringContext {
             throw OpenQASMError.semanticError(
                 line: location.line,
                 column: location.column,
-                message: "Invalid creg '\(name)' size \(size)"
+                message: "Invalid \(kindLabel) '\(name)' size \(size)"
             )
         }
     }

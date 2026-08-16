@@ -1,36 +1,56 @@
 import Foundation
 
 /// Options for ``QuantumCircuit`` → OpenQASM export.
-///
-/// This slice always emits OpenQASM 2.0 with `include "qelib1.inc"`.
-/// A version preference is reserved for a future QASM3 exporter slice.
 public struct OpenQASMExportOptions: Equatable, Sendable {
-    public init() {}
+    /// Target language version. Defaults to OpenQASM 3.
+    public var version: OpenQASMVersion
+
+    public init(version: OpenQASMVersion = .v3) {
+        self.version = version
+    }
 }
 
-/// Serializes a ``QuantumCircuit`` to a static OpenQASM 2.0 string (qelib1 subset).
+/// Serializes a ``QuantumCircuit`` to OpenQASM, branching on ``OpenQASMExportOptions/version``.
+///
+/// Default export is **OpenQASM 3.0** (`qubit` / `bit`, no `include`).
+/// Pass ``OpenQASMExportOptions/init(version:)`` with `.v2`, or use ``OpenQASM2Exporter``,
+/// for OpenQASM 2.0 + `include "qelib1.inc"`.
 ///
 /// ## Register naming
-/// - Quantum register is always a single `qreg q[N];` (qubit `i` ↔ `q[i]`).
-/// - Classical registers: one register → `creg c[W];`; multiple → `creg c0[W0];`,
-///   `creg c1[W1];`, … in ``QuantumCircuit/classicalRegisters`` order.
+/// - Quantum register is always a single `q` of size ``QuantumCircuit/qubitCount``
+///   (`qubit[N] q;` or `qreg q[N];`).
+/// - Classical registers: one register → `c`; multiple → `c0`, `c1`, … in
+///   ``QuantumCircuit/classicalRegisters`` order.
 ///
 /// ## Angle policy
 /// Only ``QFloatExpr/literal`` angles are exported. Symbolic / parameter /
 /// structured expressions throw ``OpenQASMError/unsupported``.
 ///
-/// ## Unsupported for QASM2
+/// ## Classical if
+/// Emitted as OpenQASM 2-compatible `if(c==imm) <stmt>;` (no braces) so the
+/// shared parser can round-trip both dialects.
+///
+/// ## Unsupported
 /// `while_c`, `unitary1`, `customUnitary`, `initialize`, `delay`, `mcx`/`mcz`,
 /// Ising / ECR / iSWAP / DCX, and other non-qelib1 gates.
-public struct OpenQASM2Exporter: Sendable {
+public struct OpenQASMExporter: Sendable {
     public var options: OpenQASMExportOptions
 
     public init(options: OpenQASMExportOptions = OpenQASMExportOptions()) {
         self.options = options
     }
 
-    /// Exports `circuit` as OpenQASM 2.0 source.
+    /// Exports `circuit` as OpenQASM source for ``OpenQASMExportOptions/version``.
     public func export(_ circuit: QuantumCircuit) throws -> String {
+        switch options.version {
+        case .v2:
+            return try exportV2(circuit)
+        case .v3:
+            return try exportV3(circuit)
+        }
+    }
+
+    private func exportV2(_ circuit: QuantumCircuit) throws -> String {
         var lines: [String] = []
         lines.append("OPENQASM 2.0;")
         lines.append("include \"\(OpenQASMQelib1.includeFileName)\";")
@@ -41,16 +61,39 @@ public struct OpenQASM2Exporter: Sendable {
             lines.append("creg \(cregNames[index])[\(spec.bitCount)];")
         }
 
+        try appendGates(of: circuit, cregNames: cregNames, dialectLabel: "OpenQASM 2", to: &lines)
+        return lines.joined(separator: "\n") + "\n"
+    }
+
+    private func exportV3(_ circuit: QuantumCircuit) throws -> String {
+        var lines: [String] = []
+        lines.append("OPENQASM 3.0;")
+        lines.append("qubit[\(circuit.qubitCount)] q;")
+
+        let cregNames = Self.classicalRegisterNames(count: circuit.classicalRegisters.count)
+        for (index, spec) in circuit.classicalRegisters.enumerated() {
+            lines.append("bit[\(spec.bitCount)] \(cregNames[index]);")
+        }
+
+        try appendGates(of: circuit, cregNames: cregNames, dialectLabel: "OpenQASM 3", to: &lines)
+        return lines.joined(separator: "\n") + "\n"
+    }
+
+    private func appendGates(
+        of circuit: QuantumCircuit,
+        cregNames: [String],
+        dialectLabel: String,
+        to lines: inout [String]
+    ) throws {
         let ctx = ExportContext(
             qubitCount: circuit.qubitCount,
             classicalRegisters: circuit.classicalRegisters,
-            cregNames: cregNames
+            cregNames: cregNames,
+            dialectLabel: dialectLabel
         )
         for gate in circuit.gates {
             try lines.append(contentsOf: ctx.emitGate(gate, conditioned: nil))
         }
-
-        return lines.joined(separator: "\n") + "\n"
     }
 
     /// `c` for a single classical register; `c0`, `c1`, … when there are several.
@@ -61,8 +104,28 @@ public struct OpenQASM2Exporter: Sendable {
     }
 }
 
-/// Alias matching the generic “exporter” naming used in slice docs.
-public typealias OpenQASMExporter = OpenQASM2Exporter
+/// Convenience exporter that always emits OpenQASM 2.0 + qelib1.
+///
+/// Existing round-trip tests depend on this type remaining QASM2-only.
+public struct OpenQASM2Exporter: Sendable {
+    public var options: OpenQASMExportOptions
+
+    public init(options: OpenQASMExportOptions = OpenQASMExportOptions(version: .v2)) {
+        var forced = options
+        forced.version = .v2
+        self.options = forced
+    }
+
+    /// Exports `circuit` as OpenQASM 2.0 source.
+    public func export(_ circuit: QuantumCircuit) throws -> String {
+        try OpenQASMExporter(options: options).export(circuit)
+    }
+
+    /// `c` for a single classical register; `c0`, `c1`, … when there are several.
+    public static func classicalRegisterNames(count: Int) -> [String] {
+        OpenQASMExporter.classicalRegisterNames(count: count)
+    }
+}
 
 // MARK: - Emission context
 
@@ -70,6 +133,7 @@ private struct ExportContext {
     let qubitCount: Int
     let classicalRegisters: [ClassicalRegisterSpec]
     let cregNames: [String]
+    let dialectLabel: String
 
     /// Emits one or more OpenQASM statements for `gate`.
     /// When `conditioned` is set, each statement is wrapped as `if(creg==imm) <stmt>`.
@@ -88,7 +152,7 @@ private struct ExportContext {
         case .while_c:
             throw unsupported(
                 feature: "while_c",
-                message: "OpenQASM 2 export does not support while_c (QASM3 slice)"
+                message: "\(dialectLabel) export does not support while_c yet"
             )
 
         case .h(let target):
@@ -133,7 +197,7 @@ private struct ExportContext {
 
         case .p(let theta, let target):
             let angle = try requireLiteralAngle(theta, gate: "p")
-            // qelib1 flavor: Gate.p ↔ u1
+            // qelib1 flavor: Gate.p ↔ u1 (accepted by both importers)
             return try wrap("u1(\(angle)) \(q(target));", conditioned: conditioned)
 
         case .u(let theta, let phi, let lambda, let target):
@@ -197,62 +261,62 @@ private struct ExportContext {
         case .delay:
             throw unsupported(
                 feature: "delay",
-                message: "OpenQASM 2 export does not support delay"
+                message: "\(dialectLabel) export does not support delay"
             )
         case .iswap:
             throw unsupported(
                 feature: "iswap",
-                message: "OpenQASM 2 / qelib1 export does not support iswap"
+                message: "\(dialectLabel) / qelib1 export does not support iswap"
             )
         case .ecr:
             throw unsupported(
                 feature: "ecr",
-                message: "OpenQASM 2 / qelib1 export does not support ecr"
+                message: "\(dialectLabel) / qelib1 export does not support ecr"
             )
         case .rxx:
             throw unsupported(
                 feature: "rxx",
-                message: "OpenQASM 2 / qelib1 export does not support rxx"
+                message: "\(dialectLabel) / qelib1 export does not support rxx"
             )
         case .ryy:
             throw unsupported(
                 feature: "ryy",
-                message: "OpenQASM 2 / qelib1 export does not support ryy"
+                message: "\(dialectLabel) / qelib1 export does not support ryy"
             )
         case .rzz:
             throw unsupported(
                 feature: "rzz",
-                message: "OpenQASM 2 / qelib1 export does not support rzz"
+                message: "\(dialectLabel) / qelib1 export does not support rzz"
             )
         case .dcx:
             throw unsupported(
                 feature: "dcx",
-                message: "OpenQASM 2 / qelib1 export does not support dcx"
+                message: "\(dialectLabel) / qelib1 export does not support dcx"
             )
         case .mcx:
             throw unsupported(
                 feature: "mcx",
-                message: "OpenQASM 2 / qelib1 export does not support mcx (use ccx when applicable)"
+                message: "\(dialectLabel) / qelib1 export does not support mcx (use ccx when applicable)"
             )
         case .mcz:
             throw unsupported(
                 feature: "mcz",
-                message: "OpenQASM 2 / qelib1 export does not support mcz"
+                message: "\(dialectLabel) / qelib1 export does not support mcz"
             )
         case .unitary1:
             throw unsupported(
                 feature: "unitary1",
-                message: "OpenQASM 2 export does not support unitary1"
+                message: "\(dialectLabel) export does not support unitary1"
             )
         case .initialize:
             throw unsupported(
                 feature: "initialize",
-                message: "OpenQASM 2 export does not support initialize"
+                message: "\(dialectLabel) export does not support initialize"
             )
         case .customUnitary:
             throw unsupported(
                 feature: "customUnitary",
-                message: "OpenQASM 2 export does not support customUnitary"
+                message: "\(dialectLabel) export does not support customUnitary"
             )
         }
     }
@@ -284,7 +348,7 @@ private struct ExportContext {
         return lines
     }
 
-    /// Whole-register measure when qubits cover the full `qreg` and map onto the full creg from bit 0.
+    /// Whole-register measure when qubits cover the full `q` and map onto the full creg from bit 0.
     private func isWholeRegisterMeasure(_ spec: MeasureSpec, cregWidth: Int) -> Bool {
         guard spec.classicalBitOffset == 0,
               spec.qubits.count == cregWidth,
@@ -302,6 +366,7 @@ private struct ExportContext {
     ) throws -> [String] {
         guard let conditioned else { return [statement] }
         let name = try classicalName(conditioned.register)
+        // Brace-less form: parser only supports `if (c==imm) <stmt>;` (no `{ ... }`).
         return ["if(\(name)==\(conditioned.value)) \(statement)"]
     }
 
@@ -348,12 +413,12 @@ private struct ExportContext {
         case .parameter(let parameter):
             throw unsupported(
                 feature: "parameter",
-                message: "Gate '\(gate)' angle is symbolic ('\(parameter.name)'); static OpenQASM 2 export requires literal angles"
+                message: "Gate '\(gate)' angle is symbolic ('\(parameter.name)'); static \(dialectLabel) export requires literal angles"
             )
         case .negated, .scaled:
             throw unsupported(
                 feature: "angle expression",
-                message: "Gate '\(gate)' angle is not a literal; static OpenQASM 2 export requires QFloatExpr.literal"
+                message: "Gate '\(gate)' angle is not a literal; static \(dialectLabel) export requires QFloatExpr.literal"
             )
         }
     }
