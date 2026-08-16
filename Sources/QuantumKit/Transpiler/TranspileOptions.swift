@@ -4,7 +4,13 @@ import Foundation
 ///
 /// Existing call sites that only pass a ``BasisGateSet`` keep the prior basis-only behavior.
 /// Set `couplingMap` to enable the device-aware pipeline:
-/// `validate → algebraic opt? → clifford/local? → fusion? → templates? → unroll → route(+layout) → basis → schedule?`.
+/// `validate → algebraic opt? → clifford/local? → fusion? → templates? → kak? → sk? → unroll → route(+layout) → basis → schedule?`.
+///
+/// ## Pipeline position (opt-in synthesis)
+/// ``enableKAKSynthesis`` / ``enableSolovayKitaev`` run **after** fusion / templates (when those
+/// are on) and **before** unroll / route / basis. KAK expands 2Q ``customUnitary`` into locals +
+/// ≤3 CX; SK then approximates remaining 1Q targets into Clifford+T letters; basis translation
+/// consumes both. Defaults are off — existing transpile results are unchanged.
 ///
 /// ## Optimization levels
 /// - `0`: validate + basis translate (legacy). With a coupling map, still routes (unroll → route → basis).
@@ -14,8 +20,8 @@ import Foundation
 ///   after basis translation). Measurably fewer gates/depth on Clifford / adjacent-rotation fixtures.
 ///
 /// Opt-in flags (default off): ``enableGateFusion``, ``enableTemplateMatching`` (A6 lite exact
-/// catalog — not Solovay–Kitaev / J1), ``enableKAKSynthesis`` (2Q Cartan / KAK),
-/// ``enableSolovayKitaev`` (1Q approximate Clifford+T).
+/// catalog), ``enableKAKSynthesis`` (2Q Cartan / KAK), ``enableSolovayKitaev`` (1Q approximate
+/// Clifford+T + ``solovayKitaevEpsilon``).
 public struct TranspileOptions: Sendable, Equatable {
     public var targetBasis: BasisGateSet
     public var couplingMap: CouplingMap?

@@ -157,4 +157,20 @@ extension ClosureCompilerPassFactory {
             IdentityCompilerPass()
         }
     }
+
+    /// Opt-in discovery factory for ``KAKSynthesisPass`` (`passID`).
+    /// Not auto-registered — call ``CompilerPassRegistry/register(_:)``.
+    public static var kakSynthesis: ClosureCompilerPassFactory {
+        ClosureCompilerPassFactory(id: KAKSynthesisPass.passID) {
+            KAKSynthesisPass()
+        }
+    }
+
+    /// Opt-in discovery factory for ``SolovayKitaevPass`` (`passID`) with default options.
+    /// Not auto-registered — call ``CompilerPassRegistry/register(_:)``.
+    public static var solovayKitaev: ClosureCompilerPassFactory {
+        ClosureCompilerPassFactory(id: SolovayKitaevPass.passID) {
+            SolovayKitaevPass()
+        }
+    }
 }

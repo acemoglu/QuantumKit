@@ -92,4 +92,25 @@ extension QuantumKitTests {
         XCTAssertEqual(result.gates, original.gates)
         XCTAssertEqual(result.qubitCount, 1)
     }
+
+    func testCompilerPassRegistryKAKAndSolovayKitaevFactories() throws {
+        let registry = CompilerPassRegistry()
+        XCTAssertTrue(registry.isEmpty)
+
+        try registry.register(ClosureCompilerPassFactory.kakSynthesis)
+        try registry.register(ClosureCompilerPassFactory.solovayKitaev)
+
+        XCTAssertEqual(
+            registry.registeredIDs,
+            [KAKSynthesisPass.passID, SolovayKitaevPass.passID].sorted()
+        )
+
+        let kak = try registry.makePass(id: KAKSynthesisPass.passID)
+        let sk = try registry.makePass(id: SolovayKitaevPass.passID)
+        XCTAssertTrue(kak is KAKSynthesisPass)
+        XCTAssertTrue(sk is SolovayKitaevPass)
+
+        // Fresh registries stay empty — helpers are not auto-registered.
+        XCTAssertTrue(CompilerPassRegistry().isEmpty)
+    }
 }

@@ -96,6 +96,7 @@ extension QuantumKitTests {
     func testKAKSynthesisDefaultOffInTranspileOptions() throws {
         let off = try TranspileOptions(targetBasis: .ibmEagle, optimizationLevel: 0).makePasses()
         XCTAssertFalse(off.contains { $0 is KAKSynthesisPass })
+        XCTAssertFalse(off.contains { $0 is SolovayKitaevPass })
 
         let on = try TranspileOptions(
             targetBasis: .ibmEagle,
@@ -104,6 +105,27 @@ extension QuantumKitTests {
         ).makePasses()
         XCTAssertTrue(on.contains { $0 is KAKSynthesisPass })
         XCTAssertEqual(KAKSynthesisPass.passID, "quantumkit.kak_synthesis")
+
+        let both = try TranspileOptions(
+            targetBasis: .ibmEagle,
+            optimizationLevel: 0,
+            enableKAKSynthesis: true,
+            enableSolovayKitaev: true
+        ).makePasses()
+        let kakIdx = both.firstIndex { $0 is KAKSynthesisPass }
+        let skIdx = both.firstIndex { $0 is SolovayKitaevPass }
+        let unrollIdx = both.firstIndex { $0 is UnrollMultiQubitPass }
+        let basisIdx = both.firstIndex { $0 is BasisTranslatorPass }
+        XCTAssertNotNil(kakIdx)
+        XCTAssertNotNil(skIdx)
+        XCTAssertNotNil(basisIdx)
+        XCTAssertLessThan(kakIdx!, skIdx!)
+        if let unrollIdx {
+            XCTAssertLessThan(skIdx!, unrollIdx)
+            XCTAssertLessThan(unrollIdx, basisIdx!)
+        } else {
+            XCTAssertLessThan(skIdx!, basisIdx!)
+        }
     }
 
     func testKAKSynthesisDefaultTranspileBitIdentical() throws {
@@ -132,5 +154,45 @@ extension QuantumKitTests {
             )
         )
         XCTAssertEqual(a.gates, withKAK.gates)
+    }
+
+    func testKAKSynthesisFlagOnRewritesTinyCustomUnitaryFixture() throws {
+        // CX as 2Q customUnitary — without KAK, ibmEagle basis rejects it.
+        let cx: [ComplexAmplitude] = [
+            ComplexAmplitude(real: 1, imaginary: 0), ComplexAmplitude(real: 0, imaginary: 0),
+            ComplexAmplitude(real: 0, imaginary: 0), ComplexAmplitude(real: 0, imaginary: 0),
+            ComplexAmplitude(real: 0, imaginary: 0), ComplexAmplitude(real: 1, imaginary: 0),
+            ComplexAmplitude(real: 0, imaginary: 0), ComplexAmplitude(real: 0, imaginary: 0),
+            ComplexAmplitude(real: 0, imaginary: 0), ComplexAmplitude(real: 0, imaginary: 0),
+            ComplexAmplitude(real: 0, imaginary: 0), ComplexAmplitude(real: 1, imaginary: 0),
+            ComplexAmplitude(real: 0, imaginary: 0), ComplexAmplitude(real: 0, imaginary: 0),
+            ComplexAmplitude(real: 1, imaginary: 0), ComplexAmplitude(real: 0, imaginary: 0),
+        ]
+        var circuit = try QuantumCircuit(qubitCount: 2)
+        try circuit.customUnitary(matrix: cx, qubits: [0, 1])
+
+        XCTAssertThrowsError(
+            try Transpiler.transpile(
+                circuit,
+                options: TranspileOptions(targetBasis: .ibmEagle, optimizationLevel: 0)
+            )
+        )
+
+        let withKAK = try Transpiler.transpile(
+            circuit,
+            options: TranspileOptions(
+                targetBasis: .ibmEagle,
+                optimizationLevel: 0,
+                enableKAKSynthesis: true
+            )
+        )
+        XCTAssertFalse(
+            withKAK.gates.contains { if case .customUnitary = $0 { return true }; return false },
+            "flags on: KAK must expand 2Q customUnitary before basis"
+        )
+        XCTAssertTrue(
+            withKAK.gates.contains { if case .cx = $0 { return true }; return false },
+            "expected at least one CX after KAK + basis"
+        )
     }
 }

@@ -4,7 +4,11 @@ import Foundation
 /// via ``CartanKAK``.
 ///
 /// **Opt-in only** — not part of the default transpiler pipeline. Enable via
-/// ``TranspileOptions/enableKAKSynthesis`` or run explicitly through ``PassManager``.
+/// ``TranspileOptions/enableKAKSynthesis``, register ``ClosureCompilerPassFactory/kakSynthesis``
+/// on a ``CompilerPassRegistry``, or run explicitly through ``PassManager``.
+///
+/// Pipeline slot (when enabled via ``TranspileOptions``): after fusion / templates, **before**
+/// unroll / route / basis (see ``TranspileOptions``).
 ///
 /// ## Rewrite rules
 /// - **2Q** ``customUnitary`` (16 amplitudes, distinct qubit pair): replace with
@@ -16,7 +20,7 @@ import Foundation
 /// Does **not** implement Solovay–Kitaev, change Metal kernels, or alter default
 /// optimization levels.
 public struct KAKSynthesisPass: CompilerPass, Sendable {
-    /// Optional discovery id for ``CompilerPassRegistry`` (not auto-registered).
+    /// Discovery id for ``ClosureCompilerPassFactory/kakSynthesis`` (not auto-registered).
     public static let passID = "quantumkit.kak_synthesis"
 
     private let absoluteTolerance: Double

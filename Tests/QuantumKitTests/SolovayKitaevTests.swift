@@ -138,6 +138,7 @@ extension QuantumKitTests {
 
         let off = try TranspileOptions(targetBasis: .ibmEagle, optimizationLevel: 0).makePasses()
         XCTAssertFalse(off.contains { $0 is SolovayKitaevPass })
+        XCTAssertFalse(off.contains { $0 is KAKSynthesisPass })
 
         let on = try TranspileOptions(
             targetBasis: .ibmEagle,
@@ -147,6 +148,9 @@ extension QuantumKitTests {
         ).makePasses()
         XCTAssertTrue(on.contains { $0 is SolovayKitaevPass })
         XCTAssertEqual(SolovayKitaevPass.passID, "quantumkit.solovay_kitaev")
+        let skIdx = on.firstIndex { $0 is SolovayKitaevPass }!
+        let basisIdx = on.firstIndex { $0 is BasisTranslatorPass }!
+        XCTAssertLessThan(skIdx, basisIdx, "SK must run before basis")
 
         let defaultOpts = TranspileOptions(targetBasis: .ibmEagle, optimizationLevel: 0)
         let explicitOff = TranspileOptions(
@@ -157,6 +161,49 @@ extension QuantumKitTests {
         let a = try Transpiler.transpile(other, options: defaultOpts)
         let b = try Transpiler.transpile(other, options: explicitOff)
         XCTAssertEqual(a.gates, b.gates)
+    }
+
+    func testSolovayKitaevFlagOnRewritesTinyUnitary1Fixture() throws {
+        // Exact H — discrete net hits it; without SK, ibmEagle basis rejects unitary1.
+        let invSqrt2 = 1 / sqrt(2.0)
+        let hadamard: [ComplexAmplitude] = [
+            ComplexAmplitude(real: QFloat(invSqrt2), imaginary: 0),
+            ComplexAmplitude(real: QFloat(invSqrt2), imaginary: 0),
+            ComplexAmplitude(real: QFloat(invSqrt2), imaginary: 0),
+            ComplexAmplitude(real: QFloat(-invSqrt2), imaginary: 0),
+        ]
+        var circuit = try QuantumCircuit(qubitCount: 1)
+        try circuit.apply(.unitary1(matrix: hadamard, target: 0))
+
+        XCTAssertThrowsError(
+            try Transpiler.transpile(
+                circuit,
+                options: TranspileOptions(targetBasis: .ibmEagle, optimizationLevel: 0)
+            )
+        )
+
+        let withSK = try Transpiler.transpile(
+            circuit,
+            options: TranspileOptions(
+                targetBasis: .ibmEagle,
+                optimizationLevel: 0,
+                enableSolovayKitaev: true,
+                solovayKitaevEpsilon: 0.1,
+                solovayKitaevMaxRefinementIterations: 4
+            )
+        )
+        XCTAssertFalse(
+            withSK.gates.contains { if case .unitary1 = $0 { return true }; return false },
+            "flags on: SK must rewrite unitary1 before basis"
+        )
+        XCTAssertFalse(withSK.gates.isEmpty)
+        // After SK + ibmEagle basis, only native letters remain.
+        for gate in withSK.gates {
+            XCTAssertTrue(
+                BasisGateSet.ibmEagle.contains(gate),
+                "unexpected non-basis gate \(gate)"
+            )
+        }
     }
 
     func testSolovayKitaevFailsClearlyWhenDepthTooSmall() throws {

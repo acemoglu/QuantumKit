@@ -3,8 +3,12 @@ import Foundation
 /// Opt-in 1Q Solovay–Kitaev rewrite over ``Discrete1QNet`` + iterative ``SolovayKitaev``.
 ///
 /// **Opt-in only** — not part of the default transpiler pipeline. Enable via
-/// ``TranspileOptions/enableSolovayKitaev`` (and related options) or run explicitly
-/// through ``PassManager``.
+/// ``TranspileOptions/enableSolovayKitaev`` (and related options), register
+/// ``ClosureCompilerPassFactory/solovayKitaev`` on a ``CompilerPassRegistry``, or run
+/// explicitly through ``PassManager``.
+///
+/// Pipeline slot (when enabled via ``TranspileOptions``): after KAK (if on), **before**
+/// unroll / route / basis (see ``TranspileOptions``).
 ///
 /// ## Distance
 /// Approximations are accepted when
@@ -23,7 +27,7 @@ import Foundation
 /// appear as net words). Throws ``SolovayKitaevError`` if `epsilon` cannot be met within
 /// ``Options/maxRefinementIterations`` refinement iterations.
 public struct SolovayKitaevPass: CompilerPass, Sendable {
-    /// Optional discovery id for ``CompilerPassRegistry`` (not auto-registered).
+    /// Discovery id for ``ClosureCompilerPassFactory/solovayKitaev`` (not auto-registered).
     public static let passID = "quantumkit.solovay_kitaev"
 
     /// Configuration for ``SolovayKitaevPass``.
