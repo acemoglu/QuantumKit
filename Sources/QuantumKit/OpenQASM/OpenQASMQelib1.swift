@@ -18,6 +18,10 @@ public enum OpenQASMQelib1: Sendable {
     /// Canonical include path recognized as the builtin standard library.
     public static let includeFileName = "qelib1.inc"
 
+    /// OpenQASM 3 standard-library include name; resolved in-memory to the same
+    /// embedded ``source`` / catalog as ``includeFileName`` (sandbox-safe alias).
+    public static let stdgatesIncludeFileName = "stdgates.inc"
+
     /// Gate names that map directly to ``Gate`` (parameter-free and parametric).
     ///
     /// These take precedence over embedded qelib1 expansions when both exist.
@@ -39,12 +43,15 @@ public enum OpenQASMQelib1: Sendable {
         "rxx", "rzz",
     ]
 
-    /// Returns `true` when `path` refers to the builtin qelib1 include (basename match).
+    /// Returns `true` when `path` refers to the builtin qelib1 / stdgates include (basename match).
+    ///
+    /// `include "stdgates.inc"` is an alias for the embedded ``source`` catalog (same as qelib1).
     public static func isBuiltinInclude(_ path: String) -> Bool {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed == includeFileName { return true }
-        // Allow path-style includes that end with the standard filename.
+        if trimmed == includeFileName || trimmed == stdgatesIncludeFileName { return true }
+        // Allow path-style includes that end with a recognized standard filename.
         if trimmed.hasSuffix("/" + includeFileName) { return true }
+        if trimmed.hasSuffix("/" + stdgatesIncludeFileName) { return true }
         return false
     }
 

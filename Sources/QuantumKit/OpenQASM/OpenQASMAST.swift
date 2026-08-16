@@ -49,11 +49,16 @@ public indirect enum OpenQASMStatement: Equatable, Sendable {
         qubits: [String],
         location: SourceLocation
     )
-    /// Gate / unitary application, e.g. `h q[0];` or `u3(pi/2,0,pi) q[0];`
+    /// Gate / unitary application, e.g. `h q[0];`, `u3(pi/2,0,pi) q[0];`,
+    /// or `ctrl @ x q[0], q[1];`.
+    ///
+    /// `modifiers` are written left-to-right (outermost first), matching OpenQASM 3
+    /// `ctrl @ inv @ g …` source order.
     case gateCall(
         name: String,
         params: [OpenQASMExpr],
         qubits: [OpenQASMArgument],
+        modifiers: [OpenQASMGateModifier],
         location: SourceLocation
     )
     /// `measure qubits -> classical;`
@@ -83,6 +88,18 @@ public indirect enum OpenQASMStatement: Equatable, Sendable {
 }
 
 // MARK: - Arguments / conditions / expressions
+
+/// OpenQASM 3 gate modifiers (`ctrl @`, `inv @`, `pow(n) @`, …).
+public enum OpenQASMGateModifier: Equatable, Sendable {
+    /// `ctrl @` — one extra control qubit (prefix in the qubit argument list).
+    case ctrl
+    /// `negctrl @` — recognized; lowering may reject until supported.
+    case negctrl
+    /// `inv @` — adjoint / inverse.
+    case inv
+    /// `pow(expr) @` — integer power of a unitary (expr evaluated at lower time).
+    case pow(OpenQASMExpr)
+}
 
 /// A register reference with optional integer index (`q` or `q[0]`).
 public struct OpenQASMArgument: Equatable, Sendable, Hashable {

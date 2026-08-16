@@ -41,14 +41,14 @@ extension QuantumKitTests {
         XCTAssertEqual(cName, "c")
         XCTAssertEqual(cSize, 2)
 
-        guard case .gateCall(let hName, let hParams, let hQubits, _) = program.statements[4] else {
+        guard case .gateCall(let hName, let hParams, let hQubits, _, _) = program.statements[4] else {
             return XCTFail("Expected h gate call")
         }
         XCTAssertEqual(hName, "h")
         XCTAssertTrue(hParams.isEmpty)
         XCTAssertEqual(hQubits, [OpenQASMArgument(name: "q", index: 0)])
 
-        guard case .gateCall(let cxName, _, let cxQubits, _) = program.statements[5] else {
+        guard case .gateCall(let cxName, _, let cxQubits, _, _) = program.statements[5] else {
             return XCTFail("Expected cx gate call")
         }
         XCTAssertEqual(cxName, "cx")
@@ -112,7 +112,7 @@ extension QuantumKitTests {
         }
         XCTAssertEqual(cond, .equals(register: "c", value: 1))
         XCTAssertEqual(body.count, 1)
-        guard case .gateCall(let name, _, let qubits, _) = body[0] else {
+        guard case .gateCall(let name, _, let qubits, _, _) = body[0] else {
             return XCTFail("Expected gate call body")
         }
         XCTAssertEqual(name, "x")
@@ -137,12 +137,12 @@ extension QuantumKitTests {
         }
         XCTAssertEqual(cond, .equals(register: "c", value: 1))
         XCTAssertEqual(body.count, 2)
-        guard case .gateCall(let hName, _, let hQubits, _) = body[0] else {
+        guard case .gateCall(let hName, _, let hQubits, _, _) = body[0] else {
             return XCTFail("Expected h in braced if body")
         }
         XCTAssertEqual(hName, "h")
         XCTAssertEqual(hQubits, [OpenQASMArgument(name: "q", index: 0)])
-        guard case .gateCall(let cxName, _, let cxQubits, _) = body[1] else {
+        guard case .gateCall(let cxName, _, let cxQubits, _, _) = body[1] else {
             return XCTFail("Expected cx in braced if body")
         }
         XCTAssertEqual(cxName, "cx")
@@ -171,7 +171,7 @@ extension QuantumKitTests {
         XCTAssertEqual(params, ["a"])
         XCTAssertEqual(qubits, ["q"])
         XCTAssertEqual(body.count, 1)
-        guard case .gateCall(let callName, _, let callQubits, _) = body[0] else {
+        guard case .gateCall(let callName, _, let callQubits, _, _) = body[0] else {
             return XCTFail("Expected h in gate body")
         }
         XCTAssertEqual(callName, "h")
@@ -185,7 +185,7 @@ extension QuantumKitTests {
         var parser = try OpenQASMParser(source: source)
         let program = try parser.parse()
 
-        guard case .gateCall(let name, let params, let qubits, _) = program.statements.first else {
+        guard case .gateCall(let name, let params, let qubits, _, _) = program.statements.first else {
             return XCTFail("Expected u3 gate call")
         }
         XCTAssertEqual(name, "u3")

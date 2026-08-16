@@ -135,7 +135,7 @@ public enum OpenQASMUnsupported {
     public static let parserRejectedKeywords: [OpenQASMUnsupportedFeature] = [
         .defcal, .cal, .extern, .delay, .box, .def, .switch, .for,
         .input, .output, .let, .const, .array, .duration, .stretch, .gphase,
-        .ctrl, .negctrl, .inv, .pow, .else, .break, .continue, .return, .end,
+        .negctrl, .else, .break, .continue, .return, .end,
         .angle, .complex, .bool, .int, .uint, .float,
         .durationof, .sizeof, .lengthof,
     ]

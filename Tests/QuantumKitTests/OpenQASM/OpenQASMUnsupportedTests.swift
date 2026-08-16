@@ -66,37 +66,35 @@ extension QuantumKitTests {
         )
     }
 
-    func testOpenQASMUnsupportedCtrlModifier() {
-        assertUnsupportedKeyword(
-            source: """
-            OPENQASM 3.0;
-            qubit[2] q;
-            ctrl @ x q[0], q[1];
-            """,
-            feature: "ctrl"
-        )
+    func testOpenQASMUnsupportedCtrlModifierRemovedFromHardReject() throws {
+        // Basic ctrl@ is supported; see OpenQASM3PolishTests.
+        let source = """
+        OPENQASM 3.0;
+        qubit[2] q;
+        ctrl @ x q[0], q[1];
+        """
+        let circuit = try OpenQASM.importCircuit(source)
+        XCTAssertEqual(circuit.gates, [.cx(control: 0, target: 1)])
     }
 
-    func testOpenQASMUnsupportedInvModifier() {
-        assertUnsupportedKeyword(
-            source: """
-            OPENQASM 3.0;
-            qubit q;
-            inv @ x q;
-            """,
-            feature: "inv"
-        )
+    func testOpenQASMUnsupportedInvModifierRemovedFromHardReject() throws {
+        let source = """
+        OPENQASM 3.0;
+        qubit q;
+        inv @ x q;
+        """
+        let circuit = try OpenQASM.importCircuit(source)
+        XCTAssertEqual(circuit.gates, [.x(target: 0)])
     }
 
-    func testOpenQASMUnsupportedPowModifier() {
-        assertUnsupportedKeyword(
-            source: """
-            OPENQASM 3.0;
-            qubit q;
-            pow(2) @ x q;
-            """,
-            feature: "pow"
-        )
+    func testOpenQASMUnsupportedPowModifierRemovedFromHardReject() throws {
+        let source = """
+        OPENQASM 3.0;
+        qubit q;
+        pow(2) @ x q;
+        """
+        let circuit = try OpenQASM.importCircuit(source)
+        XCTAssertEqual(circuit.gates, [.x(target: 0), .x(target: 0)])
     }
 
     func testOpenQASMUnsupportedAtModifierToken() {

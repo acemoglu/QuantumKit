@@ -1,9 +1,9 @@
 /// Recursive-descent OpenQASM parser producing `OpenQASMProgram` ASTs.
 ///
 /// Targets OpenQASM 2-style circuits first (qreg/creg, gates, measure, if) plus
-/// an OpenQASM 3 core subset (`qubit`/`bit`, `while`).
+/// an OpenQASM 3 core subset (`qubit`/`bit`, `while`, `ctrl@`/`inv@`/`pow(n)@`).
 /// Recognized but unsupported constructs (`defcal`, `cal`, `for`, `switch`,
-/// `box`, `ctrl`/`inv`/`pow`, pulse/timing keywords, …) throw
+/// `box`, `negctrl`, pulse/timing keywords, …) throw
 /// `OpenQASMError.unsupported` with a source location — see
 /// ``OpenQASMUnsupportedFeature``.
 public struct OpenQASMParser: Sendable {
@@ -75,13 +75,12 @@ public struct OpenQASMParser: Sendable {
             return try parseIf()
         case .keywordWhile:
             return try parseWhile()
-        case .identifier:
+        case .identifier, .keywordCtrl, .keywordNegctrl, .keywordInv, .keywordPow:
             return try parseGateCall()
         case .keywordDefcal, .keywordCal, .keywordDelay, .keywordBox,
              .keywordExtern, .keywordDef, .keywordSwitch, .keywordFor,
              .keywordInput, .keywordOutput, .keywordLet, .keywordConst,
              .keywordArray, .keywordDuration, .keywordStretch, .keywordGphase,
-             .keywordCtrl, .keywordNegctrl, .keywordInv, .keywordPow,
              .keywordElse, .keywordBreak, .keywordContinue, .keywordReturn, .keywordEnd,
              .keywordAngle, .keywordComplex, .keywordBool, .keywordInt, .keywordUint,
              .keywordFloat, .keywordDurationof, .keywordSizeof, .keywordLengthof:
@@ -95,7 +94,7 @@ public struct OpenQASMParser: Sendable {
         case .at:
             throw OpenQASMUnsupportedFeature.atModifier.error(
                 at: token.location,
-                message: "@ gate modifiers (ctrl@ / inv@ / pow) are not supported"
+                message: "Bare '@' is not a statement; use ctrl@ / inv@ / pow(n)@ gate modifiers"
             )
         case .eof:
             throw parseError(token, "Unexpected end of input")
@@ -112,7 +111,7 @@ public struct OpenQASMParser: Sendable {
             return try parseBarrier()
         case .keywordReset:
             return try parseReset()
-        case .identifier:
+        case .identifier, .keywordCtrl, .keywordNegctrl, .keywordInv, .keywordPow:
             return try parseGateCall()
         case .semicolon:
             let loc = peek().location
@@ -288,6 +287,33 @@ public struct OpenQASMParser: Sendable {
     // MARK: - Executable statements
 
     private mutating func parseGateCall() throws -> OpenQASMStatement {
+        var modifiers: [OpenQASMGateModifier] = []
+        modifierLoop: while true {
+            switch peek().kind {
+            case .keywordCtrl:
+                advance()
+                try expect(.at, message: "Expected '@' after ctrl")
+                modifiers.append(.ctrl)
+            case .keywordNegctrl:
+                advance()
+                try expect(.at, message: "Expected '@' after negctrl")
+                modifiers.append(.negctrl)
+            case .keywordInv:
+                advance()
+                try expect(.at, message: "Expected '@' after inv")
+                modifiers.append(.inv)
+            case .keywordPow:
+                advance()
+                try expect(.leftParen, message: "Expected '(' after pow")
+                let exp = try parseExpression()
+                try expect(.rightParen, message: "Expected ')' after pow exponent")
+                try expect(.at, message: "Expected '@' after pow(...)")
+                modifiers.append(.pow(exp))
+            default:
+                break modifierLoop
+            }
+        }
+
         let nameTok = try expectIdentifier(message: "Expected gate name")
         var params: [OpenQASMExpr] = []
         if match(.leftParen) {
@@ -310,6 +336,7 @@ public struct OpenQASMParser: Sendable {
             name: nameTok.lexeme,
             params: params,
             qubits: qubits,
+            modifiers: modifiers,
             location: nameTok.location
         )
     }

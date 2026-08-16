@@ -106,9 +106,11 @@ public struct OpenQASM2Importer: Sendable {
 ///
 /// ## Coverage
 /// `OPENQASM 3` / `3.0`, `qubit` / `bit` (size omitted → 1), plus compatibility
-/// `qreg` / `creg`. Optional qelib1-style `include` only; gate calls reuse the
-/// same map as OpenQASM 2. `measure` / `reset` / `barrier` / `if` → ``Gate`` /
-/// ``Gate/c_if``. User `gate` expand is shared with the v2 path.
+/// `qreg` / `creg`. Optional `include "qelib1.inc"` or alias `include "stdgates.inc"`
+/// (same embedded catalog). Gate calls reuse the same map as OpenQASM 2, with
+/// whole-register broadcast and basic `ctrl@` / `inv@` / `pow(n)@` modifiers.
+/// `measure` / `reset` / `barrier` / `if` → ``Gate`` / ``Gate/c_if``. User `gate`
+/// expand is shared with the v2 path.
 ///
 /// ## Bounded while
 /// `while (creg == imm) { … }` lowers to ``Gate/while_c`` **only** when a positive
@@ -523,8 +525,8 @@ private final class LoweringContext {
             // Already rejected in collectDeclarations.
             return
 
-        case .gateCall(let name, let params, let qubits, let location):
-            try applyGateCall(name: name, params: params, qubits: qubits, location: location, to: &circuit)
+        case .gateCall(let name, let params, let qubits, let modifiers, let location):
+            try applyGateCall(name: name, params: params, qubits: qubits, modifiers: modifiers, location: location, to: &circuit)
 
         case .measure(let qubits, let classical, let location):
             try applyMeasure(qubits: qubits, classical: classical, location: location, to: &circuit)
@@ -682,11 +684,12 @@ private final class LoweringContext {
         wrappingLocation: SourceLocation
     ) throws -> [Gate] {
         switch statement {
-        case .gateCall(let name, let params, let qubits, let location):
+        case .gateCall(let name, let params, let qubits, let modifiers, let location):
             return try lowerGateCallToGates(
                 name: name,
                 params: params,
                 qubits: qubits,
+                modifiers: modifiers,
                 location: location
             )
 
@@ -741,6 +744,7 @@ private final class LoweringContext {
         name: String,
         params: [OpenQASMExpr],
         qubits: [OpenQASMArgument],
+        modifiers: [OpenQASMGateModifier],
         location: SourceLocation,
         to circuit: inout QuantumCircuit
     ) throws {
@@ -752,6 +756,7 @@ private final class LoweringContext {
             name: name,
             params: params,
             qubits: qubits,
+            modifiers: modifiers,
             location: location
         )
         for gate in gates {
@@ -769,9 +774,119 @@ private final class LoweringContext {
     /// 2. Else expand a registered user / embedded-qelib1 `gate` body.
     /// 3. Else unknown → semantic error.
     ///
+    /// Whole-register arguments broadcast pairwise across equal-width registers.
+    /// OpenQASM 3 modifiers (`ctrl` / `inv` / `pow`) apply after bare lowering
+    /// (right-to-left / innermost first).
+    ///
     /// Embedded qelib1 still registers definitions for mapped names so include is
     /// complete; those bodies are unused while the fast-path remains.
     private func lowerGateCallToGates(
+        name: String,
+        params: [OpenQASMExpr],
+        qubits: [OpenQASMArgument],
+        modifiers: [OpenQASMGateModifier] = [],
+        location: SourceLocation
+    ) throws -> [Gate] {
+        let broadcastCalls = try expandRegisterBroadcast(qubits: qubits, location: location)
+        var result: [Gate] = []
+        for indexedQubits in broadcastCalls {
+            result.append(contentsOf: try lowerOneModifiedGateCall(
+                name: name,
+                params: params,
+                qubits: indexedQubits,
+                modifiers: modifiers,
+                location: location
+            ))
+        }
+        return result
+    }
+
+    /// Lowers a single fully-indexed call, applying modifiers right-to-left.
+    private func lowerOneModifiedGateCall(
+        name: String,
+        params: [OpenQASMExpr],
+        qubits: [OpenQASMArgument],
+        modifiers: [OpenQASMGateModifier],
+        location: SourceLocation
+    ) throws -> [Gate] {
+        if modifiers.contains(where: { if case .negctrl = $0 { return true }; return false }) {
+            throw OpenQASMUnsupportedFeature.negctrl.error(
+                at: location,
+                message: "negctrl@ is not supported; use ctrl@ with an explicit X on the control if needed"
+            )
+        }
+
+        let ctrlCount = modifiers.reduce(0) { partial, mod in
+            if case .ctrl = mod { return partial + 1 }
+            return partial
+        }
+
+        let bareQubits: [OpenQASMArgument]
+        var controlGlobals: [Int] = []
+        if ctrlCount > 0 {
+            guard qubits.count > ctrlCount else {
+                throw OpenQASMError.semanticError(
+                    line: location.line,
+                    column: location.column,
+                    message: "ctrl@ requires \(ctrlCount) control qubit(s) plus target arity; got \(qubits.count) total arguments"
+                )
+            }
+            let controlArgs = Array(qubits.prefix(ctrlCount))
+            bareQubits = Array(qubits.suffix(qubits.count - ctrlCount))
+            controlGlobals = try controlArgs.map { arg in
+                let inds = try resolveQubitIndices(arg, location: location)
+                guard inds.count == 1 else {
+                    throw OpenQASMError.semanticError(
+                        line: location.line,
+                        column: location.column,
+                        message: "ctrl@ control must be a single qubit"
+                    )
+                }
+                return inds[0]
+            }
+        } else {
+            bareQubits = qubits
+        }
+
+        var gates = try lowerBareGateCallToGates(
+            name: name,
+            params: params,
+            qubits: bareQubits,
+            location: location
+        )
+
+        var controls = controlGlobals
+        for mod in modifiers.reversed() {
+            switch mod {
+            case .inv:
+                gates = try applyInvModifier(gates, location: location)
+            case .pow(let expr):
+                gates = try applyPowModifier(gates, exponent: expr, location: location)
+            case .ctrl:
+                guard let control = controls.popLast() else {
+                    throw OpenQASMError.semanticError(
+                        line: location.line,
+                        column: location.column,
+                        message: "ctrl@ control qubit missing"
+                    )
+                }
+                gates = try applyCtrlModifier(gates, control: control, location: location)
+            case .negctrl:
+                throw OpenQASMUnsupportedFeature.negctrl.error(at: location)
+            }
+        }
+        guard controls.isEmpty else {
+            throw OpenQASMError.semanticError(
+                line: location.line,
+                column: location.column,
+                message: "Unused ctrl@ control qubits"
+            )
+        }
+        return gates
+    }
+
+    /// Lowers one fully-indexed gate call without modifiers.
+    private func lowerBareGateCallToGates(
         name: String,
         params: [OpenQASMExpr],
         qubits: [OpenQASMArgument],
@@ -800,7 +915,206 @@ private final class LoweringContext {
         )
     }
 
-    /// Inlines a user-defined gate: bind numeric params and formal qubits, then
+    /// Pairwise expands whole-register qubit arguments into fully indexed calls.
+    private func expandRegisterBroadcast(
+        qubits: [OpenQASMArgument],
+        location: SourceLocation
+    ) throws -> [[OpenQASMArgument]] {
+        let resolved = try qubits.map { try resolveQubitIndices($0, location: location) }
+        guard let first = resolved.first else {
+            throw OpenQASMError.semanticError(
+                line: location.line,
+                column: location.column,
+                message: "Gate call requires at least one qubit argument"
+            )
+        }
+        let width = first.count
+        for (i, indices) in resolved.enumerated() where indices.count != width {
+            throw OpenQASMError.semanticError(
+                line: location.line,
+                column: location.column,
+                message: "Register broadcast width mismatch: argument \(i) has \(indices.count) wires, expected \(width)"
+            )
+        }
+
+        var calls: [[OpenQASMArgument]] = []
+        for lane in 0..<width {
+            let globals = resolved.map { $0[lane] }
+            calls.append(try indexedArguments(fromGlobal: globals, template: qubits, location: location))
+        }
+        return calls
+    }
+
+    private func indexedArguments(
+        fromGlobal globals: [Int],
+        template: [OpenQASMArgument],
+        location: SourceLocation
+    ) throws -> [OpenQASMArgument] {
+        guard globals.count == template.count else {
+            throw OpenQASMError.semanticError(
+                line: location.line,
+                column: location.column,
+                message: "Internal broadcast arity mismatch"
+            )
+        }
+        var result: [OpenQASMArgument] = []
+        for (arg, global) in zip(template, globals) {
+            guard let binding = qubitRegs[arg.name] else {
+                throw OpenQASMError.semanticError(
+                    line: location.line,
+                    column: location.column,
+                    message: "Undeclared qubit register '\(arg.name)'"
+                )
+            }
+            let local = global - binding.base
+            guard local >= 0, local < binding.size else {
+                throw OpenQASMError.semanticError(
+                    line: location.line,
+                    column: location.column,
+                    message: "Broadcast index out of range for '\(arg.name)'"
+                )
+            }
+            result.append(OpenQASMArgument(name: arg.name, index: local))
+        }
+        return result
+    }
+
+    private func applyInvModifier(_ gates: [Gate], location: SourceLocation) throws -> [Gate] {
+        for gate in gates {
+            switch gate {
+            case .measure, .reset, .initialize, .while_c:
+                throw OpenQASMUnsupportedFeature.inv.error(
+                    at: location,
+                    message: "inv@ cannot be applied to non-unitary op \(gate)"
+                )
+            default:
+                break
+            }
+        }
+        return gates.map(\.adjoint)
+    }
+
+    private func applyPowModifier(
+        _ gates: [Gate],
+        exponent: OpenQASMExpr,
+        location: SourceLocation
+    ) throws -> [Gate] {
+        let value = try evaluateNumeric(exponent, location: location)
+        let n = Int(value.rounded())
+        guard abs(value - Double(n)) < 1e-9, n >= 0 else {
+            throw OpenQASMUnsupportedFeature.pow.error(
+                at: location,
+                message: "pow@ only supports non-negative integer exponents; got \(value)"
+            )
+        }
+        if n == 0 { return [] }
+
+        if gates.count == 1, let g = gates.first, n > 1 {
+            switch g {
+            case .rx(let theta, let target):
+                return [.rx(theta: scaleAngle(theta, by: n), target: target)]
+            case .ry(let theta, let target):
+                return [.ry(theta: scaleAngle(theta, by: n), target: target)]
+            case .rz(let theta, let target):
+                return [.rz(theta: scaleAngle(theta, by: n), target: target)]
+            case .p(let theta, let target):
+                return [.p(theta: scaleAngle(theta, by: n), target: target)]
+            case .crx(let theta, let control, let target):
+                return [.crx(theta: scaleAngle(theta, by: n), control: control, target: target)]
+            case .cry(let theta, let control, let target):
+                return [.cry(theta: scaleAngle(theta, by: n), control: control, target: target)]
+            case .crz(let theta, let control, let target):
+                return [.crz(theta: scaleAngle(theta, by: n), control: control, target: target)]
+            case .cp(let theta, let control, let target):
+                return [.cp(theta: scaleAngle(theta, by: n), control: control, target: target)]
+            default:
+                break
+            }
+        }
+
+        var out: [Gate] = []
+        out.reserveCapacity(gates.count * n)
+        for _ in 0..<n {
+            out.append(contentsOf: gates)
+        }
+        return out
+    }
+
+    private func scaleAngle(_ theta: QFloatExpr, by n: Int) -> QFloatExpr {
+        .scaled(theta, QFloat(n))
+    }
+
+    private func applyCtrlModifier(
+        _ gates: [Gate],
+        control: Int,
+        location: SourceLocation
+    ) throws -> [Gate] {
+        guard gates.count == 1, let gate = gates.first else {
+            throw OpenQASMUnsupportedFeature.ctrl.error(
+                at: location,
+                message: "ctrl@ requires a single-gate base (not a multi-gate expansion)"
+            )
+        }
+        switch gate {
+        case .x(let target):
+            return [.cx(control: control, target: target)]
+        case .y(let target):
+            return [
+                .sdg(target: target),
+                .cx(control: control, target: target),
+                .s(target: target),
+            ]
+        case .z(let target):
+            return [.cz(control: control, target: target)]
+        case .h(let target):
+            return [
+                .s(target: target),
+                .h(target: target),
+                .t(target: target),
+                .cx(control: control, target: target),
+                .tdg(target: target),
+                .h(target: target),
+                .sdg(target: target),
+            ]
+        case .s(let target):
+            return [.cp(theta: QFloatExpr.literal(QFloat(Double.pi / 2)), control: control, target: target)]
+        case .sdg(let target):
+            return [.cp(theta: QFloatExpr.literal(QFloat(-Double.pi / 2)), control: control, target: target)]
+        case .t(let target):
+            return [.cp(theta: QFloatExpr.literal(QFloat(Double.pi / 4)), control: control, target: target)]
+        case .tdg(let target):
+            return [.cp(theta: QFloatExpr.literal(QFloat(-Double.pi / 4)), control: control, target: target)]
+        case .id:
+            return [gate]
+        case .rx(let theta, let target):
+            return [.crx(theta: theta, control: control, target: target)]
+        case .ry(let theta, let target):
+            return [.cry(theta: theta, control: control, target: target)]
+        case .rz(let theta, let target):
+            return [.crz(theta: theta, control: control, target: target)]
+        case .p(let theta, let target):
+            return [.cp(theta: theta, control: control, target: target)]
+        case .cx(let existingControl, let target):
+            return [.ccx(control1: control, control2: existingControl, target: target)]
+        case .ccx(let c1, let c2, let target):
+            return [.mcx(controls: [control, c1, c2], target: target)]
+        case .mcx(let controls, let target):
+            return [.mcx(controls: [control] + controls, target: target)]
+        case .cz(let existingControl, let target):
+            return [.mcz(controls: [control, existingControl], target: target)]
+        case .mcz(let controls, let target):
+            return [.mcz(controls: [control] + controls, target: target)]
+        case .swap(let q1, let q2):
+            return [.cswap(control: control, q1: q1, q2: q2)]
+        default:
+            throw OpenQASMUnsupportedFeature.ctrl.error(
+                at: location,
+                message: "ctrl@ is not supported on this base gate"
+            )
+        }
+    }
+
+        /// Inlines a user-defined gate: bind numeric params and formal qubits, then
     /// recursively expand the body (wrapping under `if` yields one gate per body gate).
     private func expandUserGate(
         name: String,
@@ -881,11 +1195,12 @@ private final class LoweringContext {
         gateName: String
     ) throws -> [Gate] {
         switch statement {
-        case .gateCall(let name, let params, let qubits, let location):
+        case .gateCall(let name, let params, let qubits, let modifiers, let location):
             return try lowerGateCallToGates(
                 name: name,
                 params: params,
                 qubits: qubits,
+                modifiers: modifiers,
                 location: location
             )
 
@@ -1032,7 +1347,7 @@ private final class LoweringContext {
              .bitDecl(_, _, let location),
              .gateDecl(_, _, _, _, let location),
              .opaqueDecl(_, _, _, let location),
-             .gateCall(_, _, _, let location),
+             .gateCall(_, _, _, _, let location),
              .measure(_, _, let location),
              .reset(_, let location),
              .barrier(_, let location),
