@@ -68,6 +68,28 @@ public struct UnrollMultiQubitPass: CompilerPass, Sendable {
                 )
             }
 
+        case .while_c(let classicalRegister, let expectedValue, let body, let maxIterations):
+            var expandedBody: [Gate] = []
+            var changed = false
+            for nested in body {
+                let pieces = try expandUntilTwoQubit(nested, allocator: &allocator)
+                if pieces.count != 1 || pieces[0] != nested {
+                    changed = true
+                }
+                expandedBody.append(contentsOf: pieces)
+            }
+            if !changed {
+                return [gate]
+            }
+            return [
+                .while_c(
+                    classicalRegister: classicalRegister,
+                    expectedValue: expectedValue,
+                    body: expandedBody,
+                    maxIterations: maxIterations
+                )
+            ]
+
         case .customUnitary(_, let qubits) where qubits.count > 2:
             throw TranspilerError.routingRequiresTwoQubitGates(gate)
 

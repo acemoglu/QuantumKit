@@ -56,6 +56,10 @@ public enum StabilizerCircuitValidator: Sendable {
             return
         case .c_if(_, _, let body):
             try validate(body)
+        case .while_c(_, _, let body, _):
+            for nested in body {
+                try validate(nested)
+            }
         default:
             throw StabilizerError.nonCliffordGate(gate)
         }
@@ -122,6 +126,18 @@ public final class StabilizerEngine: @unchecked Sendable {
             case .c_if(let classicalRegister, let expectedValue, let conditionedGate):
                 if classicalMemory.value(ofRegister: classicalRegister) == expectedValue {
                     try executeRuntimeGate(conditionedGate, countsTowardApplied: false)
+                }
+
+            case .while_c(let classicalRegister, let expectedValue, let body, let maxIterations):
+                var iterations = 0
+                while classicalMemory.value(ofRegister: classicalRegister) == expectedValue {
+                    guard iterations < maxIterations else {
+                        throw QuantumCircuitError.maxLoopIterationsExceeded(maxIterations: maxIterations)
+                    }
+                    for nested in body {
+                        try executeRuntimeGate(nested, countsTowardApplied: false)
+                    }
+                    iterations += 1
                 }
 
             case .h(let t):

@@ -408,6 +408,30 @@ extension TranspilerError: LocalizedError {
     }
 }
 
+extension CompilerPassRegistryError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .emptyID:
+            return "CompilerPassFactory id must be a non-empty string."
+        case .duplicateID(let id):
+            return "CompilerPassFactory id \"\(id)\" is already registered."
+        case .unknownID(let id):
+            return "No CompilerPassFactory registered for id \"\(id)\"."
+        }
+    }
+
+    public var recoverySuggestion: String? {
+        switch self {
+        case .emptyID:
+            return "Provide a non-empty stable id (prefer reverse-DNS, e.g. com.example.fuse)."
+        case .duplicateID:
+            return "Unregister the existing id, use registerReplacing, or choose a different id."
+        case .unknownID:
+            return "Register a CompilerPassFactory for that id before makePass / makePassManager."
+        }
+    }
+}
+
 // MARK: PEC / ZNE / Pauli twirling
 
 extension PECError: LocalizedError {
@@ -579,11 +603,13 @@ extension QuantumCircuitError: LocalizedError {
         case .invalidAlgorithmParameter(let reason):
             return "Invalid circuit / gate parameter: \(reason)."
         case .circuitNotUnitary:
-            return "Operation requires a unitary-only circuit (no measure/reset/initialize/c_if)."
+            return "Operation requires a unitary-only circuit (no measure/reset/initialize/c_if/while_c)."
         case .invalidComposition(let reason):
             return "Invalid circuit composition: \(reason)."
         case .unsupportedControlledGate(let reason):
             return "Cannot lift gate to a controlled form: \(reason)."
+        case .maxLoopIterationsExceeded(let maxIterations):
+            return "while_c exceeded maxIterations (\(maxIterations)) without satisfying the exit condition."
         }
     }
 
@@ -596,11 +622,13 @@ extension QuantumCircuitError: LocalizedError {
         case .invalidAlgorithmParameter:
             return "Fix control/target overlap or empty control lists before appending the gate."
         case .circuitNotUnitary:
-            return "Strip measure/reset/initialize/c_if, or use an API that accepts mid-circuit ops."
+            return "Strip measure/reset/initialize/c_if/while_c, or use an API that accepts mid-circuit ops."
         case .invalidComposition:
             return "Align qubit maps / classical-register widths when using append, compose, or tensor."
         case .unsupportedControlledGate:
             return "Use a gate with a native controlled encoding, or decompose before control-lifting."
+        case .maxLoopIterationsExceeded:
+            return "Raise maxIterations, or ensure the loop body updates the classical register so the while condition becomes false."
         }
     }
 }
@@ -614,6 +642,8 @@ extension CircuitIRError: LocalizedError {
             return "instructionMetadata length \(metadataCount) does not match gates length \(gateCount)."
         case .invalidCircuit(let reason):
             return "Invalid circuit IR payload: \(reason)."
+        case .controlFlowNotSerialized(let op):
+            return "Control-flow op '\(op)' cannot be encoded under CircuitIR schema v1 (G10 lite; in-memory only)."
         }
     }
 
@@ -625,6 +655,8 @@ extension CircuitIRError: LocalizedError {
             return "Provide instructionMetadata with one optional entry per gate (same length as gates)."
         case .invalidCircuit:
             return "Fix qubit bounds / classical-register declarations before encoding or decoding IR."
+        case .controlFlowNotSerialized:
+            return "Keep while_c circuits in memory, or expand/unroll before encode until a future schema bump."
         }
     }
 }

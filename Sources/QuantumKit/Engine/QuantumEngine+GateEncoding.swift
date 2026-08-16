@@ -604,6 +604,11 @@ extension QuantumEngine {
             // here; it is preserved purely as circuit structure (and treated as a barrier by the
             // algebraic precompiler).
             break
+
+        case .while_c:
+            // Bounded classical while is executed host-side in ``QuantumEngine/executeRNG``;
+            // unitary encoding skips the wrapper (same as ``c_if``).
+            break
         }
     }
 }

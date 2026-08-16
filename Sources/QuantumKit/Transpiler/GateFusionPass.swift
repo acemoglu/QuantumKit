@@ -193,7 +193,7 @@ public struct GateFusionPass: DAGCompilerPass, CompilerPass, Sendable {
     /// Hard ordering fences — never fuse across (mirrors algebraic barriers + delay).
     public static func isHardCut(_ gate: Gate) -> Bool {
         switch gate {
-        case .measure, .reset, .c_if, .initialize, .barrier, .delay:
+        case .measure, .reset, .c_if, .while_c, .initialize, .barrier, .delay:
             return true
         default:
             return false

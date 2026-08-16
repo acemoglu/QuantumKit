@@ -122,6 +122,29 @@ public enum Gate: Equatable, Sendable {
     /// deferred-measurement principle.
     indirect case c_if(classicalRegister: Int, expectedValue: Int, gate: Gate)
 
+    /// Bounded classical while (G10 lite): while `classicalRegister` holds `expectedValue`,
+    /// execute `body` in order. Each full body run counts as one iteration.
+    ///
+    /// Shares the same classical-memory model as ``Gate/c_if`` (full-register integer
+    /// compare). Bodies may nest `c_if` / further `while_c`; each `while_c` has its own
+    /// `maxIterations` cap. Nesting depth is not separately limited (G10 lite).
+    ///
+    /// **Hard cap:** after `maxIterations` body executions the condition must be false;
+    /// otherwise execution throws ``QuantumCircuitError/maxLoopIterationsExceeded``.
+    /// `maxIterations` must be `> 0` at construction (unbounded loops are rejected).
+    ///
+    /// **Serialization:** not part of CircuitIR schema v1 — **encode** throws
+    /// ``CircuitIRError/controlFlowNotSerialized``. Keep static (non-`while_c`) circuits
+    /// on schema v1 unchanged.
+    ///
+    /// **Out of scope:** full OpenQASM 3 control flow and a hard recursion-depth policy.
+    indirect case while_c(
+        classicalRegister: Int,
+        expectedValue: Int,
+        body: [Gate],
+        maxIterations: Int
+    )
+
     /// Arbitrary single-qubit unitary specified as a row-major 2×2 matrix.
     case unitary1(matrix: [ComplexAmplitude], target: Int)
 
@@ -163,6 +186,8 @@ extension Gate {
             return spec.qubits
         case .c_if(_, _, let gate):
             return gate.affectedQubits
+        case .while_c(_, _, let body, _):
+            return body.flatMap(\.affectedQubits)
         case .initialize(let qubits, _):
             return qubits
         case .customUnitary(_, let qubits):
@@ -229,6 +254,15 @@ extension Gate {
             return .customUnitary(matrix: dagger, qubits: qubits)
         case .c_if(let classicalRegister, let expectedValue, let gate):
             return .c_if(classicalRegister: classicalRegister, expectedValue: expectedValue, gate: gate.adjoint)
+        case .while_c(let classicalRegister, let expectedValue, let body, let maxIterations):
+            // Dynamic exit makes a true inverse ill-defined; mirror ``c_if`` by adjoining the body.
+            // ``QuantumCircuit/inverse()`` still rejects via ``isUnitaryOnly``.
+            return .while_c(
+                classicalRegister: classicalRegister,
+                expectedValue: expectedValue,
+                body: body.reversed().map(\.adjoint),
+                maxIterations: maxIterations
+            )
         }
     }
 

@@ -14,6 +14,8 @@ public enum QuantumCircuitError: Error, Equatable {
     case invalidComposition(reason: String)
     /// Gate cannot be lifted to a controlled form (non-unitary or no native controlled encoding).
     case unsupportedControlledGate(reason: String)
+    /// ``Gate/while_c`` reached ``maxIterations`` without the classical exit condition becoming false.
+    case maxLoopIterationsExceeded(maxIterations: Int)
 }
 
 public struct QuantumCircuit: Sendable {
@@ -41,7 +43,8 @@ public struct QuantumCircuit: Sendable {
         }
     }
 
-    mutating func applyValidated(_ gate: Gate) throws {
+    /// Validates gate structure against this circuit's width without appending.
+    func validateGateStructure(_ gate: Gate) throws {
         switch gate {
         case .h(let target), .x(let target), .y(let target), .z(let target),
              .s(let target), .t(let target), .sdg(let target), .tdg(let target),
@@ -192,8 +195,25 @@ public struct QuantumCircuit: Sendable {
                     reason: "Conditional gate requires a non-negative expected classical value"
                 )
             }
-            for qubit in conditionedGate.affectedQubits {
-                try validateQubitIndex(qubit)
+            try validateGateStructure(conditionedGate)
+        case .while_c(let classicalRegister, let expectedValue, let body, let maxIterations):
+            guard classicalRegister >= 0 else {
+                throw QuantumCircuitError.invalidAlgorithmParameter(
+                    reason: "while_c requires a non-negative classical register index"
+                )
+            }
+            guard expectedValue >= 0 else {
+                throw QuantumCircuitError.invalidAlgorithmParameter(
+                    reason: "while_c requires a non-negative expected classical value"
+                )
+            }
+            guard maxIterations > 0 else {
+                throw QuantumCircuitError.invalidAlgorithmParameter(
+                    reason: "while_c requires maxIterations > 0 (unbounded loops are rejected)"
+                )
+            }
+            for nested in body {
+                try validateGateStructure(nested)
             }
         case .unitary1(let matrix, let target):
             guard matrix.count == 4 else {
@@ -249,7 +269,10 @@ public struct QuantumCircuit: Sendable {
             }
             try UnitaryValidation.validateUnitary(matrix: matrix, dimension: 1 << qubits.count)
         }
+    }
 
+    mutating func applyValidated(_ gate: Gate) throws {
+        try validateGateStructure(gate)
         gates.append(gate)
         instructionMetadata.append(nil)
     }

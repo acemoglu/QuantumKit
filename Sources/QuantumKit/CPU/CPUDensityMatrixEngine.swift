@@ -98,6 +98,18 @@ public final class CPUDensityMatrixEngine: @unchecked Sendable {
                     try executeRuntimeGate(conditionedGate, at: gateIndex, countsTowardApplied: false)
                 }
 
+            case .while_c(let classicalRegister, let expectedValue, let body, let maxIterations):
+                var iterations = 0
+                while classicalMemory.value(ofRegister: classicalRegister) == expectedValue {
+                    guard iterations < maxIterations else {
+                        throw QuantumCircuitError.maxLoopIterationsExceeded(maxIterations: maxIterations)
+                    }
+                    for nested in body {
+                        try executeRuntimeGate(nested, at: gateIndex, countsTowardApplied: false)
+                    }
+                    iterations += 1
+                }
+
             case .initialize(let qubits, let amplitudes):
                 try density.initialize(qubits: qubits, amplitudes: amplitudes)
                 if let noise {

@@ -148,6 +148,18 @@ public final class CPUStatevectorEngine: @unchecked Sendable {
                     try executeRuntimeGate(conditionedGate, countsTowardApplied: false)
                 }
 
+            case .while_c(let classicalRegister, let expectedValue, let body, let maxIterations):
+                var iterations = 0
+                while classicalMemory.value(ofRegister: classicalRegister) == expectedValue {
+                    guard iterations < maxIterations else {
+                        throw QuantumCircuitError.maxLoopIterationsExceeded(maxIterations: maxIterations)
+                    }
+                    for nested in body {
+                        try executeRuntimeGate(nested, countsTowardApplied: false)
+                    }
+                    iterations += 1
+                }
+
             case .initialize(let qubits, let amplitudes):
                 try state.initialize(qubits: qubits, amplitudes: amplitudes)
                 if let noise, noise.preparationErrorProbability > 0 {

@@ -98,6 +98,13 @@ extension Gate {
                 expectedValue: expectedValue,
                 gate: try gate.remappingQubits(map)
             )
+        case .while_c(let classicalRegister, let expectedValue, let body, let maxIterations):
+            return .while_c(
+                classicalRegister: classicalRegister,
+                expectedValue: expectedValue,
+                body: try body.map { try $0.remappingQubits(map) },
+                maxIterations: maxIterations
+            )
         case .unitary1(let matrix, let target):
             return .unitary1(matrix: matrix, target: try map(target))
         case .initialize(let qubits, let amplitudes):
@@ -107,7 +114,7 @@ extension Gate {
         }
     }
 
-    /// Rewrites classical-register indices on ``measure`` / ``c_if`` (nested `c_if` included).
+    /// Rewrites classical-register indices on ``measure`` / ``c_if`` / ``while_c`` (nested included).
     public func remappingClassicalRegisters(_ map: (Int) throws -> Int) rethrows -> Gate {
         switch self {
         case .measure(let spec):
@@ -123,6 +130,13 @@ extension Gate {
                 classicalRegister: try map(classicalRegister),
                 expectedValue: expectedValue,
                 gate: try gate.remappingClassicalRegisters(map)
+            )
+        case .while_c(let classicalRegister, let expectedValue, let body, let maxIterations):
+            return .while_c(
+                classicalRegister: try map(classicalRegister),
+                expectedValue: expectedValue,
+                body: try body.map { try $0.remappingClassicalRegisters(map) },
+                maxIterations: maxIterations
             )
         default:
             return self
@@ -165,6 +179,10 @@ extension Gate {
         case .c_if:
             throw QuantumCircuitError.unsupportedControlledGate(
                 reason: "c_if cannot be controlled"
+            )
+        case .while_c:
+            throw QuantumCircuitError.unsupportedControlledGate(
+                reason: "while_c cannot be controlled"
             )
         case .initialize:
             throw QuantumCircuitError.unsupportedControlledGate(

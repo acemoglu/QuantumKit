@@ -59,7 +59,7 @@ public final class MPSEngine: @unchecked Sendable {
         case .barrier, .delay, .id:
             return
 
-        case .measure, .reset, .c_if, .initialize:
+        case .measure, .reset, .c_if, .while_c, .initialize:
             throw MPSError.unsupportedGate(gate)
 
         case .customUnitary(_, let qubits):

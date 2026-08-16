@@ -216,6 +216,10 @@ extension QuantumCircuit {
             return spec.classicalRegister
         case .c_if(let classicalRegister, _, let inner):
             return max(classicalRegister, maxClassicalRegisterIndex(in: inner))
+        case .while_c(let classicalRegister, _, let body, _):
+            return body.reduce(classicalRegister) { partial, nested in
+                max(partial, maxClassicalRegisterIndex(in: nested))
+            }
         default:
             return -1
         }

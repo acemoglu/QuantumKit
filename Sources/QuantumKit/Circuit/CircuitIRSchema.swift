@@ -17,6 +17,15 @@ import Foundation
 /// truncate / pad of a present metadata payload). Omitting `instructionMetadata`
 /// remains valid and means all-`nil` metadata.
 ///
+/// **G10 lite / ``Gate/while_c``:** bounded classical loops exist in the in-memory IR
+/// and on CPU / Metal **host** execution, but are **not serialized yet**.
+/// **Encode** of a circuit (or gate) containing ``Gate/while_c`` throws
+/// ``CircuitIRError/controlFlowNotSerialized``. Hand-crafted JSON with an unknown
+/// gate `type` (including a future `while_c` tag) fails ordinary `Gate`/`Decodable`
+/// type decoding — it does **not** round-trip under schema v1. Schema stays at **1**;
+/// a future bump will persist control-flow ops. Static circuits without `while_c`
+/// are unchanged.
+///
 /// This contract does not change in-memory engine bit ordering; see ``QubitBitOrdering``.
 public enum CircuitIRSchema: Sendable {
     /// Schema version written by current encoders and required (or implied) on decode.
@@ -44,4 +53,6 @@ public enum CircuitIRError: Error, Equatable, Sendable {
     case metadataLengthMismatch(metadataCount: Int, gateCount: Int)
     /// Gate list failed validation (qubit OOB, undeclared classical register, …).
     case invalidCircuit(reason: String)
+    /// Dynamic control-flow op (``Gate/while_c``) cannot be encoded under schema v1.
+    case controlFlowNotSerialized(op: String)
 }

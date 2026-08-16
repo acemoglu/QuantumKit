@@ -1,6 +1,12 @@
 import Foundation
 
 /// Stochastic noise applied after each unitary gate during execution.
+///
+/// ## Extension point (B14 lite)
+///
+/// Attach custom ``QuantumChannel`` values with ``adding(_:for:)`` / composition
+/// helpers. Channel *builder registries* are not shipped; see ``CompilerPassRegistry``
+/// for the named in-process discovery pattern on the transpiler side.
 public struct NoiseModel: Sendable, Equatable, Codable {
 
     /// Depolarizing probability `p` in `[0, 1]`, applied after each gate. The channel structure is

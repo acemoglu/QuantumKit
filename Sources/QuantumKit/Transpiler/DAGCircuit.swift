@@ -267,7 +267,7 @@ public struct DAGCircuit: Sendable {
         }
     }
 
-    /// Classical registers written by `gate`, including nested ``Gate/c_if`` bodies.
+    /// Classical registers written by `gate`, including nested ``Gate/c_if`` / ``Gate/while_c`` bodies.
     public static func classicalWrites(for gate: Gate) -> [Int] {
         var seen = Set<Int>()
         var result: [Int] = []
@@ -279,6 +279,10 @@ public struct DAGCircuit: Sendable {
                 }
             case .c_if(_, _, let inner):
                 walk(inner)
+            case .while_c(_, _, let body, _):
+                for nested in body {
+                    walk(nested)
+                }
             default:
                 break
             }
@@ -287,7 +291,7 @@ public struct DAGCircuit: Sendable {
         return result
     }
 
-    /// Classical registers read by `gate`, including nested ``Gate/c_if`` conditions.
+    /// Classical registers read by `gate`, including nested ``Gate/c_if`` / ``Gate/while_c`` conditions.
     public static func classicalReads(for gate: Gate) -> [Int] {
         var seen = Set<Int>()
         var result: [Int] = []
@@ -298,6 +302,13 @@ public struct DAGCircuit: Sendable {
                     result.append(classicalRegister)
                 }
                 walk(inner)
+            case .while_c(let classicalRegister, _, let body, _):
+                if seen.insert(classicalRegister).inserted {
+                    result.append(classicalRegister)
+                }
+                for nested in body {
+                    walk(nested)
+                }
             default:
                 break
             }

@@ -15,6 +15,8 @@ extension Gate {
             return !theta.isFullyBound
         case .c_if(_, _, let conditionedGate):
             return conditionedGate.containsUnboundParameters
+        case .while_c(_, _, let body, _):
+            return body.contains { $0.containsUnboundParameters }
         default:
             return false
         }
@@ -33,6 +35,8 @@ extension Gate {
             return theta.referencedParameters
         case .c_if(_, _, let conditionedGate):
             return conditionedGate.referencedParameters
+        case .while_c(_, _, let body, _):
+            return body.reduce(into: Set<String>()) { $0.formUnion($1.referencedParameters) }
         default:
             return []
         }
@@ -75,6 +79,13 @@ extension Gate {
                 classicalRegister: classicalRegister,
                 expectedValue: expectedValue,
                 gate: try conditionedGate.bound(using: parameters)
+            )
+        case .while_c(let classicalRegister, let expectedValue, let body, let maxIterations):
+            return .while_c(
+                classicalRegister: classicalRegister,
+                expectedValue: expectedValue,
+                body: try body.map { try $0.bound(using: parameters) },
+                maxIterations: maxIterations
             )
         default:
             return self

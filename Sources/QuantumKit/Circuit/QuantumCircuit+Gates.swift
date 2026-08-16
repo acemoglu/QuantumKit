@@ -403,6 +403,45 @@ extension QuantumCircuit {
         try c_if(classicalRegister: classicalRegister, equals: expectedValue, apply: .x(target: target))
     }
 
+    /// Bounded classical while (G10 lite): while `classicalRegister == expectedValue`, run `body`.
+    ///
+    /// `maxIterations` must be `> 0`. Exceeding the cap at runtime throws
+    /// ``QuantumCircuitError/maxLoopIterationsExceeded``. Not encoded under CircuitIR v1
+    /// (``CircuitIRError/controlFlowNotSerialized``). Same classical compare as ``c_if``.
+    @discardableResult
+    public mutating func while_c(
+        classicalRegister: Int,
+        equals expectedValue: Int,
+        maxIterations: Int,
+        body: [Gate]
+    ) throws -> QuantumCircuit {
+        try applyValidated(
+            .while_c(
+                classicalRegister: classicalRegister,
+                expectedValue: expectedValue,
+                body: body,
+                maxIterations: maxIterations
+            )
+        )
+        return self
+    }
+
+    /// Bounded classical while whose body is a ``GateSequence`` (gates copied; not inlined flat).
+    @discardableResult
+    public mutating func while_c(
+        classicalRegister: Int,
+        equals expectedValue: Int,
+        maxIterations: Int,
+        sequence: GateSequence
+    ) throws -> QuantumCircuit {
+        try while_c(
+            classicalRegister: classicalRegister,
+            equals: expectedValue,
+            maxIterations: maxIterations,
+            body: sequence.gates
+        )
+    }
+
     @discardableResult
     public mutating func reset(_ qubit: Int) throws -> QuantumCircuit {
         try applyValidated(.reset(qubit: qubit))

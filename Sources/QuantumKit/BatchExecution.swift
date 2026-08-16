@@ -78,7 +78,7 @@ extension QuantumCircuit {
     public var isUnitaryOnly: Bool {
         gates.allSatisfy { gate in
             switch gate {
-            case .measure, .reset, .c_if:
+            case .measure, .reset, .c_if, .while_c:
                 return false
             case .initialize:
                 return false
@@ -99,13 +99,14 @@ extension QuantumCircuit {
     }
 
     /// `true` when the circuit contains at least one ``Gate/delay`` (including nested
-    /// ``Gate/c_if`` bodies).
+    /// ``Gate/c_if`` / ``Gate/while_c`` bodies).
     var containsDelay: Bool {
         gates.contains { Self.gateContainsDelay($0) }
     }
 
     /// `true` when the circuit contains at least one ``Gate/measure`` (including nested
-    /// ``Gate/c_if`` bodies). Used for evolution-noise charging of measurement channels.
+    /// ``Gate/c_if`` / ``Gate/while_c`` bodies). Used for evolution-noise charging of
+    /// measurement channels.
     var containsMeasure: Bool {
         gates.contains { Self.gateContainsMeasure($0) }
     }
@@ -116,6 +117,8 @@ extension QuantumCircuit {
             return true
         case .c_if(_, _, let inner):
             return gateContainsDelay(inner)
+        case .while_c(_, _, let body, _):
+            return body.contains { gateContainsDelay($0) }
         default:
             return false
         }
@@ -127,6 +130,8 @@ extension QuantumCircuit {
             return true
         case .c_if(_, _, let inner):
             return gateContainsMeasure(inner)
+        case .while_c(_, _, let body, _):
+            return body.contains { gateContainsMeasure($0) }
         default:
             return false
         }
@@ -144,6 +149,8 @@ extension QuantumCircuit {
             return true
         case .c_if(_, _, let inner):
             return gateContainsHostAppliedUnitary(inner)
+        case .while_c(_, _, let body, _):
+            return body.contains { gateContainsHostAppliedUnitary($0) }
         default:
             return false
         }

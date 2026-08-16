@@ -34,11 +34,12 @@ public struct CircuitRunState: Sendable, Equatable {
     /// Mid-circuit outcomes already collected before ``fromInstruction``.
     public var measurementOutcomes: [[Int]]
     /// Number of **top-level circuit instructions** already processed (portable resume cursor).
-    /// Does not include nested ``Gate/c_if`` bodies.
+    /// Does not include nested ``Gate/c_if`` / ``Gate/while_c`` bodies.
     public var appliedGateCount: Int
     /// Unitary-piece counter driving renormalization cadence on Metal and CPU (expanded gates
     /// may contribute several pieces). Measure / reset / barrier / delay / `id` / the `c_if`
-    /// wrapper do not increment this. Nested `c_if` bodies that apply unitaries do.
+    /// / `while_c` wrapper do not increment this. Nested `c_if` / `while_c` bodies that apply
+    /// unitaries do.
     /// When `nil` on resume, engines seed from ``appliedGateCount`` for backward compatibility.
     public var unitaryRenormCount: Int?
     /// When non-`nil`, seeds ``CPUStateVector/cumulativeGlobalPhaseRadians`` /

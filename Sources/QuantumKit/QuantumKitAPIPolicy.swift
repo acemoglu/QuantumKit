@@ -17,7 +17,9 @@ import Foundation
 /// - **Primitives:** ``Sampler``, ``Estimator``, and their options / result types.
 /// - **Noise:** ``NoiseModel`` and the public noise / channel catalog used with it.
 /// - **Transpiler entrypoints:** ``Transpiler``, ``PassManager``, ``TranspileOptions``,
-///   ``CompilerPass`` / ``DAGCompilerPass``, and the shipped pass types.
+///   ``CompilerPass`` / ``DAGCompilerPass``, the shipped pass types, and opt-in
+///   ``CompilerPassRegistry`` / ``CompilerPassFactory`` (B14 lite named discovery —
+///   not a marketplace or dylib loader).
 ///
 /// Supporting types that appear in these APIs (errors, metadata, shot counts, observables,
 /// layouts, coupling maps, and so on) are part of the same stability contract when they

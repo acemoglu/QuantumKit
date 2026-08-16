@@ -101,6 +101,21 @@ extension QuantumKitTests {
             descriptionKeywords: ["connected"],
             suggestionKeywords: ["routing"]
         )
+        assertActionable(
+            CompilerPassRegistryError.emptyID,
+            descriptionKeywords: ["non-empty"],
+            suggestionKeywords: ["reverse-DNS"]
+        )
+        assertActionable(
+            CompilerPassRegistryError.duplicateID("x"),
+            descriptionKeywords: ["already registered"],
+            suggestionKeywords: ["registerReplacing"]
+        )
+        assertActionable(
+            CompilerPassRegistryError.unknownID("missing"),
+            descriptionKeywords: ["No CompilerPassFactory"],
+            suggestionKeywords: ["Register"]
+        )
 
         assertActionable(
             PECError.incompatibleWithZNE,
@@ -161,12 +176,22 @@ extension QuantumKitTests {
             descriptionKeywords: ["out of bounds"],
             suggestionKeywords: ["0..<qubitCount"]
         )
+        assertActionable(
+            QuantumCircuitError.maxLoopIterationsExceeded(maxIterations: 5),
+            descriptionKeywords: ["maxIterations", "5"],
+            suggestionKeywords: ["maxIterations"]
+        )
 
         assertNonEmptyDescription(CircuitIRError.unsupportedSchemaVersion(found: 99, supported: CircuitIRSchema.current))
         assertActionable(
             CircuitIRError.metadataLengthMismatch(metadataCount: 1, gateCount: 2),
             descriptionKeywords: ["instructionMetadata"],
             suggestionKeywords: ["gates"]
+        )
+        assertActionable(
+            CircuitIRError.controlFlowNotSerialized(op: "while_c"),
+            descriptionKeywords: ["while_c", "cannot be encoded"],
+            suggestionKeywords: ["while_c"]
         )
 
         assertNonEmptyDescription(ParameterBindingError.missingBinding(for: "theta"))

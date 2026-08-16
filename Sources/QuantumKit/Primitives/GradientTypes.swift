@@ -163,6 +163,8 @@ public enum ParameterShift {
                 + scaleIfPresent(parameter, in: lambda)
         case .c_if(_, _, let inner):
             return rotationScales(for: parameter, in: inner)
+        case .while_c(_, _, let body, _):
+            return body.flatMap { rotationScales(for: parameter, in: $0) }
         default:
             return []
         }

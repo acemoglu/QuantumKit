@@ -234,6 +234,18 @@ public final class DensityMatrixEngine: @unchecked Sendable {
                     try executeRuntimeGate(conditionedGate, at: gateIndex, countsTowardApplied: false)
                 }
 
+            case .while_c(let classicalRegister, let expectedValue, let body, let maxIterations):
+                var iterations = 0
+                while classicalMemory.value(ofRegister: classicalRegister) == expectedValue {
+                    guard iterations < maxIterations else {
+                        throw QuantumCircuitError.maxLoopIterationsExceeded(maxIterations: maxIterations)
+                    }
+                    for nested in body {
+                        try executeRuntimeGate(nested, at: gateIndex, countsTowardApplied: false)
+                    }
+                    iterations += 1
+                }
+
             case .initialize(let qubits, let amplitudes):
                 try drainPipeline()
                 try density.initialize(qubits: qubits, amplitudes: amplitudes)
@@ -1180,7 +1192,7 @@ public final class DensityMatrixEngine: @unchecked Sendable {
                 controlMask: 0,
                 matrix: matrix.map { complex($0.real, $0.imaginary) }
             )
-        case .initialize, .swap, .measure, .reset, .c_if, .barrier, .delay, .id:
+        case .initialize, .swap, .measure, .reset, .c_if, .while_c, .barrier, .delay, .id:
             throw DensityMatrixEngineError.unsupportedGate(gate)
         case .iswap, .ecr, .rxx, .ryy, .rzz, .dcx, .cswap:
             // Composites must be expanded in applyUnitaryGate before encoding.

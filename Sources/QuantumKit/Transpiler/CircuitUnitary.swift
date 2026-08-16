@@ -402,7 +402,7 @@ enum CircuitUnitary {
                 controlMask: 0, target: target, qubitCount: qubitCount
             )
 
-        case .initialize, .measure, .reset, .c_if:
+        case .initialize, .measure, .reset, .c_if, .while_c:
             throw QuantumCircuitError.circuitNotUnitary
         }
     }

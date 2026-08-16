@@ -4,13 +4,14 @@ import Foundation
 /// CPU concurrent workers (distinct states, never a shared buffer or shared RNG).
 ///
 /// **`canBatch` (legal to parallel / GPU-batch):** shots are independent — no projective
-/// mid-circuit measure, no ``Gate/c_if``, and any noise is per-shot unraveling (or terminal
-/// readout). Each shot must have its own state and, when RNG is consumed during evolution,
-/// its own stream.
+/// mid-circuit measure, no classical control (``Gate/c_if`` / ``Gate/while_c``), and any
+/// noise is per-shot unraveling (or terminal readout). Each shot must have its own state
+/// and, when RNG is consumed during evolution, its own stream.
 ///
-/// **`mustSerial`:** projective mid-circuit measure, classical control (`c_if`), or any path
-/// that would require sharing one ``StateVector`` / ``CPUStateVector`` or one ``QuantumRNG``
-/// across threads. Forced serial even if a future scheduler could theoretically isolate shots.
+/// **`mustSerial`:** projective mid-circuit measure, classical control (`c_if` / `while_c`),
+/// or any path that would require sharing one ``StateVector`` / ``CPUStateVector`` or one
+/// ``QuantumRNG`` across threads. Forced serial even if a future scheduler could
+/// theoretically isolate shots.
 ///
 /// Metal ``QuantumEngine/executeUnitaryBatch`` is a stricter subset: independent **and**
 /// unitary-only with no host-applied unitaries and no evolution-time RNG. Global depolarizing
@@ -28,15 +29,16 @@ public enum ShotExecutionPolicy: Sendable {
         !mustSerial(circuit: circuit, noise: noise)
     }
 
-    /// Projective mid-circuit measure or `c_if` (or anything that would share one RNG/state
-    /// across threads). Callers **must** keep `batchSize = 1` and a single sequential stream.
+    /// Projective mid-circuit measure or classical control (`c_if` / `while_c`) (or anything
+    /// that would share one RNG/state across threads). Callers **must** keep `batchSize = 1`
+    /// and a single sequential stream.
     public static func mustSerial(circuit: QuantumCircuit, noise: NoiseModel? = nil) -> Bool {
         let projective = (noise?.measurementMode ?? .projective) == .projective
         for gate in circuit.gates {
             switch gate {
             case .measure where projective:
                 return true
-            case .c_if:
+            case .c_if, .while_c:
                 return true
             default:
                 continue
@@ -64,7 +66,8 @@ public enum ShotExecutionPolicy: Sendable {
     ///
     /// Measurement-channel noise (``NoiseModel/measurementDephasingProbability``, non-projective
     /// mode) applies only at mid-circuit ``Gate/measure`` — not at terminal collapse — so it
-    /// is charged only when `circuit` contains a measure (including nested ``Gate/c_if``).
+    /// is charged only when `circuit` contains a measure (including nested ``Gate/c_if`` /
+    /// ``Gate/while_c`` bodies).
     /// Without a circuit (factory heuristic), it is **not** charged (same pattern as idle-on-delay).
     public static func requiresEvolutionNoise(_ noise: NoiseModel?, circuit: QuantumCircuit?) -> Bool {
         guard let noise else { return false }

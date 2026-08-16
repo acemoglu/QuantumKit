@@ -319,7 +319,7 @@ public enum ProbabilisticErrorCancellation {
 
     private static func isNonUnitaryOrIdle(_ gate: Gate) -> Bool {
         switch gate {
-        case .id, .barrier, .delay, .measure, .reset, .initialize, .c_if:
+        case .id, .barrier, .delay, .measure, .reset, .initialize, .c_if, .while_c:
             return true
         default:
             return false

@@ -663,6 +663,19 @@ public final class QuantumEngine: @unchecked Sendable {
                     try executeRuntimeGate(conditionedGate, countsTowardApplied: false)
                 }
 
+            case .while_c(let classicalRegister, let expectedValue, let body, let maxIterations):
+                try flushPendingUnitaryGates()
+                var iterations = 0
+                while classicalMemory.value(ofRegister: classicalRegister) == expectedValue {
+                    guard iterations < maxIterations else {
+                        throw QuantumCircuitError.maxLoopIterationsExceeded(maxIterations: maxIterations)
+                    }
+                    for nested in body {
+                        try executeRuntimeGate(nested, countsTowardApplied: false)
+                    }
+                    iterations += 1
+                }
+
             case .unitary1:
                 try flushPendingUnitaryGates()
                 try executeUnitaryGate(

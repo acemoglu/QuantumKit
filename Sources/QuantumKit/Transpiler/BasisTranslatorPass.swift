@@ -31,7 +31,7 @@ public struct BasisTranslatorPass: CompilerPass, Sendable {
             }
 
             switch gate {
-            case .measure, .reset, .c_if, .barrier, .delay:
+            case .measure, .reset, .c_if, .while_c, .barrier, .delay:
                 try translated.apply(gate, metadata: meta)
             default:
                 // Expansion breaks 1:1 index alignment — strip metadata for replacements.

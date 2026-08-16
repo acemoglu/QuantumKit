@@ -12,7 +12,7 @@ public enum GateKind: String, Sendable, Equatable, Codable, CaseIterable {
     case iswap, ecr, rxx, ryy, rzz, dcx, cswap
     case ccx, mcx, mcz
     case crx, cry, crz, cp
-    case measure, reset, c_if, unitary1, initialize, customUnitary
+    case measure, reset, c_if, while_c, unitary1, initialize, customUnitary
 }
 
 extension Gate {
@@ -61,6 +61,7 @@ extension Gate {
         case .initialize: return .initialize
         case .customUnitary: return .customUnitary
         case .c_if: return .c_if
+        case .while_c: return .while_c
         }
     }
 }

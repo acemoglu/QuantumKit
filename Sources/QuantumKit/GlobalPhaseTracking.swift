@@ -49,7 +49,7 @@ public enum GlobalPhaseTracking: Sendable {
         }
 
         switch gate {
-        case .id, .barrier, .delay, .measure, .reset, .initialize, .c_if:
+        case .id, .barrier, .delay, .measure, .reset, .initialize, .c_if, .while_c:
             return 0
 
         case .h:

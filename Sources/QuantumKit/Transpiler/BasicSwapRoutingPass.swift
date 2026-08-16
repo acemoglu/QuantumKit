@@ -124,6 +124,32 @@ public struct BasicSwapRoutingPass: CompilerPass, Sendable {
             return
         }
 
+        if case .while_c(let classicalRegister, let expectedValue, let bodyGates, let maxIterations) = gate {
+            var routedBody: [Gate] = []
+            for nested in bodyGates {
+                var body = try QuantumCircuit(qubitCount: couplingMap.qubitCount)
+                try appendRouted(nested, layout: &layout, into: &body, rng: &rng, sourceMetadata: nil)
+                for piece in body.gates {
+                    if case .swap = piece {
+                        // Layout swaps must run outside the classical loop.
+                        try circuit.apply(piece)
+                    } else {
+                        routedBody.append(piece)
+                    }
+                }
+            }
+            try circuit.apply(
+                .while_c(
+                    classicalRegister: classicalRegister,
+                    expectedValue: expectedValue,
+                    body: routedBody,
+                    maxIterations: maxIterations
+                ),
+                metadata: sourceMetadata
+            )
+            return
+        }
+
         switch gate {
         case .measure, .initialize, .barrier, .delay:
             let mapped = try gate.remappingQubits { logical in

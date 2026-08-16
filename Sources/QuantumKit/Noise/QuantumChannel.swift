@@ -20,6 +20,13 @@ public enum QuantumChannelError: Error, Equatable {
 }
 
 /// A physical noise channel attachable to specific gates or qubits.
+///
+/// ## Extension point (B14 lite)
+///
+/// Build channels with the static helpers / cases below, then attach via
+/// ``NoiseModel/adding(_:for:)`` (or composition helpers). Custom *channel builder*
+/// registries are deferred — named discovery shipped for ``CompilerPass`` via
+/// ``CompilerPassRegistry``.
 public enum QuantumChannel: Sendable, Equatable, Codable {
     case depolarizing(probability: QFloat)
     case amplitudeDamping(probability: QFloat)

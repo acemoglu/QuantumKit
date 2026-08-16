@@ -385,6 +385,9 @@ extension Gate: Codable {
             try container.encode(classicalRegister, forKey: .classicalRegister)
             try container.encode(expectedValue, forKey: .expectedValue)
             try container.encode(gate, forKey: .gate)
+        case .while_c:
+            // G10 lite: in-memory only under CircuitIR schema v1.
+            throw CircuitIRError.controlFlowNotSerialized(op: "while_c")
         case .unitary1(let matrix, let target):
             try container.encode(GateType.unitary1, forKey: .type)
             try container.encode(matrix, forKey: .matrix)

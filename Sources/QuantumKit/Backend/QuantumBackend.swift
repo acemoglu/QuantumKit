@@ -140,12 +140,21 @@ public struct QuantumResult: Sendable, Equatable {
 }
 
 /// Common entry point for state-vector and density-matrix simulation backends.
+///
+/// ## Extension point (B14 lite)
+///
+/// Conform to ``QuantumBackend`` and construct via your own factory or
+/// ``QuantumBackendFactory`` helpers. Custom backend *discovery registries* are
+/// deferred — use ``CompilerPassRegistry`` for the shipped named-plugin pattern on
+/// the transpiler side instead.
 public protocol QuantumBackend: Sendable {
     var method: QuantumSimulationMethod { get }
     func run(circuit: QuantumCircuit, options: QuantumRunOptions) throws -> QuantumResult
 }
 
 /// Factory helpers for the supported simulation backends.
+///
+/// Built-in construction / recommendation only. Not a dynamic plugin loader.
 public enum QuantumBackendFactory {
     /// Metal when a GPU is available, otherwise CPU (``SimulationDevicePreference/automatic``).
     ///
