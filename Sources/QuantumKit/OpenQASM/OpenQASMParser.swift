@@ -345,16 +345,18 @@ public struct OpenQASMParser: Sendable {
         try expect(.leftParen, message: "Expected '(' after if")
         let condition = try parseCondition()
         try expect(.rightParen, message: "Expected ')' after if condition")
-        let body = try parseStatement()
+        let body: [OpenQASMStatement]
+        if check(.leftBrace) {
+            body = try parseBracedStatementList(openMessage: "Expected '{' after if condition")
+        } else {
+            body = [try parseStatement()]
+        }
         return .ifStatement(condition: condition, body: body, location: start.location)
     }
 
-    private mutating func parseWhile() throws -> OpenQASMStatement {
-        let start = advance() // while
-        try expect(.leftParen, message: "Expected '(' after while")
-        let condition = try parseCondition()
-        try expect(.rightParen, message: "Expected ')' after while condition")
-        try expect(.leftBrace, message: "Expected '{' after while condition")
+    /// Parses `{ stmt; … }` into a statement list (shared by `if` / `while` bodies).
+    private mutating func parseBracedStatementList(openMessage: String) throws -> [OpenQASMStatement] {
+        try expect(.leftBrace, message: openMessage)
         var body: [OpenQASMStatement] = []
         while !check(.rightBrace) && !isAtEnd {
             if check(.semicolon) {
@@ -365,7 +367,16 @@ public struct OpenQASMParser: Sendable {
             }
             body.append(try parseStatement())
         }
-        try expect(.rightBrace, message: "Expected '}' to close while body")
+        try expect(.rightBrace, message: "Expected '}' to close braced body")
+        return body
+    }
+
+    private mutating func parseWhile() throws -> OpenQASMStatement {
+        let start = advance() // while
+        try expect(.leftParen, message: "Expected '(' after while")
+        let condition = try parseCondition()
+        try expect(.rightParen, message: "Expected ')' after while condition")
+        let body = try parseBracedStatementList(openMessage: "Expected '{' after while condition")
         return .whileStatement(condition: condition, body: body, location: start.location)
     }
 

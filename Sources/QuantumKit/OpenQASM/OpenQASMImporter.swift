@@ -503,21 +503,24 @@ private final class LoweringContext {
 
     // MARK: Classical if → Gate.c_if
 
-    /// Lowers `if (creg == imm) <statement>` to one or more ``Gate/c_if`` wrappers.
+    /// Lowers `if (creg == imm) <statement>` or braced `{ … }` to one or more ``Gate/c_if`` wrappers.
     ///
     /// The condition register name resolves to the declaration-order classical
-    /// register index. The body must lower to gate(s); each resulting gate is
+    /// register index. Each body statement must lower to gate(s); each resulting gate is
     /// wrapped as `.c_if(classicalRegister:idx, expectedValue:imm, gate:)`.
     /// Whole-register `reset` expands to one `c_if` per qubit. Nested `if`
     /// wraps an inner `c_if` gate.
     private func applyIfStatement(
         condition: OpenQASMCondition,
-        body: OpenQASMStatement,
+        body: [OpenQASMStatement],
         location: SourceLocation,
         to circuit: inout QuantumCircuit
     ) throws {
         let (cregIndex, expectedValue) = try resolveCondition(condition, location: location)
-        let bodyGates = try lowerStatementToGates(body, wrappingLocation: location)
+        var bodyGates: [Gate] = []
+        for statement in body {
+            bodyGates.append(contentsOf: try lowerStatementToGates(statement, wrappingLocation: location))
+        }
         guard !bodyGates.isEmpty else {
             throw OpenQASMError.semanticError(
                 line: location.line,
@@ -649,9 +652,12 @@ private final class LoweringContext {
             return [try buildBarrierGate(qubits: qubits, location: location)]
 
         case .ifStatement(let condition, let body, let location):
-            // Nested if: lower inner body, wrap each gate, return as gates for outer wrap.
+            // Nested if: lower each body statement, wrap each gate, return for outer wrap.
             let (cregIndex, expectedValue) = try resolveCondition(condition, location: location)
-            let innerGates = try lowerStatementToGates(body, wrappingLocation: location)
+            var innerGates: [Gate] = []
+            for statement in body {
+                innerGates.append(contentsOf: try lowerStatementToGates(statement, wrappingLocation: location))
+            }
             guard !innerGates.isEmpty else {
                 throw OpenQASMError.semanticError(
                     line: location.line,

@@ -111,11 +111,45 @@ extension QuantumKitTests {
             return XCTFail("Expected if statement")
         }
         XCTAssertEqual(cond, .equals(register: "c", value: 1))
-        guard case .gateCall(let name, _, let qubits, _) = body else {
+        XCTAssertEqual(body.count, 1)
+        guard case .gateCall(let name, _, let qubits, _) = body[0] else {
             return XCTFail("Expected gate call body")
         }
         XCTAssertEqual(name, "x")
         XCTAssertEqual(qubits, [OpenQASMArgument(name: "q", index: 0)])
+    }
+
+    func testOpenQASMParserBracedIfStatement() throws {
+        let source = """
+        OPENQASM 3.0;
+        qubit[2] q;
+        bit[1] c;
+        if (c == 1) {
+          h q[0];
+          cx q[0], q[1];
+        }
+        """
+        var parser = try OpenQASMParser(source: source)
+        let program = try parser.parse()
+
+        guard case .ifStatement(let cond, let body, _) = program.statements.last else {
+            return XCTFail("Expected braced if statement")
+        }
+        XCTAssertEqual(cond, .equals(register: "c", value: 1))
+        XCTAssertEqual(body.count, 2)
+        guard case .gateCall(let hName, _, let hQubits, _) = body[0] else {
+            return XCTFail("Expected h in braced if body")
+        }
+        XCTAssertEqual(hName, "h")
+        XCTAssertEqual(hQubits, [OpenQASMArgument(name: "q", index: 0)])
+        guard case .gateCall(let cxName, _, let cxQubits, _) = body[1] else {
+            return XCTFail("Expected cx in braced if body")
+        }
+        XCTAssertEqual(cxName, "cx")
+        XCTAssertEqual(cxQubits, [
+            OpenQASMArgument(name: "q", index: 0),
+            OpenQASMArgument(name: "q", index: 1),
+        ])
     }
 
     // MARK: - Gate decl

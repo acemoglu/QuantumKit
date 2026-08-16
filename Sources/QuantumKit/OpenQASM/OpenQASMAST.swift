@@ -66,10 +66,10 @@ public indirect enum OpenQASMStatement: Equatable, Sendable {
     case reset(qubits: [OpenQASMArgument], location: SourceLocation)
     /// `barrier;` or `barrier qubits;` — empty qubit list means all qubits.
     case barrier(qubits: [OpenQASMArgument], location: SourceLocation)
-    /// OpenQASM 2-style `if (c == imm) <statement>;`
+    /// `if (c == imm) <statement>;` or `if (c == imm) { … }` (one or more body statements).
     case ifStatement(
         condition: OpenQASMCondition,
-        body: OpenQASMStatement,
+        body: [OpenQASMStatement],
         location: SourceLocation
     )
     /// OpenQASM 3 `while (cond) { ... }`
