@@ -62,12 +62,16 @@ public struct OpenQASMImporterOptions: Equatable, Sendable {
 /// bit offset; `if (d == 1)` uses `classicalRegister` index `1`.
 ///
 /// ## Coverage
-/// qreg / creg, builtin `include "qelib1.inc"`, measure / reset / barrier, the
-/// qelib1 gate map in ``OpenQASMQelib1`` including numeric-angle parametric gates
+/// OpenQASM 2 support = language core + full `qelib1.inc`; not arbitrary includes / opaque.
+///
+/// qreg / creg, builtin `include "qelib1.inc"` (embedded source registered into the
+/// user-gate table), measure / reset / barrier, the qelib1 fast-path map in
+/// ``OpenQASMQelib1/mappedGateNames`` including numeric-angle parametric gates
 /// (`u`/`u1`/`u2`/`u3`, `p`, `rx`/`ry`/`rz`, `crx`/`cry`/`crz`/`cp`/`cu1`, `cswap`),
 /// decompositions for `ch` / `cy`, and `mcx` / `mcz` → ``Gate/mcx`` / ``Gate/mcz``
-/// (2-control `mcx` → ``Gate/ccx``), OpenQASM 2 `if (creg == imm) <stmt>` lowered via
-/// ``Gate/c_if``, and user-defined `gate` expand/inline (numeric params, recursive nesting).
+/// (2-control `mcx` → ``Gate/ccx``). Remaining qelib1 gates expand from the embedded
+/// definitions. OpenQASM 2 `if (creg == imm) <stmt>` lowers via ``Gate/c_if``, and
+/// user-defined `gate` expand/inline (numeric params, recursive nesting).
 /// Angle expressions evaluate `pi` and arithmetic; formal gate parameters are
 /// substituted during expansion. `opaque`, `while`, and non-qelib1 includes
 /// are rejected with ``OpenQASMError``. OpenQASM 3 `qubit`/`bit` declarations
@@ -280,6 +284,31 @@ private final class LoweringContext {
 
     // MARK: Declarations
 
+    /// Registers every `gate` from the embedded ``OpenQASMQelib1/source`` into
+    /// ``userGates`` (idempotent). Mapped builtins still take precedence on call.
+    private func registerEmbeddedQelib1(at location: SourceLocation) throws {
+        if qelib1Available { return }
+        qelib1Available = true
+        for decl in OpenQASMQelib1.embeddedGateDeclarations {
+            if userGates[decl.name] != nil {
+                throw OpenQASMError.semanticError(
+                    line: location.line,
+                    column: location.column,
+                    message: "Gate '\(decl.name)' from qelib1.inc conflicts with an existing declaration"
+                )
+            }
+            // Allow registering names that also exist in mappedGateNames; the
+            // mapped fast-path wins in ``lowerGateCallToGates``.
+            userGates[decl.name] = UserGateDefinition(
+                name: decl.name,
+                params: decl.params,
+                qubits: decl.qubits,
+                body: decl.body,
+                location: decl.location
+            )
+        }
+    }
+
     private func collectDeclarations(_ statement: OpenQASMStatement) throws {
         switch statement {
         case .version, .empty, .gateCall, .measure, .reset, .barrier:
@@ -287,7 +316,7 @@ private final class LoweringContext {
 
         case .include(let path, let location):
             if OpenQASMQelib1.isBuiltinInclude(path) {
-                qelib1Available = true
+                try registerEmbeddedQelib1(at: location)
             } else {
                 throw OpenQASMError.unsupported(
                     line: location.line,

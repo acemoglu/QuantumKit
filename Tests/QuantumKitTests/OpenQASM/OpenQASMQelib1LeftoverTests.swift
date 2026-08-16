@@ -129,25 +129,39 @@ extension QuantumKitTests {
         XCTAssertEqual(Double(value), Double.pi / 2, accuracy: 1e-5)
     }
 
-    // MARK: - Still rejected leftovers
+    // MARK: - Expanded qelib1 leftovers (via embedded include)
 
-    func testOpenQASM2ImporterUnknownQelib1StyleGateStillFails() {
+    func testOpenQASM2ImporterRZZExpandsFromEmbeddedQelib1() throws {
         let source = """
         OPENQASM 2.0;
         include "qelib1.inc";
-        qreg q[1];
-        rzz(0.1) q[0],q[0];
+        qreg q[2];
+        rzz(0.1) q[0],q[1];
         """
-        // rzz is not in the mapped set; importer should hard-error (even if arity is wrong).
-        XCTAssertThrowsError(try OpenQASM2Importer().`import`(source: source)) { error in
-            guard case OpenQASMError.semanticError(_, _, let message) = error else {
-                return XCTFail("Expected semanticError, got \(error)")
-            }
-            XCTAssertTrue(
-                message.contains("Unknown or unmapped") || message.contains("expects"),
-                message
-            )
+        let circuit = try OpenQASM2Importer().`import`(source: source)
+        // rzz(θ) a,b { cx a,b; u1(θ) b; cx a,b; } — u1 → Gate.p
+        XCTAssertEqual(circuit.gates.count, 3)
+        XCTAssertEqual(circuit.gates[0], .cx(control: 0, target: 1))
+        guard case .p(let theta, let target) = circuit.gates[1] else {
+            return XCTFail("Expected u1→p in rzz expansion")
         }
+        XCTAssertEqual(target, 1)
+        guard case .literal(let value) = theta else {
+            return XCTFail("Expected literal angle")
+        }
+        XCTAssertEqual(Double(value), 0.1, accuracy: 1e-5)
+        XCTAssertEqual(circuit.gates[2], .cx(control: 0, target: 1))
+    }
+
+    func testOpenQASM2ImporterCU3ExpandsFromEmbeddedQelib1() throws {
+        let source = """
+        OPENQASM 2.0;
+        include "qelib1.inc";
+        qreg q[2];
+        cu3(pi/2,0,0) q[0],q[1];
+        """
+        let circuit = try OpenQASM2Importer().`import`(source: source)
+        XCTAssertFalse(circuit.gates.isEmpty)
     }
 
     func testOpenQASM2ImporterMCXTooFewQubitsFails() {
