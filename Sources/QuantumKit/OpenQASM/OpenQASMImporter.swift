@@ -24,13 +24,14 @@ public struct OpenQASM2ImporterOptions: Equatable, Sendable {
 /// `classicalRegisters[1].bitCount == 1`. Measure targets the creg index plus
 /// bit offset; `if (d == 1)` uses `classicalRegister` index `1`.
 ///
-/// ## Slice 05 coverage
+/// ## Slice 06 coverage
 /// qreg / creg, builtin `include "qelib1.inc"`, measure / reset / barrier, the
 /// qelib1 gate map in ``OpenQASMQelib1`` including numeric-angle parametric gates
 /// (`u`/`u1`/`u2`/`u3`, `p`, `rx`/`ry`/`rz`, `crx`/`cry`/`crz`/`cp`, `cswap`),
-/// and OpenQASM 2 `if (creg == imm) <stmt>` lowered via ``Gate/c_if``.
-/// Angle expressions evaluate `pi` and arithmetic; symbolic gate params are not
-/// inlined yet. `opaque`, user gate expansion, `while`, and non-qelib1 includes
+/// OpenQASM 2 `if (creg == imm) <stmt>` lowered via ``Gate/c_if``, and
+/// user-defined `gate` expand/inline (numeric params, recursive nesting).
+/// Angle expressions evaluate `pi` and arithmetic; formal gate parameters are
+/// substituted during expansion. `opaque`, `while`, and non-qelib1 includes
 /// are rejected with ``OpenQASMError``.
 public struct OpenQASM2Importer: Sendable {
     public var options: OpenQASM2ImporterOptions
@@ -66,6 +67,15 @@ private struct RegisterBinding: Equatable {
     var isClassical: Bool
 }
 
+/// Stored user-defined OpenQASM 2 gate (`gate name(params) qubits { body }`).
+private struct UserGateDefinition: Equatable {
+    var name: String
+    var params: [String]
+    var qubits: [String]
+    var body: [OpenQASMStatement]
+    var location: SourceLocation
+}
+
 private final class LoweringContext {
     let program: OpenQASMProgram
     var qelib1Available = false
@@ -73,8 +83,12 @@ private final class LoweringContext {
     var classicalRegs: [String: RegisterBinding] = [:]
     var classicalSpecs: [ClassicalRegisterSpec] = []
     var qubitCount = 0
-    /// Names from `gate` declarations (bodies not expanded in this slice).
-    var declaredUserGates: Set<String> = []
+    /// User-defined gates collected in the declaration pass (expanded on call).
+    var userGates: [String: UserGateDefinition] = [:]
+    /// Formal parameter → numeric value while expanding a user gate body.
+    var activeParamBindings: [String: Double] = [:]
+    /// Gate names currently being expanded (cycle detection).
+    var expansionStack: Set<String> = []
 
     init(program: OpenQASMProgram) {
         self.program = program
@@ -140,7 +154,7 @@ private final class LoweringContext {
                 message: "OpenQASM 2 importer does not accept qubit/bit declarations yet"
             )
 
-        case .gateDecl(let name, _, _, _, let location):
+        case .gateDecl(let name, let params, let qubits, let body, let location):
             if OpenQASMQelib1.mappedGateNames.contains(name) {
                 throw OpenQASMError.semanticError(
                     line: location.line,
@@ -148,15 +162,28 @@ private final class LoweringContext {
                     message: "Cannot redefine builtin gate '\(name)'"
                 )
             }
-            // Record for later expansion (slice 06); calls still error in this slice.
-            declaredUserGates.insert(name)
+            if userGates[name] != nil {
+                throw OpenQASMError.semanticError(
+                    line: location.line,
+                    column: location.column,
+                    message: "Gate '\(name)' is already declared"
+                )
+            }
+            try validateUserGateBody(body, gateName: name)
+            userGates[name] = UserGateDefinition(
+                name: name,
+                params: params,
+                qubits: qubits,
+                body: body,
+                location: location
+            )
 
         case .opaqueDecl(_, _, _, let location):
             throw OpenQASMError.unsupported(
                 line: location.line,
                 column: location.column,
                 feature: "opaque",
-                message: "opaque declarations are not supported yet"
+                message: "opaque gates are not supported"
             )
 
         case .ifStatement:
@@ -321,28 +348,12 @@ private final class LoweringContext {
     ) throws -> [Gate] {
         switch statement {
         case .gateCall(let name, let params, let qubits, let location):
-            if declaredUserGates.contains(name) {
-                throw OpenQASMError.unsupported(
-                    line: location.line,
-                    column: location.column,
-                    feature: name,
-                    message: "User-defined gate '\(name)' is declared but not expanded yet"
-                )
-            }
-            guard OpenQASMQelib1.mappedGateNames.contains(name) else {
-                throw OpenQASMError.semanticError(
-                    line: location.line,
-                    column: location.column,
-                    message: "Unknown or unmapped gate '\(name)'"
-                )
-            }
-            let gate = try mapBuiltinGate(
+            return try lowerGateCallToGates(
                 name: name,
                 params: params,
                 qubits: qubits,
                 location: location
             )
-            return [gate]
 
         case .measure(let qubits, let classical, let location):
             return [try buildMeasureGate(qubits: qubits, classical: classical, location: location)]
@@ -400,16 +411,64 @@ private final class LoweringContext {
         location: SourceLocation,
         to circuit: inout QuantumCircuit
     ) throws {
-        if declaredUserGates.contains(name) {
-            throw OpenQASMError.unsupported(
-                line: location.line,
-                column: location.column,
-                feature: name,
-                message: "User-defined gate '\(name)' is declared but not expanded yet"
+        // qelib1 builtins may be used without an explicit include (common in tests);
+        // include still marks availability for tooling.
+        _ = qelib1Available
+
+        let gates = try lowerGateCallToGates(
+            name: name,
+            params: params,
+            qubits: qubits,
+            location: location
+        )
+        for gate in gates {
+            try applyGate(gate, location: location, to: &circuit)
+        }
+    }
+
+    // MARK: - Gate call lowering / user-gate expand
+
+    /// Lowers a gate call to one or more ``Gate`` values (builtin map or user expand).
+    private func lowerGateCallToGates(
+        name: String,
+        params: [OpenQASMExpr],
+        qubits: [OpenQASMArgument],
+        location: SourceLocation
+    ) throws -> [Gate] {
+        if OpenQASMQelib1.mappedGateNames.contains(name) {
+            return [
+                try mapBuiltinGate(
+                    name: name,
+                    params: params,
+                    qubits: qubits,
+                    location: location
+                )
+            ]
+        }
+        if userGates[name] != nil {
+            return try expandUserGate(
+                name: name,
+                params: params,
+                qubits: qubits,
+                location: location
             )
         }
+        throw OpenQASMError.semanticError(
+            line: location.line,
+            column: location.column,
+            message: "Unknown or unmapped gate '\(name)'"
+        )
+    }
 
-        guard OpenQASMQelib1.mappedGateNames.contains(name) else {
+    /// Inlines a user-defined gate: bind numeric params and formal qubits, then
+    /// recursively expand the body (wrapping under `if` yields one gate per body gate).
+    private func expandUserGate(
+        name: String,
+        params: [OpenQASMExpr],
+        qubits: [OpenQASMArgument],
+        location: SourceLocation
+    ) throws -> [Gate] {
+        guard let definition = userGates[name] else {
             throw OpenQASMError.semanticError(
                 line: location.line,
                 column: location.column,
@@ -417,24 +476,230 @@ private final class LoweringContext {
             )
         }
 
-        // qelib1 builtins may be used without an explicit include (common in tests);
-        // include still marks availability for tooling.
-        _ = qelib1Available
-
-        let gate = try mapBuiltinGate(
-            name: name,
-            params: params,
-            qubits: qubits,
-            location: location
-        )
-        do {
-            try circuit.apply(gate)
-        } catch {
+        if expansionStack.contains(name) {
             throw OpenQASMError.semanticError(
                 line: location.line,
                 column: location.column,
-                message: "Failed to apply gate '\(name)': \(error)"
+                message: "Recursive expansion of gate '\(name)'"
             )
+        }
+
+        guard params.count == definition.params.count else {
+            throw OpenQASMError.semanticError(
+                line: location.line,
+                column: location.column,
+                message: "Gate '\(name)' expects \(definition.params.count) parameter(s), got \(params.count)"
+            )
+        }
+        guard qubits.count == definition.qubits.count else {
+            throw OpenQASMError.semanticError(
+                line: location.line,
+                column: location.column,
+                message: "Gate '\(name)' expects \(definition.qubits.count) qubit argument(s), got \(qubits.count)"
+            )
+        }
+
+        var paramBindings: [String: Double] = [:]
+        for (formal, expr) in zip(definition.params, params) {
+            paramBindings[formal] = try evaluateNumeric(expr, location: location)
+        }
+
+        var qubitBindings: [String: Int] = [:]
+        for (formal, arg) in zip(definition.qubits, qubits) {
+            let indices = try resolveQubitIndices(arg, location: location)
+            guard indices.count == 1 else {
+                throw OpenQASMError.semanticError(
+                    line: location.line,
+                    column: location.column,
+                    message: "Gate '\(name)' expects indexed qubits, not whole registers"
+                )
+            }
+            qubitBindings[formal] = indices[0]
+        }
+
+        expansionStack.insert(name)
+        defer { expansionStack.remove(name) }
+
+        let savedParams = activeParamBindings
+        activeParamBindings = paramBindings
+        defer { activeParamBindings = savedParams }
+
+        return try withTemporaryQubitBindings(qubitBindings) {
+            var gates: [Gate] = []
+            for statement in definition.body {
+                gates.append(contentsOf: try lowerUserGateBodyStatement(
+                    statement,
+                    gateName: name
+                ))
+            }
+            return gates
+        }
+    }
+
+    private func lowerUserGateBodyStatement(
+        _ statement: OpenQASMStatement,
+        gateName: String
+    ) throws -> [Gate] {
+        switch statement {
+        case .gateCall(let name, let params, let qubits, let location):
+            return try lowerGateCallToGates(
+                name: name,
+                params: params,
+                qubits: qubits,
+                location: location
+            )
+
+        case .empty:
+            return []
+
+        case .measure(_, _, let location):
+            throw OpenQASMError.unsupported(
+                line: location.line,
+                column: location.column,
+                feature: "measure",
+                message: "measure is not allowed inside gate '\(gateName)' body"
+            )
+
+        case .reset(_, let location):
+            throw OpenQASMError.unsupported(
+                line: location.line,
+                column: location.column,
+                feature: "reset",
+                message: "reset is not allowed inside gate '\(gateName)' body"
+            )
+
+        case .barrier(_, let location):
+            throw OpenQASMError.unsupported(
+                line: location.line,
+                column: location.column,
+                feature: "barrier",
+                message: "barrier is not allowed inside gate '\(gateName)' body"
+            )
+
+        case .ifStatement(_, _, let location):
+            throw OpenQASMError.unsupported(
+                line: location.line,
+                column: location.column,
+                feature: "if",
+                message: "if is not allowed inside gate '\(gateName)' body"
+            )
+
+        case .whileStatement(_, _, let location):
+            throw OpenQASMError.unsupported(
+                line: location.line,
+                column: location.column,
+                feature: "while",
+                message: "while is not allowed inside gate '\(gateName)' body"
+            )
+
+        case .version, .include, .qreg, .creg, .qubitDecl, .bitDecl, .gateDecl, .opaqueDecl:
+            throw OpenQASMError.unsupported(
+                line: statementLocation(statement).line,
+                column: statementLocation(statement).column,
+                feature: "gate body",
+                message: "Only unitary gate calls are allowed inside gate '\(gateName)' body"
+            )
+        }
+    }
+
+    private func validateUserGateBody(_ body: [OpenQASMStatement], gateName: String) throws {
+        for statement in body {
+            switch statement {
+            case .gateCall, .empty:
+                continue
+            case .measure(_, _, let location):
+                throw OpenQASMError.unsupported(
+                    line: location.line,
+                    column: location.column,
+                    feature: "measure",
+                    message: "measure is not allowed inside gate '\(gateName)' body"
+                )
+            case .reset(_, let location):
+                throw OpenQASMError.unsupported(
+                    line: location.line,
+                    column: location.column,
+                    feature: "reset",
+                    message: "reset is not allowed inside gate '\(gateName)' body"
+                )
+            case .barrier(_, let location):
+                throw OpenQASMError.unsupported(
+                    line: location.line,
+                    column: location.column,
+                    feature: "barrier",
+                    message: "barrier is not allowed inside gate '\(gateName)' body"
+                )
+            case .ifStatement(_, _, let location):
+                throw OpenQASMError.unsupported(
+                    line: location.line,
+                    column: location.column,
+                    feature: "if",
+                    message: "if is not allowed inside gate '\(gateName)' body"
+                )
+            case .whileStatement(_, _, let location):
+                throw OpenQASMError.unsupported(
+                    line: location.line,
+                    column: location.column,
+                    feature: "while",
+                    message: "while is not allowed inside gate '\(gateName)' body"
+                )
+            case .version, .include, .qreg, .creg, .qubitDecl, .bitDecl, .gateDecl, .opaqueDecl:
+                let loc = statementLocation(statement)
+                throw OpenQASMError.unsupported(
+                    line: loc.line,
+                    column: loc.column,
+                    feature: "gate body",
+                    message: "Only unitary gate calls are allowed inside gate '\(gateName)' body"
+                )
+            }
+        }
+    }
+
+    /// Temporarily maps formal qubit names to single-wire bindings at bound global indices.
+    private func withTemporaryQubitBindings<T>(
+        _ bindings: [String: Int],
+        _ body: () throws -> T
+    ) rethrows -> T {
+        var saved: [String: RegisterBinding?] = [:]
+        for (name, index) in bindings {
+            saved[name] = qubitRegs[name]
+            qubitRegs[name] = RegisterBinding(
+                name: name,
+                size: 1,
+                base: index,
+                isClassical: false
+            )
+        }
+        defer {
+            for (name, previous) in saved {
+                if let previous {
+                    qubitRegs[name] = previous
+                } else {
+                    qubitRegs.removeValue(forKey: name)
+                }
+            }
+        }
+        return try body()
+    }
+
+    private func statementLocation(_ statement: OpenQASMStatement) -> SourceLocation {
+        switch statement {
+        case .version:
+            return SourceLocation(line: 1, column: 1)
+        case .include(_, let location),
+             .qreg(_, _, let location),
+             .creg(_, _, let location),
+             .qubitDecl(_, _, let location),
+             .bitDecl(_, _, let location),
+             .gateDecl(_, _, _, _, let location),
+             .opaqueDecl(_, _, _, let location),
+             .gateCall(_, _, _, let location),
+             .measure(_, _, let location),
+             .reset(_, let location),
+             .barrier(_, let location),
+             .ifStatement(_, _, let location),
+             .whileStatement(_, _, let location),
+             .empty(let location):
+            return location
         }
     }
 
@@ -583,6 +848,9 @@ private final class LoweringContext {
         case .float(let value):
             return value
         case .identifier(let name):
+            if let bound = activeParamBindings[name] {
+                return bound
+            }
             switch name {
             case "pi", "π":
                 return Double.pi
