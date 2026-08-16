@@ -197,7 +197,8 @@ public final class CPUStatevectorBackend: QuantumBackend, @unchecked Sendable {
                     circuit: circuit,
                     options: options,
                     started: started,
-                    method: .statevector
+                    method: .statevector,
+                    cumulativeGlobalPhaseRadians: execution.cumulativeGlobalPhaseRadians
                 ),
                 execution: execution
             )
@@ -320,7 +321,8 @@ func makeCPUMetadata(
     circuit: QuantumCircuit,
     options: QuantumRunOptions,
     started: DispatchTime,
-    method: QuantumSimulationMethod
+    method: QuantumSimulationMethod,
+    cumulativeGlobalPhaseRadians: Double? = nil
 ) -> QuantumResultMetadata {
     makeMetadata(
         circuit: circuit,
@@ -328,6 +330,7 @@ func makeCPUMetadata(
         started: started,
         method: method,
         deviceName: "CPU",
-        isCPU: true
+        isCPU: true,
+        cumulativeGlobalPhaseRadians: cumulativeGlobalPhaseRadians
     )
 }

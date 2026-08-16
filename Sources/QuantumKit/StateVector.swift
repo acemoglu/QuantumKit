@@ -40,6 +40,11 @@ public final class StateVector {
     /// Package-internal imaginary-amplitude storage (engine / measure only).
     let metalImagBuffer: MTLBuffer
 
+    /// Cumulative global phase \(\Phi\) in radians from unitary pieces applied to this state.
+    ///
+    /// See ``GlobalPhaseTracking``. Metadata only — Born probabilities ignore this value.
+    public private(set) var cumulativeGlobalPhaseRadians: Double = 0
+
     /// Creates a GPU state vector via ``MetalRuntime/sharedDevice()`` (no caller Metal imports).
     public convenience init(qubitCount: Int) throws {
         try self.init(qubitCount: qubitCount, on: MetalRuntime.sharedDevice())
@@ -89,6 +94,16 @@ public final class StateVector {
         realPointer.update(repeating: 0, count: stateCount)
         imagPointer.update(repeating: 0, count: stateCount)
         realPointer[0] = 1.0
+        cumulativeGlobalPhaseRadians = 0
+    }
+
+    /// Sets the cumulative global-phase metadata (radians). Does not modify amplitudes.
+    public func setCumulativeGlobalPhaseRadians(_ phase: Double) {
+        cumulativeGlobalPhaseRadians = phase
+    }
+
+    func accumulateGlobalPhase(of gate: Gate) throws {
+        cumulativeGlobalPhaseRadians += try GlobalPhaseTracking.contribution(of: gate)
     }
 
     /// Copies amplitudes from shared Metal buffers into a host snapshot.
@@ -104,7 +119,12 @@ public final class StateVector {
             real[index] = realPointer[index]
             imag[index] = imagPointer[index]
         }
-        return StateVectorSnapshot(qubitCount: qubitCount, real: real, imag: imag)
+        return StateVectorSnapshot(
+            qubitCount: qubitCount,
+            real: real,
+            imag: imag,
+            cumulativeGlobalPhaseRadians: cumulativeGlobalPhaseRadians
+        )
     }
 
     /// Writes a prior ``snapshotHostAmplitudes()`` back into the shared buffers (host-side only).
@@ -121,5 +141,6 @@ public final class StateVector {
             realPointer[index] = snapshot.real[index]
             imagPointer[index] = snapshot.imag[index]
         }
+        cumulativeGlobalPhaseRadians = snapshot.cumulativeGlobalPhaseRadians
     }
 }

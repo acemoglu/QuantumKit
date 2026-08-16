@@ -11,16 +11,22 @@ public struct CircuitExecutionResult: Sendable, Equatable {
     /// Unitary-piece counter used for renormalization cadence on Metal and CPU. Measure, reset,
     /// barrier, delay, `id`, and the `c_if` wrapper do not increment this.
     public let unitaryRenormCount: Int?
+    /// Cumulative global phase \(\Phi\) in radians after this SV evolve slice, when tracked.
+    ///
+    /// See ``GlobalPhaseTracking``. Nil on density-matrix / MPS / stabilizer engines.
+    public let cumulativeGlobalPhaseRadians: Double?
 
     public init(
         measurementOutcomes: [[Int]],
         classicalMemory: ClassicalMemory = ClassicalMemory(),
         appliedGateCount: Int = 0,
-        unitaryRenormCount: Int? = nil
+        unitaryRenormCount: Int? = nil,
+        cumulativeGlobalPhaseRadians: Double? = nil
     ) {
         self.measurementOutcomes = measurementOutcomes
         self.classicalMemory = classicalMemory
         self.appliedGateCount = appliedGateCount
         self.unitaryRenormCount = unitaryRenormCount
+        self.cumulativeGlobalPhaseRadians = cumulativeGlobalPhaseRadians
     }
 }

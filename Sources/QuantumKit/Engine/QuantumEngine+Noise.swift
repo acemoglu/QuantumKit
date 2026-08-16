@@ -30,18 +30,18 @@ extension QuantumEngine {
 
         case 1:
             guard rng.nextUnitFloat() < probability else { return }
-            try executeUnitaryGate(randomSingleQubitPauli(on: qubits[0], rng: &rng), on: state)
+            try executeUnitaryGateIgnoringGlobalPhase(randomSingleQubitPauli(on: qubits[0], rng: &rng), on: state)
 
         case 2:
             guard rng.nextUnitFloat() < probability else { return }
             for pauli in randomTwoQubitPauli(on: qubits[0], and: qubits[1], rng: &rng) {
-                try executeUnitaryGate(pauli, on: state)
+                try executeUnitaryGateIgnoringGlobalPhase(pauli, on: state)
             }
 
         default:
             for qubit in qubits {
                 guard rng.nextUnitFloat() < probability else { continue }
-                try executeUnitaryGate(randomSingleQubitPauli(on: qubit, rng: &rng), on: state)
+                try executeUnitaryGateIgnoringGlobalPhase(randomSingleQubitPauli(on: qubit, rng: &rng), on: state)
             }
         }
     }

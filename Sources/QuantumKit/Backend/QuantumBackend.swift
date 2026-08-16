@@ -64,6 +64,11 @@ public struct QuantumResultMetadata: Codable, Sendable, Equatable {
     public let pipelineHash: String?
     /// Present when ``QuantumRunOptions/profiling`` is enabled. Nil otherwise.
     public let profile: SimulationProfile?
+    /// Cumulative global phase \(\Phi\) in radians from SV unitary evolution, when tracked.
+    ///
+    /// See ``GlobalPhaseTracking``. Nil for density-matrix / MPS / stabilizer runs and for
+    /// shot-only paths that do not retain evolve metadata. Not a physical observable.
+    public let cumulativeGlobalPhaseRadians: Double?
 
     public init(
         quantumKitVersion: String = QuantumKitInfo.version,
@@ -75,7 +80,8 @@ public struct QuantumResultMetadata: Codable, Sendable, Equatable {
         gateCount: Int,
         noiseSnapshot: NoiseModel?,
         pipelineHash: String? = nil,
-        profile: SimulationProfile? = nil
+        profile: SimulationProfile? = nil,
+        cumulativeGlobalPhaseRadians: Double? = nil
     ) {
         self.quantumKitVersion = quantumKitVersion
         self.method = method
@@ -87,6 +93,7 @@ public struct QuantumResultMetadata: Codable, Sendable, Equatable {
         self.noiseSnapshot = noiseSnapshot
         self.pipelineHash = pipelineHash
         self.profile = profile
+        self.cumulativeGlobalPhaseRadians = cumulativeGlobalPhaseRadians
     }
 }
 
@@ -244,7 +251,8 @@ public final class StatevectorBackend: QuantumBackend, @unchecked Sendable {
                 metadata: makeMetadata(
                     circuit: circuit,
                     options: options,
-                    started: started
+                    started: started,
+                    cumulativeGlobalPhaseRadians: execution.cumulativeGlobalPhaseRadians
                 ),
                 execution: execution
             )
@@ -352,7 +360,8 @@ func makeMetadata(
     started: DispatchTime,
     method: QuantumSimulationMethod = .statevector,
     deviceName: String? = nil,
-    isCPU: Bool = false
+    isCPU: Bool = false,
+    cumulativeGlobalPhaseRadians: Double? = nil
 ) -> QuantumResultMetadata {
     let elapsed = DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds
     return QuantumResultMetadata(
@@ -370,6 +379,7 @@ func makeMetadata(
             method: method,
             isCPU: isCPU,
             elapsed: elapsed
-        )
+        ),
+        cumulativeGlobalPhaseRadians: cumulativeGlobalPhaseRadians
     )
 }

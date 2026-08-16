@@ -543,6 +543,9 @@ public final class QuantumEngine: @unchecked Sendable {
             ?? ClassicalMemory(
             registerWidths: circuit.classicalRegisters.map(\.bitCount)
         )
+        if let seededPhase = runState.cumulativeGlobalPhaseRadians {
+            state.setCumulativeGlobalPhaseRadians(seededPhase)
+        }
 
         func flushPendingUnitaryGates() throws {
             try flushUnitaryGates(
@@ -619,7 +622,8 @@ public final class QuantumEngine: @unchecked Sendable {
                         .x(target: qubit),
                         on: state,
                         gateCounter: &renormCounter,
-                        renormalize: true
+                        renormalize: true,
+                        trackGlobalPhase: false
                     )
                 }
 
@@ -680,7 +684,8 @@ public final class QuantumEngine: @unchecked Sendable {
                             .x(target: qubit),
                             on: state,
                             gateCounter: &renormCounter,
-                            renormalize: true
+                            renormalize: true,
+                            trackGlobalPhase: false
                         )
                     }
                 }
@@ -688,6 +693,7 @@ public final class QuantumEngine: @unchecked Sendable {
             case .customUnitary(let matrix, let qubits) where qubits.count > 1:
                 try flushPendingUnitaryGates()
                 try applyHostCustomUnitary(matrix, qubits: qubits, on: state)
+                try state.accumulateGlobalPhase(of: gate)
                 renormCounter += 1
                 if shouldRenormalize(afterAppliedGateCount: renormCounter) {
                     try normalizeState(on: state)
@@ -733,7 +739,8 @@ public final class QuantumEngine: @unchecked Sendable {
             measurementOutcomes: measurementOutcomes,
             classicalMemory: classicalMemory,
             appliedGateCount: appliedGateCount,
-            unitaryRenormCount: renormCounter
+            unitaryRenormCount: renormCounter,
+            cumulativeGlobalPhaseRadians: state.cumulativeGlobalPhaseRadians
         )
     }
 

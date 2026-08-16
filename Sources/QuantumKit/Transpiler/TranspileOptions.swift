@@ -4,7 +4,7 @@ import Foundation
 ///
 /// Existing call sites that only pass a ``BasisGateSet`` keep the prior basis-only behavior.
 /// Set `couplingMap` to enable the device-aware pipeline:
-/// `validate → algebraic opt? → clifford/local? → unroll → route(+layout) → basis → schedule?`.
+/// `validate → algebraic opt? → clifford/local? → fusion? → templates? → unroll → route(+layout) → basis → schedule?`.
 ///
 /// ## Optimization levels
 /// - `0`: validate + basis translate (legacy). With a coupling map, still routes (unroll → route → basis).
@@ -12,6 +12,9 @@ import Foundation
 ///   on circuits with cancellable identities.
 /// - `2+`: level 1 plus ``CliffordSimplificationPass`` and ``LocalUnitarySynthesisPass`` (before and
 ///   after basis translation). Measurably fewer gates/depth on Clifford / adjacent-rotation fixtures.
+///
+/// Opt-in flags (default off): ``enableGateFusion``, ``enableTemplateMatching`` (A6 lite exact
+/// catalog — not Solovay–Kitaev / J1).
 public struct TranspileOptions: Sendable, Equatable {
     public var targetBasis: BasisGateSet
     public var couplingMap: CouplingMap?
@@ -41,6 +44,11 @@ public struct TranspileOptions: Sendable, Equatable {
     /// rewrites user circuits. When enabled, runs after algebraic / Clifford / local synthesis
     /// so those passes can cancel / merge first; fusion then collapses remaining same-wire 1Q runs.
     public var enableGateFusion: Bool
+    /// Opt-in fixed-catalog multi-gate template rewrite (``TemplateMatchingPass``, A6 lite).
+    /// Default `false` — default transpile / optimization levels are unchanged. When enabled,
+    /// runs after algebraic / Clifford / local (and after fusion if that is also on). Exact
+    /// identities only; **not** Solovay–Kitaev / approximate synthesis (J1 deferred).
+    public var enableTemplateMatching: Bool
 
     public init(
         targetBasis: BasisGateSet = .ibmEagle,
@@ -55,7 +63,8 @@ public struct TranspileOptions: Sendable, Equatable {
         scheduling: SchedulingMethod? = nil,
         gateDurations: GateDurationTable = .uniform(1),
         preserveInstructionMetadata: Bool = false,
-        enableGateFusion: Bool = false
+        enableGateFusion: Bool = false,
+        enableTemplateMatching: Bool = false
     ) {
         self.targetBasis = targetBasis
         self.couplingMap = couplingMap
@@ -70,6 +79,7 @@ public struct TranspileOptions: Sendable, Equatable {
         self.gateDurations = gateDurations
         self.preserveInstructionMetadata = preserveInstructionMetadata
         self.enableGateFusion = enableGateFusion
+        self.enableTemplateMatching = enableTemplateMatching
     }
 
     /// Builds the ordered pass list for these options.
@@ -91,6 +101,9 @@ public struct TranspileOptions: Sendable, Equatable {
         }
         if enableGateFusion {
             passes.append(GateFusionPass())
+        }
+        if enableTemplateMatching {
+            passes.append(TemplateMatchingPass())
         }
 
         let unroll = UnrollMultiQubitPass(

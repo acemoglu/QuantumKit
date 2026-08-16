@@ -166,34 +166,71 @@ extension QuantumEngine {
 
     func executeUnitaryGate(_ gate: Gate, on state: StateVector) throws {
         var gateCounter = 0
-        try executeUnitaryGate(gate, on: state, gateCounter: &gateCounter)
+        try executeUnitaryGate(
+            gate,
+            on: state,
+            gateCounter: &gateCounter,
+            renormalize: true,
+            trackGlobalPhase: true
+        )
+    }
+
+    /// Applies a unitary without updating circuit \(\Phi\) (noise / reset helpers).
+    func executeUnitaryGateIgnoringGlobalPhase(_ gate: Gate, on state: StateVector) throws {
+        var gateCounter = 0
+        try executeUnitaryGate(
+            gate,
+            on: state,
+            gateCounter: &gateCounter,
+            renormalize: true,
+            trackGlobalPhase: false
+        )
     }
 
     func executeUnitaryGate(_ gate: Gate, on state: StateVector, gateCounter: inout Int) throws {
-        try executeUnitaryGate(gate, on: state, gateCounter: &gateCounter, renormalize: true)
+        try executeUnitaryGate(
+            gate,
+            on: state,
+            gateCounter: &gateCounter,
+            renormalize: true,
+            trackGlobalPhase: true
+        )
     }
 
     func executeUnitaryGate(
         _ gate: Gate,
         on state: StateVector,
         gateCounter: inout Int,
-        renormalize: Bool
+        renormalize: Bool,
+        trackGlobalPhase: Bool = true
     ) throws {
         if GateDecomposition.needsExecutionExpansion(gate) {
             let pieces = try Self.expandForExecution(gate)
             guard !pieces.isEmpty else { return }
-            try flushUnitaryGates(pieces, on: state, gateCounter: &gateCounter, renormalize: renormalize)
+            try flushUnitaryGates(
+                pieces,
+                on: state,
+                gateCounter: &gateCounter,
+                renormalize: renormalize,
+                trackGlobalPhase: trackGlobalPhase
+            )
             return
         }
 
         if case .unitary1(let matrix, let target) = gate {
             try applyHost1QUnitary(matrix, target: target, on: state)
+            if trackGlobalPhase {
+                try state.accumulateGlobalPhase(of: gate)
+            }
             gateCounter += 1
             return
         }
 
         if case .customUnitary(let matrix, let qubits) = gate, qubits.count == 1, let target = qubits.first {
             try applyGPU1QCustomUnitary(matrix, target: target, on: state)
+            if trackGlobalPhase {
+                try state.accumulateGlobalPhase(of: gate)
+            }
             gateCounter += 1
             return
         }
@@ -205,6 +242,9 @@ extension QuantumEngine {
         var scratch: RenormalizationScratch?
 
         try encodeUnitaryGate(gate, encoder: computeEncoder, state: state)
+        if trackGlobalPhase {
+            try state.accumulateGlobalPhase(of: gate)
+        }
         gateCounter += 1
         if renormalize, shouldRenormalize(afterAppliedGateCount: gateCounter) {
             let localScratch = try makeRenormalizationScratch(stateCount: state.stateCount)
@@ -233,18 +273,31 @@ extension QuantumEngine {
 
     func flushUnitaryGates(_ gates: [Gate], on state: StateVector) throws {
         var gateCounter = 0
-        try flushUnitaryGates(gates, on: state, gateCounter: &gateCounter, renormalize: true)
+        try flushUnitaryGates(
+            gates,
+            on: state,
+            gateCounter: &gateCounter,
+            renormalize: true,
+            trackGlobalPhase: true
+        )
     }
 
     func flushUnitaryGates(_ gates: [Gate], on state: StateVector, gateCounter: inout Int) throws {
-        try flushUnitaryGates(gates, on: state, gateCounter: &gateCounter, renormalize: true)
+        try flushUnitaryGates(
+            gates,
+            on: state,
+            gateCounter: &gateCounter,
+            renormalize: true,
+            trackGlobalPhase: true
+        )
     }
 
     func flushUnitaryGates(
         _ gates: [Gate],
         on state: StateVector,
         gateCounter: inout Int,
-        renormalize: Bool
+        renormalize: Bool,
+        trackGlobalPhase: Bool = true
     ) throws {
         guard !gates.isEmpty else { return }
 
@@ -261,6 +314,9 @@ extension QuantumEngine {
             var scratch: RenormalizationScratch?
             for piece in pendingGPU {
                 try encodeUnitaryGate(piece, encoder: computeEncoder, state: state)
+                if trackGlobalPhase {
+                    try state.accumulateGlobalPhase(of: piece)
+                }
                 gateCounter += 1
                 if renormalize, shouldRenormalize(afterAppliedGateCount: gateCounter) {
                     if scratch == nil {
@@ -293,12 +349,18 @@ extension QuantumEngine {
                 if case .unitary1(let matrix, let target) = piece {
                     try flushPendingGPU()
                     try applyHost1QUnitary(matrix, target: target, on: state)
+                    if trackGlobalPhase {
+                        try state.accumulateGlobalPhase(of: piece)
+                    }
                     gateCounter += 1
                     continue
                 }
                 if case .customUnitary(let matrix, let qubits) = piece, qubits.count > 1 {
                     try flushPendingGPU()
                     try applyHostCustomUnitary(matrix, qubits: qubits, on: state)
+                    if trackGlobalPhase {
+                        try state.accumulateGlobalPhase(of: piece)
+                    }
                     gateCounter += 1
                     continue
                 }

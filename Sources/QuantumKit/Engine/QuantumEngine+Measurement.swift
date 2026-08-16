@@ -92,7 +92,7 @@ extension QuantumEngine {
         )
 
         if outcome & 1 == 1 {
-            try executeUnitaryGate(.x(target: qubit), on: state)
+            try executeUnitaryGateIgnoringGlobalPhase(.x(target: qubit), on: state)
         }
     }
 

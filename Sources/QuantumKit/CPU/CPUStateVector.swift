@@ -24,6 +24,10 @@ public final class CPUStateVector: @unchecked Sendable {
     /// Interleaved computational-basis amplitudes as (real, imag) pairs promoted to Double.
     public private(set) var real: [Double]
     public private(set) var imag: [Double]
+    /// Cumulative global phase \(\Phi\) in radians from unitary pieces applied to this state.
+    ///
+    /// See ``GlobalPhaseTracking``. Metadata only — Born probabilities ignore this value.
+    public private(set) var cumulativeGlobalPhaseRadians: Double = 0
 
     public init(qubitCount: Int) throws {
         guard qubitCount > 0 else { throw CPUEngineError.invalidQubitCount(qubitCount) }
@@ -43,6 +47,16 @@ public final class CPUStateVector: @unchecked Sendable {
             imag[index] = 0
         }
         real[0] = 1
+        cumulativeGlobalPhaseRadians = 0
+    }
+
+    /// Sets the cumulative global-phase metadata (radians). Does not modify amplitudes.
+    public func setCumulativeGlobalPhaseRadians(_ phase: Double) {
+        cumulativeGlobalPhaseRadians = phase
+    }
+
+    func accumulateGlobalPhase(of gate: Gate) throws {
+        cumulativeGlobalPhaseRadians += try GlobalPhaseTracking.contribution(of: gate)
     }
 
     public func copy() -> CPUStateVector {
@@ -54,6 +68,7 @@ public final class CPUStateVector: @unchecked Sendable {
         }
         clone.real = real
         clone.imag = imag
+        clone.cumulativeGlobalPhaseRadians = cumulativeGlobalPhaseRadians
         return clone
     }
 
@@ -72,7 +87,12 @@ public final class CPUStateVector: @unchecked Sendable {
 
     /// Captures amplitudes without exposing mutable storage aliases.
     public func snapshot() -> CPUStateVectorSnapshot {
-        CPUStateVectorSnapshot(qubitCount: qubitCount, real: real, imag: imag)
+        CPUStateVectorSnapshot(
+            qubitCount: qubitCount,
+            real: real,
+            imag: imag,
+            cumulativeGlobalPhaseRadians: cumulativeGlobalPhaseRadians
+        )
     }
 
     /// Restores amplitudes from ``snapshot()``.
@@ -84,6 +104,7 @@ public final class CPUStateVector: @unchecked Sendable {
             throw CheckpointError.elementCountMismatch(expected: stateCount, actual: snapshot.real.count)
         }
         setAmplitudes(real: snapshot.real, imag: snapshot.imag)
+        cumulativeGlobalPhaseRadians = snapshot.cumulativeGlobalPhaseRadians
     }
 
     func setAmplitudes(real newReal: [Double], imag newImag: [Double]) {

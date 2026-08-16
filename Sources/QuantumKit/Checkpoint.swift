@@ -41,6 +41,9 @@ public struct CircuitRunState: Sendable, Equatable {
     /// wrapper do not increment this. Nested `c_if` bodies that apply unitaries do.
     /// When `nil` on resume, engines seed from ``appliedGateCount`` for backward compatibility.
     public var unitaryRenormCount: Int?
+    /// When non-`nil`, seeds ``CPUStateVector/cumulativeGlobalPhaseRadians`` /
+    /// ``StateVector/cumulativeGlobalPhaseRadians`` at the start of the slice.
+    public var cumulativeGlobalPhaseRadians: Double?
 
     public init(
         fromInstruction: Int = 0,
@@ -48,7 +51,8 @@ public struct CircuitRunState: Sendable, Equatable {
         classicalMemory: ClassicalMemory? = nil,
         measurementOutcomes: [[Int]] = [],
         appliedGateCount: Int = 0,
-        unitaryRenormCount: Int? = nil
+        unitaryRenormCount: Int? = nil,
+        cumulativeGlobalPhaseRadians: Double? = nil
     ) {
         self.fromInstruction = fromInstruction
         self.toInstruction = toInstruction
@@ -56,6 +60,7 @@ public struct CircuitRunState: Sendable, Equatable {
         self.measurementOutcomes = measurementOutcomes
         self.appliedGateCount = appliedGateCount
         self.unitaryRenormCount = unitaryRenormCount
+        self.cumulativeGlobalPhaseRadians = cumulativeGlobalPhaseRadians
     }
 
     /// Full-circuit execution from a fresh classical state.
@@ -69,7 +74,8 @@ public struct CircuitRunState: Sendable, Equatable {
             classicalMemory: checkpoint.classicalMemory,
             measurementOutcomes: checkpoint.measurementOutcomes,
             appliedGateCount: checkpoint.appliedGateCount,
-            unitaryRenormCount: checkpoint.unitaryRenormCount
+            unitaryRenormCount: checkpoint.unitaryRenormCount,
+            cumulativeGlobalPhaseRadians: checkpoint.cumulativeGlobalPhaseRadians
         )
     }
 }
@@ -83,19 +89,23 @@ public struct CircuitCheckpoint: Sendable, Equatable, Codable {
     public let appliedGateCount: Int
     /// Unitary-piece renorm counter at checkpoint time.
     public let unitaryRenormCount: Int?
+    /// SV cumulative global phase at checkpoint time (see ``GlobalPhaseTracking``).
+    public let cumulativeGlobalPhaseRadians: Double?
 
     public init(
         nextInstructionIndex: Int,
         classicalMemory: ClassicalMemory,
         measurementOutcomes: [[Int]],
         appliedGateCount: Int,
-        unitaryRenormCount: Int? = nil
+        unitaryRenormCount: Int? = nil,
+        cumulativeGlobalPhaseRadians: Double? = nil
     ) {
         self.nextInstructionIndex = nextInstructionIndex
         self.classicalMemory = classicalMemory
         self.measurementOutcomes = measurementOutcomes
         self.appliedGateCount = appliedGateCount
         self.unitaryRenormCount = unitaryRenormCount
+        self.cumulativeGlobalPhaseRadians = cumulativeGlobalPhaseRadians
     }
 
     public static func make(
@@ -107,7 +117,8 @@ public struct CircuitCheckpoint: Sendable, Equatable, Codable {
             classicalMemory: result.classicalMemory,
             measurementOutcomes: result.measurementOutcomes,
             appliedGateCount: result.appliedGateCount,
-            unitaryRenormCount: result.unitaryRenormCount
+            unitaryRenormCount: result.unitaryRenormCount,
+            cumulativeGlobalPhaseRadians: result.cumulativeGlobalPhaseRadians
         )
     }
 }
@@ -118,11 +129,29 @@ public struct StateVectorSnapshot: Sendable, Equatable, Codable {
     /// Real parts stored as Float32 to match Metal ``QFloat`` buffers without widening mutation APIs.
     public let real: [Float]
     public let imag: [Float]
+    /// Cumulative global phase \(\Phi\) in radians (see ``GlobalPhaseTracking``).
+    public let cumulativeGlobalPhaseRadians: Double
 
-    public init(qubitCount: Int, real: [Float], imag: [Float]) {
+    public init(
+        qubitCount: Int,
+        real: [Float],
+        imag: [Float],
+        cumulativeGlobalPhaseRadians: Double = 0
+    ) {
         self.qubitCount = qubitCount
         self.real = real
         self.imag = imag
+        self.cumulativeGlobalPhaseRadians = cumulativeGlobalPhaseRadians
+    }
+
+    /// Pre-B16 snapshots omit \(\Phi\); missing key decodes as `0`.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        qubitCount = try container.decode(Int.self, forKey: .qubitCount)
+        real = try container.decode([Float].self, forKey: .real)
+        imag = try container.decode([Float].self, forKey: .imag)
+        cumulativeGlobalPhaseRadians =
+            try container.decodeIfPresent(Double.self, forKey: .cumulativeGlobalPhaseRadians) ?? 0
     }
 }
 
@@ -144,11 +173,29 @@ public struct CPUStateVectorSnapshot: Sendable, Equatable, Codable {
     public let qubitCount: Int
     public let real: [Double]
     public let imag: [Double]
+    /// Cumulative global phase \(\Phi\) in radians (see ``GlobalPhaseTracking``).
+    public let cumulativeGlobalPhaseRadians: Double
 
-    public init(qubitCount: Int, real: [Double], imag: [Double]) {
+    public init(
+        qubitCount: Int,
+        real: [Double],
+        imag: [Double],
+        cumulativeGlobalPhaseRadians: Double = 0
+    ) {
         self.qubitCount = qubitCount
         self.real = real
         self.imag = imag
+        self.cumulativeGlobalPhaseRadians = cumulativeGlobalPhaseRadians
+    }
+
+    /// Pre-B16 snapshots omit \(\Phi\); missing key decodes as `0`.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        qubitCount = try container.decode(Int.self, forKey: .qubitCount)
+        real = try container.decode([Double].self, forKey: .real)
+        imag = try container.decode([Double].self, forKey: .imag)
+        cumulativeGlobalPhaseRadians =
+            try container.decodeIfPresent(Double.self, forKey: .cumulativeGlobalPhaseRadians) ?? 0
     }
 }
 

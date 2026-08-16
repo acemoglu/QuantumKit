@@ -54,6 +54,9 @@ public final class CPUStatevectorEngine: @unchecked Sendable {
         var renormTick = runState.unitaryRenormCount ?? runState.appliedGateCount
         var classicalMemory = runState.classicalMemory
             ?? ClassicalMemory(registerWidths: circuit.classicalRegisters.map(\.bitCount))
+        if let seededPhase = runState.cumulativeGlobalPhaseRadians {
+            state.setCumulativeGlobalPhaseRadians(seededPhase)
+        }
 
         func applyNoise(after gate: Gate) throws {
             guard noiseEnabled, let noise else { return }
@@ -78,10 +81,10 @@ public final class CPUStatevectorEngine: @unchecked Sendable {
             }
         }
 
-        func applyCircuitUnitary(_ gate: Gate) throws {
+        func applyCircuitUnitary(_ gate: Gate, trackGlobalPhase: Bool = true) throws {
             let pieces = try QuantumEngine.expandForExecution(gate)
             for piece in pieces {
-                try applyExpandedUnitary(piece, on: state)
+                try applyExpandedUnitary(piece, on: state, trackGlobalPhase: trackGlobalPhase)
                 renormTick += 1
                 if renormalizationInterval > 0, renormTick % renormalizationInterval == 0 {
                     try normalize(state)
@@ -118,7 +121,8 @@ public final class CPUStatevectorEngine: @unchecked Sendable {
                 try resetQubit(on: state, qubit: qubit, rng: &rng)
                 if let noise, noise.resetErrorProbability > 0,
                    rng.nextUnitFloat() < noise.resetErrorProbability {
-                    try applyCircuitUnitary(.x(target: qubit))
+                    // Stochastic error flip — not a circuit unitary; do not update Φ.
+                    try applyCircuitUnitary(.x(target: qubit), trackGlobalPhase: false)
                 }
 
             case .barrier:
@@ -148,7 +152,8 @@ public final class CPUStatevectorEngine: @unchecked Sendable {
                 try state.initialize(qubits: qubits, amplitudes: amplitudes)
                 if let noise, noise.preparationErrorProbability > 0 {
                     for qubit in qubits where rng.nextUnitFloat() < noise.preparationErrorProbability {
-                        try applyCircuitUnitary(.x(target: qubit))
+                        // Stochastic prep error — not a circuit unitary; do not update Φ.
+                        try applyCircuitUnitary(.x(target: qubit), trackGlobalPhase: false)
                     }
                 }
 
@@ -184,7 +189,8 @@ public final class CPUStatevectorEngine: @unchecked Sendable {
             measurementOutcomes: measurementOutcomes,
             classicalMemory: classicalMemory,
             appliedGateCount: appliedGateCount,
-            unitaryRenormCount: renormTick
+            unitaryRenormCount: renormTick,
+            cumulativeGlobalPhaseRadians: state.cumulativeGlobalPhaseRadians
         )
     }
 
@@ -193,11 +199,19 @@ public final class CPUStatevectorEngine: @unchecked Sendable {
     func applyUnitaryGate(_ gate: Gate, on state: CPUStateVector) throws {
         let pieces = try QuantumEngine.expandForExecution(gate)
         for piece in pieces {
-            try applyExpandedUnitary(piece, on: state)
+            // Noise / reset helpers — never fold into circuit Φ bookkeeping.
+            try applyExpandedUnitary(piece, on: state, trackGlobalPhase: false)
         }
     }
 
-    private func applyExpandedUnitary(_ gate: Gate, on state: CPUStateVector) throws {
+    private func applyExpandedUnitary(
+        _ gate: Gate,
+        on state: CPUStateVector,
+        trackGlobalPhase: Bool = false
+    ) throws {
+        if trackGlobalPhase {
+            try state.accumulateGlobalPhase(of: gate)
+        }
         switch gate {
         case .customUnitary(let matrix, let qubits):
             if qubits.count == 1, let target = qubits.first {
