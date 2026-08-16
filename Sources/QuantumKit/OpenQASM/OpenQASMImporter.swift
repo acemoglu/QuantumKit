@@ -9,7 +9,15 @@ public struct OpenQASM2ImporterOptions: Equatable, Sendable {
 
 /// Options for OpenQASM 3 → ``QuantumCircuit`` import.
 public struct OpenQASM3ImporterOptions: Equatable, Sendable {
-    public init() {}
+    /// Required for `while` → ``Gate/while_c`` unless overridden by a line pragma
+    /// `// @quantumkit.max_while_iterations N` immediately before the `while`.
+    ///
+    /// Must be `> 0` when used. See ``OpenQASMUnsupported/whileMaxIterationsPragmaPrefix``.
+    public var defaultWhileMaxIterations: Int?
+
+    public init(defaultWhileMaxIterations: Int? = nil) {
+        self.defaultWhileMaxIterations = defaultWhileMaxIterations
+    }
 }
 
 /// Options for version-dispatching ``OpenQASMImporter``.
@@ -60,18 +68,32 @@ public struct OpenQASM2Importer: Sendable {
 
     /// Lowers an already-parsed program to a circuit.
     public func `import`(program: OpenQASMProgram) throws -> QuantumCircuit {
-        try LoweringContext(program: program, dialect: .v2).lower()
+        try LoweringContext(
+            program: program,
+            dialect: .v2,
+            defaultWhileMaxIterations: nil,
+            whilePragmaBounds: [:]
+        ).lower()
     }
 }
 
 /// Lowers an OpenQASM 3 core-subset program into a ``QuantumCircuit``.
 ///
-/// ## Slice 08 coverage
+/// ## Coverage
 /// `OPENQASM 3` / `3.0`, `qubit` / `bit` (size omitted → 1), plus compatibility
 /// `qreg` / `creg`. Optional qelib1-style `include` only; gate calls reuse the
 /// same map as OpenQASM 2. `measure` / `reset` / `barrier` / `if` → ``Gate`` /
-/// ``Gate/c_if``. User `gate` expand is shared with the v2 path. `while`,
-/// `opaque`, `defcal`, and non-builtin includes are rejected.
+/// ``Gate/c_if``. User `gate` expand is shared with the v2 path.
+///
+/// ## Bounded while
+/// `while (creg == imm) { … }` lowers to ``Gate/while_c`` **only** when a positive
+/// `maxIterations` is available from ``OpenQASM3ImporterOptions/defaultWhileMaxIterations``
+/// or a preceding `// @quantumkit.max_while_iterations N` pragma (see
+/// ``OpenQASMUnsupported/whileMaxIterationsPragmaPrefix``). Nested `while` is allowed
+/// when each loop has a bound. Without a bound → ``OpenQASMError/unsupported``.
+///
+/// `opaque`, `defcal`, and other catalogued features are rejected (see
+/// ``OpenQASMUnsupportedFeature``).
 public struct OpenQASM3Importer: Sendable {
     public var options: OpenQASM3ImporterOptions
 
@@ -80,15 +102,32 @@ public struct OpenQASM3Importer: Sendable {
     }
 
     /// Parses `source` and lowers it to a circuit.
+    ///
+    /// Scans comment pragmas in `source` before parsing so per-`while` bounds
+    /// round-trip with ``OpenQASMExporter``.
     public func `import`(source: String) throws -> QuantumCircuit {
+        let pragmaBounds = OpenQASMWhilePragmaScanner.scan(source)
         var parser = try OpenQASMParser(source: source)
         let program = try parser.parse()
-        return try `import`(program: program)
+        return try LoweringContext(
+            program: program,
+            dialect: .v3,
+            defaultWhileMaxIterations: options.defaultWhileMaxIterations,
+            whilePragmaBounds: pragmaBounds
+        ).lower()
     }
 
     /// Lowers an already-parsed program to a circuit.
+    ///
+    /// Comment pragmas are not available without source text; only
+    /// ``OpenQASM3ImporterOptions/defaultWhileMaxIterations`` can bound `while`.
     public func `import`(program: OpenQASMProgram) throws -> QuantumCircuit {
-        try LoweringContext(program: program, dialect: .v3).lower()
+        try LoweringContext(
+            program: program,
+            dialect: .v3,
+            defaultWhileMaxIterations: options.defaultWhileMaxIterations,
+            whilePragmaBounds: [:]
+        ).lower()
     }
 }
 
@@ -153,6 +192,10 @@ private struct UserGateDefinition: Equatable {
 private final class LoweringContext {
     let program: OpenQASMProgram
     let dialect: LoweringDialect
+    /// File-level default for `while` → ``Gate/while_c`` (v3 only).
+    let defaultWhileMaxIterations: Int?
+    /// Line of `while` keyword → maxIterations from `// @quantumkit.max_while_iterations N`.
+    let whilePragmaBounds: [Int: Int]
     var qelib1Available = false
     var qubitRegs: [String: RegisterBinding] = [:]
     var classicalRegs: [String: RegisterBinding] = [:]
@@ -165,9 +208,16 @@ private final class LoweringContext {
     /// Gate names currently being expanded (cycle detection).
     var expansionStack: Set<String> = []
 
-    init(program: OpenQASMProgram, dialect: LoweringDialect) {
+    init(
+        program: OpenQASMProgram,
+        dialect: LoweringDialect,
+        defaultWhileMaxIterations: Int? = nil,
+        whilePragmaBounds: [Int: Int] = [:]
+    ) {
         self.program = program
         self.dialect = dialect
+        self.defaultWhileMaxIterations = defaultWhileMaxIterations
+        self.whilePragmaBounds = whilePragmaBounds
     }
 
     func lower() throws -> QuantumCircuit {
@@ -284,12 +334,17 @@ private final class LoweringContext {
             return
 
         case .whileStatement(_, _, let location):
-            throw OpenQASMError.unsupported(
-                line: location.line,
-                column: location.column,
-                feature: "while",
-                message: "while statements are not supported yet"
-            )
+            if dialect == .v2 {
+                throw OpenQASMError.unsupported(
+                    line: location.line,
+                    column: location.column,
+                    feature: OpenQASMUnsupportedFeature.whileUnbounded.rawValue,
+                    message: "while statements are not supported in OpenQASM 2 import"
+                )
+            }
+            // v3: validate bound exists; executable lowering in pass 2.
+            _ = try resolveWhileMaxIterations(at: location)
+            return
         }
     }
 
@@ -405,7 +460,7 @@ private final class LoweringContext {
         case .version, .empty, .include, .qreg, .creg, .qubitDecl, .bitDecl, .gateDecl:
             return
 
-        case .opaqueDecl, .whileStatement:
+        case .opaqueDecl:
             // Already rejected in collectDeclarations.
             return
 
@@ -423,6 +478,14 @@ private final class LoweringContext {
 
         case .ifStatement(let condition, let body, let location):
             try applyIfStatement(condition: condition, body: body, location: location, to: &circuit)
+
+        case .whileStatement(let condition, let body, let location):
+            try applyWhileStatement(
+                condition: condition,
+                body: body,
+                location: location,
+                to: &circuit
+            )
         }
     }
 
@@ -473,14 +536,83 @@ private final class LoweringContext {
                 throw OpenQASMError.semanticError(
                     line: location.line,
                     column: location.column,
-                    message: "Undeclared classical register '\(register)' in if condition"
+                    message: "Undeclared classical register '\(register)' in condition"
                 )
             }
             return (binding.base, value)
         }
     }
 
-    /// Lowers a single statement that may appear as an `if` body into one or more gates
+    // MARK: Classical while → Gate.while_c
+
+    /// Lowers `while (creg == imm) { … }` to ``Gate/while_c`` when a positive
+    /// maxIterations bound is available (options or pragma).
+    private func applyWhileStatement(
+        condition: OpenQASMCondition,
+        body: [OpenQASMStatement],
+        location: SourceLocation,
+        to circuit: inout QuantumCircuit
+    ) throws {
+        let gate = try buildWhileGate(condition: condition, body: body, location: location)
+        try applyGate(gate, location: location, to: &circuit)
+    }
+
+    private func buildWhileGate(
+        condition: OpenQASMCondition,
+        body: [OpenQASMStatement],
+        location: SourceLocation
+    ) throws -> Gate {
+        let maxIterations = try resolveWhileMaxIterations(at: location)
+        let (cregIndex, expectedValue) = try resolveCondition(condition, location: location)
+        var bodyGates: [Gate] = []
+        for statement in body {
+            bodyGates.append(contentsOf: try lowerStatementToGates(statement, wrappingLocation: location))
+        }
+        guard !bodyGates.isEmpty else {
+            throw OpenQASMError.semanticError(
+                line: location.line,
+                column: location.column,
+                message: "while body produced no gates"
+            )
+        }
+        return .while_c(
+            classicalRegister: cregIndex,
+            expectedValue: expectedValue,
+            body: bodyGates,
+            maxIterations: maxIterations
+        )
+    }
+
+    /// Resolves maxIterations for a `while` at `location`.
+    ///
+    /// Precedence: line pragma for this `while` line, else
+    /// ``defaultWhileMaxIterations``. Requires `> 0`.
+    private func resolveWhileMaxIterations(at location: SourceLocation) throws -> Int {
+        if let pragma = whilePragmaBounds[location.line] {
+            guard pragma > 0 else {
+                throw OpenQASMUnsupportedFeature.whileUnbounded.error(
+                    at: location,
+                    message: "while maxIterations pragma must be > 0; got \(pragma)"
+                )
+            }
+            return pragma
+        }
+        if let defaultMax = defaultWhileMaxIterations {
+            guard defaultMax > 0 else {
+                throw OpenQASMUnsupportedFeature.whileUnbounded.error(
+                    at: location,
+                    message: "OpenQASM3ImporterOptions.defaultWhileMaxIterations must be > 0; got \(defaultMax)"
+                )
+            }
+            return defaultMax
+        }
+        throw OpenQASMUnsupportedFeature.whileUnbounded.error(
+            at: location,
+            message: "Bounded while_c requires maxIterations via OpenQASM3ImporterOptions.defaultWhileMaxIterations or // @quantumkit.max_while_iterations N before the while"
+        )
+    }
+
+    /// Lowers a single statement that may appear as an `if` / `while` body into one or more gates
     /// (without applying them to the circuit).
     private func lowerStatementToGates(
         _ statement: OpenQASMStatement,
@@ -523,6 +655,9 @@ private final class LoweringContext {
                 )
             }
 
+        case .whileStatement(let condition, let body, let location):
+            return [try buildWhileGate(condition: condition, body: body, location: location)]
+
         case .empty:
             return []
 
@@ -530,16 +665,8 @@ private final class LoweringContext {
             throw OpenQASMError.unsupported(
                 line: wrappingLocation.line,
                 column: wrappingLocation.column,
-                feature: "if",
-                message: "if body must be a gate, measure, reset, barrier, or nested if"
-            )
-
-        case .whileStatement(_, _, let location):
-            throw OpenQASMError.unsupported(
-                line: location.line,
-                column: location.column,
-                feature: "while",
-                message: "while statements are not supported yet"
+                feature: "control-flow body",
+                message: "if/while body must be a gate, measure, reset, barrier, nested if, or nested while"
             )
         }
     }

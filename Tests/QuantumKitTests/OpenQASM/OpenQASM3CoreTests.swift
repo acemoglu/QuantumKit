@@ -157,9 +157,9 @@ extension QuantumKitTests {
         XCTAssertEqual(again.gates, circuit.gates)
     }
 
-    // MARK: - while still unsupported
+    // MARK: - while requires maxIterations (options or pragma)
 
-    func testOpenQASM3ImporterWhileStillUnsupported() {
+    func testOpenQASM3ImporterWhileRequiresBound() {
         let source = """
         OPENQASM 3.0;
         qubit[1] q;
@@ -167,11 +167,27 @@ extension QuantumKitTests {
         while (c == 1) { x q[0]; }
         """
         XCTAssertThrowsError(try OpenQASM3Importer().`import`(source: source)) { error in
-            guard case OpenQASMError.unsupported(_, _, let feature, _) = error else {
+            guard case OpenQASMError.unsupported(_, _, let feature, let message) = error else {
                 return XCTFail("Expected unsupported, got \(error)")
             }
             XCTAssertEqual(feature, "while")
+            XCTAssertTrue(message.contains("maxIterations"), message)
         }
+    }
+
+    func testOpenQASM3ImporterWhileWithOptionsSucceeds() throws {
+        let source = """
+        OPENQASM 3.0;
+        qubit[1] q;
+        bit[1] c;
+        while (c == 1) { x q[0]; }
+        """
+        let options = OpenQASM3ImporterOptions(defaultWhileMaxIterations: 10)
+        let circuit = try OpenQASM3Importer(options: options).`import`(source: source)
+        guard case .while_c(_, _, _, let maxIterations) = circuit.gates[0] else {
+            return XCTFail("Expected while_c")
+        }
+        XCTAssertEqual(maxIterations, 10)
     }
 
     // MARK: - Helpers

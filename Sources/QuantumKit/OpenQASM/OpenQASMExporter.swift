@@ -30,9 +30,15 @@ public struct OpenQASMExportOptions: Equatable, Sendable {
 /// Emitted as OpenQASM 2-compatible `if(c==imm) <stmt>;` (no braces) so the
 /// shared parser can round-trip both dialects.
 ///
+/// ## Bounded while (OpenQASM 3 only)
+/// ``Gate/while_c`` exports as a QASM3 `while` plus a comment pragma
+/// `// @quantumkit.max_while_iterations N` so re-import can recover the bound
+/// (see ``OpenQASMUnsupported/whileMaxIterationsPragmaPrefix``). OpenQASM 2
+/// export still rejects `while_c`.
+///
 /// ## Unsupported
-/// `while_c`, `unitary1`, `customUnitary`, `initialize`, `delay`, `mcx`/`mcz`,
-/// Ising / ECR / iSWAP / DCX, and other non-qelib1 gates.
+/// `unitary1`, `customUnitary`, `initialize`, `delay`, `mcx`/`mcz`,
+/// Ising / ECR / iSWAP / DCX, and other non-qelib1 gates; `while_c` under QASM2.
 public struct OpenQASMExporter: Sendable {
     public var options: OpenQASMExportOptions
 
@@ -149,11 +155,41 @@ private struct ExportContext {
             }
             return lines
 
-        case .while_c:
-            throw unsupported(
-                feature: "while_c",
-                message: "\(dialectLabel) export does not support while_c yet"
+        case .while_c(let classicalRegister, let expectedValue, let body, let maxIterations):
+            if dialectLabel.hasPrefix("OpenQASM 2") {
+                throw unsupported(
+                    feature: "while_c",
+                    message: "OpenQASM 2 export does not support while_c"
+                )
+            }
+            if conditioned != nil {
+                throw unsupported(
+                    feature: "while_c",
+                    message: "OpenQASM 3 export does not support while_c nested under if"
+                )
+            }
+            guard maxIterations > 0 else {
+                throw OpenQASMError.semanticError(
+                    line: 1,
+                    column: 1,
+                    message: "while_c maxIterations must be > 0"
+                )
+            }
+            let name = try classicalName(classicalRegister)
+            var lines: [String] = []
+            // Pragma consumed by ``OpenQASMWhilePragmaScanner`` on re-import.
+            lines.append(
+                "// \(OpenQASMUnsupported.whileMaxIterationsPragmaPrefix) \(maxIterations)"
             )
+            lines.append("while (\(name)==\(expectedValue)) {")
+            for inner in body {
+                let bodyLines = try emitGate(inner, conditioned: nil)
+                for bodyLine in bodyLines {
+                    lines.append("  \(bodyLine)")
+                }
+            }
+            lines.append("}")
+            return lines
 
         case .h(let target):
             return try wrap("h \(q(target));", conditioned: conditioned)

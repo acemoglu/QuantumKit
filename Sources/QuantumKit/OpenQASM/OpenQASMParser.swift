@@ -1,8 +1,11 @@
 /// Recursive-descent OpenQASM parser producing `OpenQASMProgram` ASTs.
 ///
-/// Targets OpenQASM 2-style circuits first (qreg/creg, gates, measure, if).
-/// Recognized but unsupported constructs (defcal, cal, pulse-oriented keywords,
-/// etc.) throw `OpenQASMError.unsupported` with a source location.
+/// Targets OpenQASM 2-style circuits first (qreg/creg, gates, measure, if) plus
+/// an OpenQASM 3 core subset (`qubit`/`bit`, `while`).
+/// Recognized but unsupported constructs (`defcal`, `cal`, `for`, `switch`,
+/// `box`, `ctrl`/`inv`/`pow`, pulse/timing keywords, …) throw
+/// `OpenQASMError.unsupported` with a source location — see
+/// ``OpenQASMUnsupportedFeature``.
 public struct OpenQASMParser: Sendable {
     private let tokens: [OpenQASMToken]
     private var current: Int = 0
@@ -77,12 +80,22 @@ public struct OpenQASMParser: Sendable {
         case .keywordDefcal, .keywordCal, .keywordDelay, .keywordBox,
              .keywordExtern, .keywordDef, .keywordSwitch, .keywordFor,
              .keywordInput, .keywordOutput, .keywordLet, .keywordConst,
-             .keywordArray, .keywordDuration, .keywordStretch, .keywordGphase:
+             .keywordArray, .keywordDuration, .keywordStretch, .keywordGphase,
+             .keywordCtrl, .keywordNegctrl, .keywordInv, .keywordPow,
+             .keywordElse, .keywordBreak, .keywordContinue, .keywordReturn, .keywordEnd,
+             .keywordAngle, .keywordComplex, .keywordBool, .keywordInt, .keywordUint,
+             .keywordFloat, .keywordDurationof, .keywordSizeof, .keywordLengthof:
+            // Stable feature ids match ``OpenQASMUnsupportedFeature/rawValue``.
             throw OpenQASMError.unsupported(
                 line: token.line,
                 column: token.column,
                 feature: token.lexeme,
                 message: "'\(token.lexeme)' is not supported by QuantumKit's OpenQASM front-end"
+            )
+        case .at:
+            throw OpenQASMUnsupportedFeature.atModifier.error(
+                at: token.location,
+                message: "@ gate modifiers (ctrl@ / inv@ / pow) are not supported"
             )
         case .eof:
             throw parseError(token, "Unexpected end of input")
