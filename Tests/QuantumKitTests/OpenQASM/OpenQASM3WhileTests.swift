@@ -74,6 +74,62 @@ extension QuantumKitTests {
         XCTAssertEqual(maxIterations, 3)
     }
 
+    func testOpenQASM3ImportProgramRequiresOptionsWithoutPragmas() throws {
+        let source = """
+        OPENQASM 3.0;
+        qubit[1] q;
+        bit[1] c;
+        while (c == 1) { x q[0]; }
+        """
+        let program = try OpenQASM.parse(source)
+        XCTAssertThrowsError(try OpenQASM3Importer().`import`(program: program)) { error in
+            guard case OpenQASMError.unsupported(_, _, let feature, let message) = error else {
+                return XCTFail("Expected unsupported, got \(error)")
+            }
+            XCTAssertEqual(feature, OpenQASMUnsupportedFeature.whileUnbounded.rawValue)
+            XCTAssertTrue(message.contains("maxIterations"), message)
+        }
+    }
+
+    func testOpenQASM3ImportProgramWithOptionsSucceeds() throws {
+        let source = """
+        OPENQASM 3.0;
+        qubit[1] q;
+        bit[1] c;
+        while (c == 1) { x q[0]; }
+        """
+        let program = try OpenQASM.parse(source)
+        let options = OpenQASM3ImporterOptions(defaultWhileMaxIterations: 12)
+        let circuit = try OpenQASM3Importer(options: options).`import`(program: program)
+        guard case .while_c(_, _, let body, let maxIterations) = circuit.gates[0] else {
+            return XCTFail("Expected while_c")
+        }
+        XCTAssertEqual(maxIterations, 12)
+        XCTAssertEqual(body, [.x(target: 0)])
+    }
+
+    func testOpenQASM3ImportProgramWithScannedPragmaBounds() throws {
+        let source = """
+        OPENQASM 3.0;
+        qubit[1] q;
+        bit[1] c;
+        // @quantumkit.max_while_iterations 9
+        while (c == 1) { z q[0]; }
+        """
+        let program = try OpenQASM.parse(source)
+        let bounds = OpenQASMWhilePragmaScanner.scan(source)
+        // No options default — bounds map alone must suffice.
+        let circuit = try OpenQASM3Importer().`import`(
+            program: program,
+            whilePragmaBounds: bounds
+        )
+        guard case .while_c(_, _, let body, let maxIterations) = circuit.gates[0] else {
+            return XCTFail("Expected while_c")
+        }
+        XCTAssertEqual(maxIterations, 9)
+        XCTAssertEqual(body, [.z(target: 0)])
+    }
+
     func testOpenQASM3NestedWhileWithBounds() throws {
         let source = """
         OPENQASM 3.0;

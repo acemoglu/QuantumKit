@@ -9,10 +9,17 @@ public struct OpenQASM2ImporterOptions: Equatable, Sendable {
 
 /// Options for OpenQASM 3 → ``QuantumCircuit`` import.
 public struct OpenQASM3ImporterOptions: Equatable, Sendable {
-    /// Required for `while` → ``Gate/while_c`` unless overridden by a line pragma
-    /// `// @quantumkit.max_while_iterations N` immediately before the `while`.
+    /// Default `maxIterations` for every `while` → ``Gate/while_c`` that lacks a
+    /// line pragma.
     ///
+    /// **Precedence:** a `// @quantumkit.max_while_iterations N` pragma on (or
+    /// immediately before) a given `while` always wins over this default.
     /// Must be `> 0` when used. See ``OpenQASMUnsupported/whileMaxIterationsPragmaPrefix``.
+    ///
+    /// When lowering an already-parsed ``OpenQASMProgram`` via
+    /// ``OpenQASM3Importer/import(program:whilePragmaBounds:)`` without source text,
+    /// comment pragmas are unavailable unless you pass `whilePragmaBounds` from a
+    /// prior scan — set this property (or the bounds map) so `while` can lower.
     public var defaultWhileMaxIterations: Int?
 
     public init(defaultWhileMaxIterations: Int? = nil) {
@@ -99,10 +106,14 @@ public struct OpenQASM2Importer: Sendable {
 ///
 /// ## Bounded while
 /// `while (creg == imm) { … }` lowers to ``Gate/while_c`` **only** when a positive
-/// `maxIterations` is available from ``OpenQASM3ImporterOptions/defaultWhileMaxIterations``
-/// or a preceding `// @quantumkit.max_while_iterations N` pragma (see
-/// ``OpenQASMUnsupported/whileMaxIterationsPragmaPrefix``). Nested `while` is allowed
-/// when each loop has a bound. Without a bound → ``OpenQASMError/unsupported``.
+/// `maxIterations` is available. Resolution order per `while`:
+/// 1. Line pragma `// @quantumkit.max_while_iterations N` (source import only, or
+///    pass the scan map into ``import(program:whilePragmaBounds:)``)
+/// 2. ``OpenQASM3ImporterOptions/defaultWhileMaxIterations``
+///
+/// Nested `while` is allowed when each loop has a bound. Without a bound →
+/// ``OpenQASMError/unsupported``. AST-only ``import(program:)`` cannot see comment
+/// pragmas; supply options and/or `whilePragmaBounds`.
 ///
 /// `opaque`, `defcal`, and other catalogued features are rejected (see
 /// ``OpenQASMUnsupportedFeature``).
@@ -121,24 +132,29 @@ public struct OpenQASM3Importer: Sendable {
         let pragmaBounds = OpenQASMWhilePragmaScanner.scan(source)
         var parser = try OpenQASMParser(source: source)
         let program = try parser.parse()
-        return try LoweringContext(
-            program: program,
-            dialect: .v3,
-            defaultWhileMaxIterations: options.defaultWhileMaxIterations,
-            whilePragmaBounds: pragmaBounds
-        ).lower()
+        return try `import`(program: program, whilePragmaBounds: pragmaBounds)
     }
 
     /// Lowers an already-parsed program to a circuit.
     ///
-    /// Comment pragmas are not available without source text; only
-    /// ``OpenQASM3ImporterOptions/defaultWhileMaxIterations`` can bound `while`.
-    public func `import`(program: OpenQASMProgram) throws -> QuantumCircuit {
+    /// - Important: Comment pragmas are **not** embedded in the AST. Callers that
+    ///   only have a program (no source) must set
+    ///   ``OpenQASM3ImporterOptions/defaultWhileMaxIterations`` and/or pass
+    ///   `whilePragmaBounds` (e.g. from ``OpenQASMWhilePragmaScanner`` if source
+    ///   was retained). Otherwise `while` fails with ``OpenQASMError/unsupported``.
+    ///
+    /// - Parameter whilePragmaBounds: Map from **1-based `while` keyword line** to
+    ///   `maxIterations`. Same shape as ``OpenQASMWhilePragmaScanner/scan``.
+    ///   Line pragmas in this map override ``defaultWhileMaxIterations``.
+    public func `import`(
+        program: OpenQASMProgram,
+        whilePragmaBounds: [Int: Int] = [:]
+    ) throws -> QuantumCircuit {
         try LoweringContext(
             program: program,
             dialect: .v3,
             defaultWhileMaxIterations: options.defaultWhileMaxIterations,
-            whilePragmaBounds: [:]
+            whilePragmaBounds: whilePragmaBounds
         ).lower()
     }
 }
@@ -601,7 +617,8 @@ private final class LoweringContext {
     /// Resolves maxIterations for a `while` at `location`.
     ///
     /// Precedence: line pragma for this `while` line, else
-    /// ``defaultWhileMaxIterations``. Requires `> 0`.
+    /// ``OpenQASM3ImporterOptions/defaultWhileMaxIterations``. Requires `> 0`.
+    /// AST-only import without pragmas must supply the options default.
     private func resolveWhileMaxIterations(at location: SourceLocation) throws -> Int {
         if let pragma = whilePragmaBounds[location.line] {
             guard pragma > 0 else {

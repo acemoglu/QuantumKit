@@ -157,9 +157,11 @@ public enum OpenQASMUnsupported {
 /// Scans OpenQASM source for `// @quantumkit.max_while_iterations N` comment pragmas.
 ///
 /// Returns a map from the **1-based line of the `while` keyword** to `N`.
-enum OpenQASMWhilePragmaScanner {
+/// Pass the result to ``OpenQASM3Importer/import(program:whilePragmaBounds:)`` when
+/// lowering an AST without re-reading source text.
+public enum OpenQASMWhilePragmaScanner {
     /// Regex-free scan: `//` … `@quantumkit.max_while_iterations` … positive integer.
-    static func scan(_ source: String) -> [Int: Int] {
+    public static func scan(_ source: String) -> [Int: Int] {
         let lines = source.split(separator: "\n", omittingEmptySubsequences: false)
         var pending: Int?
         var result: [Int: Int] = [:]
