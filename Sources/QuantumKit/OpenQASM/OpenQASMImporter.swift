@@ -21,8 +21,20 @@ public struct OpenQASM3ImporterOptions: Equatable, Sendable {
 }
 
 /// Options for version-dispatching ``OpenQASMImporter``.
+///
+/// Dialect-specific knobs are nested: ``v3`` carries while-bound defaults used when
+/// the source is OpenQASM 3.
 public struct OpenQASMImporterOptions: Equatable, Sendable {
-    public init() {}
+    public var v2: OpenQASM2ImporterOptions
+    public var v3: OpenQASM3ImporterOptions
+
+    public init(
+        v2: OpenQASM2ImporterOptions = OpenQASM2ImporterOptions(),
+        v3: OpenQASM3ImporterOptions = OpenQASM3ImporterOptions()
+    ) {
+        self.v2 = v2
+        self.v3 = v3
+    }
 }
 
 /// Lowers an OpenQASM 2 program into a ``QuantumCircuit``.
@@ -147,9 +159,9 @@ public struct OpenQASMImporter: Sendable {
         let version = try OpenQASMVersion.detect(from: source)
         switch version {
         case .v2:
-            return try OpenQASM2Importer().`import`(source: source)
+            return try OpenQASM2Importer(options: options.v2).`import`(source: source)
         case .v3:
-            return try OpenQASM3Importer().`import`(source: source)
+            return try OpenQASM3Importer(options: options.v3).`import`(source: source)
         }
     }
 
@@ -157,9 +169,9 @@ public struct OpenQASMImporter: Sendable {
     public func `import`(program: OpenQASMProgram) throws -> QuantumCircuit {
         switch program.version ?? .v2 {
         case .v2:
-            return try OpenQASM2Importer().`import`(program: program)
+            return try OpenQASM2Importer(options: options.v2).`import`(program: program)
         case .v3:
-            return try OpenQASM3Importer().`import`(program: program)
+            return try OpenQASM3Importer(options: options.v3).`import`(program: program)
         }
     }
 }
