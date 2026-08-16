@@ -761,7 +761,16 @@ private final class LoweringContext {
 
     // MARK: - Gate call lowering / user-gate expand
 
-    /// Lowers a gate call to one or more ``Gate`` values (builtin map or user expand).
+    /// Lowers a gate call to one or more ``Gate`` values.
+    ///
+    /// **Collision policy (OpenQASM 2 qelib1):**
+    /// 1. ``OpenQASMQelib1/mappedGateNames`` fast-paths always win (native ``Gate``,
+    ///    compact decompositions, or QuantumKit extensions like `mcx`).
+    /// 2. Else expand a registered user / embedded-qelib1 `gate` body.
+    /// 3. Else unknown → semantic error.
+    ///
+    /// Embedded qelib1 still registers definitions for mapped names so include is
+    /// complete; those bodies are unused while the fast-path remains.
     private func lowerGateCallToGates(
         name: String,
         params: [OpenQASMExpr],
@@ -1230,6 +1239,18 @@ private final class LoweringContext {
             let pair = try requireTwoQubits(qubits, gate: name, location: location)
             let theta = try evaluateAngle(params[0], location: location)
             return [.cp(theta: theta, control: pair.0, target: pair.1)]
+
+        case "rxx":
+            try requireParamCount(params, expected: 1, gate: name, location: location)
+            let pair = try requireTwoQubits(qubits, gate: name, location: location)
+            let theta = try evaluateAngle(params[0], location: location)
+            return [.rxx(theta: theta, q1: pair.0, q2: pair.1)]
+
+        case "rzz":
+            try requireParamCount(params, expected: 1, gate: name, location: location)
+            let pair = try requireTwoQubits(qubits, gate: name, location: location)
+            let theta = try evaluateAngle(params[0], location: location)
+            return [.rzz(theta: theta, q1: pair.0, q2: pair.1)]
 
         default:
             throw OpenQASMError.semanticError(

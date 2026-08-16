@@ -129,9 +129,9 @@ extension QuantumKitTests {
         XCTAssertEqual(Double(value), Double.pi / 2, accuracy: 1e-5)
     }
 
-    // MARK: - Expanded qelib1 leftovers (via embedded include)
+    // MARK: - Expanded / mapped qelib1 leftovers
 
-    func testOpenQASM2ImporterRZZExpandsFromEmbeddedQelib1() throws {
+    func testOpenQASM2ImporterRZZMapsToGateRZZ() throws {
         let source = """
         OPENQASM 2.0;
         include "qelib1.inc";
@@ -139,18 +139,78 @@ extension QuantumKitTests {
         rzz(0.1) q[0],q[1];
         """
         let circuit = try OpenQASM2Importer().`import`(source: source)
-        // rzz(θ) a,b { cx a,b; u1(θ) b; cx a,b; } — u1 → Gate.p
-        XCTAssertEqual(circuit.gates.count, 3)
-        XCTAssertEqual(circuit.gates[0], .cx(control: 0, target: 1))
-        guard case .p(let theta, let target) = circuit.gates[1] else {
-            return XCTFail("Expected u1→p in rzz expansion")
+        XCTAssertEqual(circuit.gates.count, 1)
+        guard case .rzz(let theta, let q1, let q2) = circuit.gates[0] else {
+            return XCTFail("Expected Gate.rzz fast-path")
         }
-        XCTAssertEqual(target, 1)
+        XCTAssertEqual(q1, 0)
+        XCTAssertEqual(q2, 1)
         guard case .literal(let value) = theta else {
             return XCTFail("Expected literal angle")
         }
         XCTAssertEqual(Double(value), 0.1, accuracy: 1e-5)
-        XCTAssertEqual(circuit.gates[2], .cx(control: 0, target: 1))
+    }
+
+    func testOpenQASM2ImporterRXXMapsToGateRXX() throws {
+        let source = """
+        OPENQASM 2.0;
+        include "qelib1.inc";
+        qreg q[2];
+        rxx(pi/4) q[0],q[1];
+        """
+        let circuit = try OpenQASM2Importer().`import`(source: source)
+        XCTAssertEqual(circuit.gates.count, 1)
+        guard case .rxx(let theta, let q1, let q2) = circuit.gates[0] else {
+            return XCTFail("Expected Gate.rxx fast-path")
+        }
+        XCTAssertEqual(q1, 0)
+        XCTAssertEqual(q2, 1)
+        guard case .literal(let value) = theta else {
+            return XCTFail("Expected literal angle")
+        }
+        XCTAssertEqual(Double(value), Double.pi / 4, accuracy: 1e-5)
+    }
+
+    func testOpenQASM2MappedBuiltinWinsOverEmbeddedExpand() throws {
+        // `x` is both mapped and defined in qelib1 as u3(pi,0,pi); fast-path must win.
+        let source = """
+        OPENQASM 2.0;
+        include "qelib1.inc";
+        qreg q[1];
+        x q[0];
+        """
+        let circuit = try OpenQASM2Importer().`import`(source: source)
+        XCTAssertEqual(circuit.gates, [.x(target: 0)])
+    }
+
+    func testOpenQASM2CannotRedefineMappedBuiltinAfterInclude() {
+        let source = """
+        OPENQASM 2.0;
+        include "qelib1.inc";
+        qreg q[1];
+        gate h a { x a; }
+        """
+        XCTAssertThrowsError(try OpenQASM2Importer().`import`(source: source)) { error in
+            guard case OpenQASMError.semanticError(_, _, let message) = error else {
+                return XCTFail("Expected semanticError, got \(error)")
+            }
+            XCTAssertTrue(message.contains("Cannot redefine builtin"), message)
+        }
+    }
+
+    func testOpenQASM2CannotRedefineEmbeddedQelib1Gate() {
+        let source = """
+        OPENQASM 2.0;
+        include "qelib1.inc";
+        qreg q[2];
+        gate cu3(a,b,c) x,y { cx x,y; }
+        """
+        XCTAssertThrowsError(try OpenQASM2Importer().`import`(source: source)) { error in
+            guard case OpenQASMError.semanticError(_, _, let message) = error else {
+                return XCTFail("Expected semanticError, got \(error)")
+            }
+            XCTAssertTrue(message.contains("already declared"), message)
+        }
     }
 
     func testOpenQASM2ImporterCU3ExpandsFromEmbeddedQelib1() throws {
@@ -162,6 +222,19 @@ extension QuantumKitTests {
         """
         let circuit = try OpenQASM2Importer().`import`(source: source)
         XCTAssertFalse(circuit.gates.isEmpty)
+        // Expanded body uses mapped u1/cx/u3 — not a single opaque gate.
+        XCTAssertGreaterThan(circuit.gates.count, 1)
+    }
+
+    func testOpenQASM2EmbeddedQelib1DeclCount() {
+        // Sanity: every gate in the embedded source parsed successfully.
+        XCTAssertEqual(
+            OpenQASMQelib1.embeddedGateDeclarations.count,
+            OpenQASMQelib1.embeddedGateNames.count
+        )
+        XCTAssertTrue(OpenQASMQelib1.embeddedGateNames.contains("cu3"))
+        XCTAssertTrue(OpenQASMQelib1.embeddedGateNames.contains("c4x"))
+        XCTAssertTrue(OpenQASMQelib1.embeddedGateNames.contains("rxx"))
     }
 
     func testOpenQASM2ImporterPrimitiveUAndCX() throws {

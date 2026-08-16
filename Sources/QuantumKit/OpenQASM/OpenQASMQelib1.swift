@@ -35,6 +35,8 @@ public enum OpenQASMQelib1: Sendable {
         "u", "u0", "u1", "u2", "u3", "p",
         "rx", "ry", "rz",
         "crx", "cry", "crz", "cp", "cu1",
+        // Direct ``Gate`` cases matching qelib1 names (override expand)
+        "rxx", "rzz",
     ]
 
     /// Returns `true` when `path` refers to the builtin qelib1 include (basename match).
