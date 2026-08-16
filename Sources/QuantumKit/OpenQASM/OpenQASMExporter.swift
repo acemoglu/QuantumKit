@@ -35,8 +35,9 @@ public struct OpenQASMExportOptions: Equatable, Sendable {
 /// ## Bounded while (OpenQASM 3 only)
 /// ``Gate/while_c`` exports as a QASM3 `while` plus a comment pragma
 /// `// @quantumkit.max_while_iterations N` so re-import can recover the bound
-/// (see ``OpenQASMUnsupported/whileMaxIterationsPragmaPrefix``). OpenQASM 2
-/// export still rejects `while_c`.
+/// (see ``OpenQASMUnsupported/whileMaxIterationsPragmaPrefix``). Nested
+/// `while_c` under ``Gate/c_if`` exports as `if (…) { while (…) { … } }`.
+/// OpenQASM 2 export still rejects `while_c`.
 ///
 /// ## Unsupported
 /// `unitary1`, `customUnitary`, `initialize`, `delay`, `mcx`/`mcz`,
@@ -200,12 +201,6 @@ private struct ExportContext {
                     message: "OpenQASM 2 export does not support while_c"
                 )
             }
-            if conditioned != nil {
-                throw unsupported(
-                    feature: "while_c",
-                    message: "OpenQASM 3 export does not support while_c nested under if"
-                )
-            }
             guard maxIterations > 0 else {
                 throw OpenQASMError.semanticError(
                     line: 1,
@@ -227,6 +222,9 @@ private struct ExportContext {
                 }
             }
             lines.append("}")
+            if let conditioned {
+                return try wrapAll(lines, conditioned: conditioned)
+            }
             return lines
 
         case .h(let target):

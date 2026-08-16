@@ -140,6 +140,57 @@ extension QuantumKitTests {
         XCTAssertEqual(again.gates, circuit.gates)
     }
 
+    func testOpenQASM3ExportWhileNestedUnderIf() throws {
+        var circuit = try QuantumCircuit(
+            qubitCount: 1,
+            classicalRegisters: [try ClassicalRegisterSpec(bitCount: 1)]
+        )
+        try circuit.apply(
+            .c_if(
+                classicalRegister: 0,
+                expectedValue: 1,
+                gate: .while_c(
+                    classicalRegister: 0,
+                    expectedValue: 1,
+                    body: [.x(target: 0)],
+                    maxIterations: 5
+                )
+            )
+        )
+        let exported = try OpenQASMExporter().export(circuit)
+        XCTAssertTrue(exported.contains("if(c==1) {"), exported)
+        XCTAssertTrue(
+            exported.contains("// \(OpenQASMUnsupported.whileMaxIterationsPragmaPrefix) 5"),
+            exported
+        )
+        XCTAssertTrue(exported.contains("while (c==1)"), exported)
+        let again = try OpenQASM3Importer().`import`(source: exported)
+        XCTAssertEqual(again.gates, circuit.gates)
+    }
+
+    func testOpenQASM3RoundTripWhileNestedUnderBracedIf() throws {
+        let source = """
+        OPENQASM 3.0;
+        qubit[1] q;
+        bit[1] c;
+        if (c == 1) {
+          // @quantumkit.max_while_iterations 6
+          while (c == 1) { h q[0]; }
+        }
+        """
+        let first = try OpenQASM3Importer().`import`(source: source)
+        guard case .c_if(_, _, let inner) = first.gates[0],
+              case .while_c(_, _, let body, let maxIterations) = inner else {
+            return XCTFail("Expected c_if(while_c)")
+        }
+        XCTAssertEqual(maxIterations, 6)
+        XCTAssertEqual(body, [.h(target: 0)])
+
+        let exported = try OpenQASMExporter().export(first)
+        let second = try OpenQASM3Importer().`import`(source: exported)
+        XCTAssertEqual(second.gates, first.gates)
+    }
+
     func testOpenQASM2ExportRejectsWhileC() throws {
         var circuit = try QuantumCircuit(
             qubitCount: 1,
