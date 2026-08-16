@@ -59,6 +59,42 @@ extension QuantumKitTests {
         XCTAssertEqual(body, [.x(target: 0)])
     }
 
+    func testOpenQASMGoldenImportBracedIfQASM3() throws {
+        let circuit = try OpenQASM.importCircuit(OpenQASMGoldenFixtures.braced_if_qasm3)
+        XCTAssertEqual(circuit.gates, [
+            .c_if(classicalRegister: 0, expectedValue: 1, gate: .h(target: 0)),
+            .c_if(
+                classicalRegister: 0,
+                expectedValue: 1,
+                gate: .cx(control: 0, target: 1)
+            ),
+        ])
+    }
+
+    func testOpenQASMGoldenImportWhileUnderIfQASM3() throws {
+        let circuit = try OpenQASM.importCircuit(OpenQASMGoldenFixtures.while_under_if_qasm3)
+        XCTAssertEqual(circuit.gates.count, 1)
+        guard case .c_if(let reg, let expected, let inner) = circuit.gates[0] else {
+            return XCTFail("Expected c_if")
+        }
+        XCTAssertEqual(reg, 0)
+        XCTAssertEqual(expected, 1)
+        guard case .while_c(_, _, let body, let maxIterations) = inner else {
+            return XCTFail("Expected while_c under if")
+        }
+        XCTAssertEqual(maxIterations, 5)
+        XCTAssertEqual(body, [.x(target: 0)])
+    }
+
+    func testOpenQASMGoldenImportChCyMcxQASM2() throws {
+        let circuit = try OpenQASM.importCircuit(OpenQASMGoldenFixtures.ch_cy_mcx_qasm2)
+        // ch → 7 gates, cy → 3, mcx(3 controls) → 1
+        XCTAssertEqual(circuit.gates.count, 11)
+        XCTAssertEqual(circuit.gates[0], .s(target: 1))
+        XCTAssertEqual(circuit.gates[7], .sdg(target: 2))
+        XCTAssertEqual(circuit.gates[10], .mcx(controls: [0, 1, 2], target: 3))
+    }
+
     func testOpenQASMGoldenImportWhileBoundedViaOptions() throws {
         // Same body without relying on pragma — options path.
         let source = """
@@ -110,6 +146,26 @@ extension QuantumKitTests {
         )
     }
 
+    func testOpenQASMGoldenRoundTripBracedIfQASM3() throws {
+        try assertGoldenQASM3RoundTrip(OpenQASMGoldenFixtures.braced_if_qasm3)
+        let first = try OpenQASM.importCircuit(OpenQASMGoldenFixtures.braced_if_qasm3)
+        let exported = try OpenQASM.export(first)
+        XCTAssertTrue(exported.contains("if(c==1) {"), exported)
+    }
+
+    func testOpenQASMGoldenRoundTripWhileUnderIfQASM3() throws {
+        let first = try OpenQASM.importCircuit(OpenQASMGoldenFixtures.while_under_if_qasm3)
+        let exported = try OpenQASM.export(first)
+        let second = try OpenQASM.importCircuit(exported)
+        XCTAssertEqual(second.gates, first.gates)
+        XCTAssertTrue(exported.contains("if(c==1) {"), exported)
+        XCTAssertTrue(exported.contains("while (c==1)"), exported)
+        XCTAssertTrue(
+            exported.contains("// \(OpenQASMUnsupported.whileMaxIterationsPragmaPrefix) 5"),
+            exported
+        )
+    }
+
     // MARK: - Bit-order lock
 
     func testOpenQASMGoldenBitOrderXQ0IsGateX0() throws {
@@ -132,6 +188,9 @@ extension QuantumKitTests {
         XCTAssertEqual(try OpenQASM.detectVersion(from: OpenQASMGoldenFixtures.teleport_ish_qasm2), .v2)
         XCTAssertEqual(try OpenQASM.detectVersion(from: OpenQASMGoldenFixtures.parametric_angles_qasm2), .v2)
         XCTAssertEqual(try OpenQASM.detectVersion(from: OpenQASMGoldenFixtures.while_bounded_qasm3), .v3)
+        XCTAssertEqual(try OpenQASM.detectVersion(from: OpenQASMGoldenFixtures.braced_if_qasm3), .v3)
+        XCTAssertEqual(try OpenQASM.detectVersion(from: OpenQASMGoldenFixtures.while_under_if_qasm3), .v3)
+        XCTAssertEqual(try OpenQASM.detectVersion(from: OpenQASMGoldenFixtures.ch_cy_mcx_qasm2), .v2)
     }
 
     // MARK: - Facade smoke

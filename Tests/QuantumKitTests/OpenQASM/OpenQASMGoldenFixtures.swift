@@ -68,4 +68,36 @@ enum OpenQASMGoldenFixtures {
     // @quantumkit.max_while_iterations 8
     while (c == 1) { x q[0]; }
     """
+
+    /// Multi-statement braced `if` (OpenQASM 3).
+    static let braced_if_qasm3 = """
+    OPENQASM 3.0;
+    qubit[2] q;
+    bit[1] c;
+    if (c == 1) {
+      h q[0];
+      cx q[0], q[1];
+    }
+    """
+
+    /// Bounded `while` nested under braced `if` (OpenQASM 3).
+    static let while_under_if_qasm3 = """
+    OPENQASM 3.0;
+    qubit[1] q;
+    bit[1] c;
+    if (c == 1) {
+      // @quantumkit.max_while_iterations 5
+      while (c == 1) { x q[0]; }
+    }
+    """
+
+    /// qelib1 leftovers: `ch` / `cy` / `mcx` (import golden; export stays decomposed / unsupported for mcx).
+    static let ch_cy_mcx_qasm2 = """
+    OPENQASM 2.0;
+    include "qelib1.inc";
+    qreg q[4];
+    ch q[0],q[1];
+    cy q[1],q[2];
+    mcx q[0],q[1],q[2],q[3];
+    """
 }

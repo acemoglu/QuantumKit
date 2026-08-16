@@ -153,4 +153,12 @@ extension QuantumKitTests {
         let exported = try OpenQASM.exportQASM2(circuit)
         XCTAssertTrue(exported.contains("x q[0];"), exported)
     }
+
+    func testOpenQASMFacadeImportBracedIfAndQelib1Leftovers() throws {
+        let braced = try OpenQASM.importCircuit(OpenQASMGoldenFixtures.braced_if_qasm3)
+        XCTAssertEqual(braced.gates.count, 2)
+
+        let leftovers = try OpenQASM.importCircuit(OpenQASMGoldenFixtures.ch_cy_mcx_qasm2)
+        XCTAssertEqual(leftovers.gates.last, .mcx(controls: [0, 1, 2], target: 3))
+    }
 }
