@@ -138,7 +138,9 @@ public enum CartanKAK {
     public static let roundTripFrobeniusTolerance: Double = 1e-5
     public static let fidelityFloor: Double = 0.9999
 
-    /// Decompose a row-major 4×4 unitary into local SU(2)/U factors + ≤3 CX.
+    /// Decompose a row-major 4×4 unitary into local ``Gate/u`` factors + ≤3 CX
+    /// (interaction may also emit ``Gate/rx`` / ``Gate/ry`` / ``Gate/rz``). Never emits
+    /// ``Gate/unitary1`` or ``Gate/customUnitary``.
     ///
     /// - Parameters:
     ///   - unitary: 16 ``ComplexAmplitude`` entries, row-major, qubit 0 = LSB.
@@ -1035,9 +1037,10 @@ private extension CartanKAK {
         if um.isApproximatelyEqual(to: .identity(2), tolerance: atol) {
             return nil
         }
+        // Always emit ``Gate/u`` — never ``Gate/unitary1`` (basis translate rejects it).
+        // ``eulerUAngles`` returns nil only for non-2×2; locals here are always 2×2.
         guard let angles = GateFusionPass.eulerUAngles(from: um, tolerance: atol) else {
-            let amps = matrix2.map { $0.asAmplitude() }
-            return .unitary1(matrix: amps, target: target)
+            throw CartanKAKError.localFactorizationFailed
         }
         return .u(
             theta: QFloatExpr(QFloat(angles.theta)),

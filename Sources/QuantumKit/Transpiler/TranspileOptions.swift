@@ -14,7 +14,7 @@ import Foundation
 ///   after basis translation). Measurably fewer gates/depth on Clifford / adjacent-rotation fixtures.
 ///
 /// Opt-in flags (default off): ``enableGateFusion``, ``enableTemplateMatching`` (A6 lite exact
-/// catalog — not Solovay–Kitaev / J1).
+/// catalog — not Solovay–Kitaev / J1), ``enableKAKSynthesis`` (2Q Cartan / KAK).
 public struct TranspileOptions: Sendable, Equatable {
     public var targetBasis: BasisGateSet
     public var couplingMap: CouplingMap?
@@ -49,6 +49,11 @@ public struct TranspileOptions: Sendable, Equatable {
     /// runs after algebraic / Clifford / local (and after fusion if that is also on). Exact
     /// identities only; **not** Solovay–Kitaev / approximate synthesis (J1 deferred).
     public var enableTemplateMatching: Bool
+    /// Opt-in 2Q Cartan / KAK rewrite (``KAKSynthesisPass``). Default `false` — default
+    /// transpile / optimization levels are unchanged. When enabled, runs after fusion /
+    /// templates (if those are on) and before unroll / route / basis, so Haar /
+    /// ``Gate/customUnitary`` pairs become locals + ≤3 CX before basis translation.
+    public var enableKAKSynthesis: Bool
 
     public init(
         targetBasis: BasisGateSet = .ibmEagle,
@@ -64,7 +69,8 @@ public struct TranspileOptions: Sendable, Equatable {
         gateDurations: GateDurationTable = .uniform(1),
         preserveInstructionMetadata: Bool = false,
         enableGateFusion: Bool = false,
-        enableTemplateMatching: Bool = false
+        enableTemplateMatching: Bool = false,
+        enableKAKSynthesis: Bool = false
     ) {
         self.targetBasis = targetBasis
         self.couplingMap = couplingMap
@@ -80,6 +86,7 @@ public struct TranspileOptions: Sendable, Equatable {
         self.preserveInstructionMetadata = preserveInstructionMetadata
         self.enableGateFusion = enableGateFusion
         self.enableTemplateMatching = enableTemplateMatching
+        self.enableKAKSynthesis = enableKAKSynthesis
     }
 
     /// Builds the ordered pass list for these options.
@@ -104,6 +111,9 @@ public struct TranspileOptions: Sendable, Equatable {
         }
         if enableTemplateMatching {
             passes.append(TemplateMatchingPass())
+        }
+        if enableKAKSynthesis {
+            passes.append(KAKSynthesisPass())
         }
 
         let unroll = UnrollMultiQubitPass(

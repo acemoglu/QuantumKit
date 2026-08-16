@@ -81,9 +81,10 @@ extension QuantumKitTests {
         let samples = 100
         for i in 0..<samples {
             let matrix = QuantumVolume.sampleHaarSU4(rng: &rng)
+            // Independent oracle: skip internal verifyRoundTrip so frob/fid asserts below are not tautological.
             let decomp: CartanKAKDecomposition
             do {
-                decomp = try CartanKAK.decompose(matrix)
+                decomp = try CartanKAK.decompose(matrix, verifyRoundTrip: false)
             } catch {
                 return XCTFail("sample \(i) decompose failed: \(error)")
             }
