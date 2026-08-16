@@ -70,7 +70,8 @@ public struct OpenQASMImporterOptions: Equatable, Sendable {
 /// (`u`/`u1`/`u2`/`u3`, `p`, `rx`/`ry`/`rz`, `crx`/`cry`/`crz`/`cp`/`cu1`, `cswap`),
 /// decompositions for `ch` / `cy`, and `mcx` / `mcz` → ``Gate/mcx`` / ``Gate/mcz``
 /// (2-control `mcx` → ``Gate/ccx``). Remaining qelib1 gates expand from the embedded
-/// definitions. OpenQASM 2 `if (creg == imm) <stmt>` lowers via ``Gate/c_if``, and
+/// definitions. Capital `U` / `CX` lower to ``Gate/u`` / ``Gate/cx``; `u0` → ``Gate/id``.
+/// OpenQASM 2 `if (creg == imm) <stmt>` lowers via ``Gate/c_if``, and
 /// user-defined `gate` expand/inline (numeric params, recursive nesting).
 /// Angle expressions evaluate `pi` and arithmetic; formal gate parameters are
 /// substituted during expansion. `opaque`, `while`, and non-qelib1 includes
@@ -1040,6 +1041,28 @@ private final class LoweringContext {
         location: SourceLocation
     ) throws -> [Gate] {
         switch name {
+        case "U":
+            // OpenQASM 2 hardware primitive → Gate.u (used by qelib1 bodies).
+            try requireParamCount(params, expected: 3, gate: name, location: location)
+            let target = try requireSingleQubit(qubits, gate: name, location: location)
+            let theta = try evaluateAngle(params[0], location: location)
+            let phi = try evaluateAngle(params[1], location: location)
+            let lambda = try evaluateAngle(params[2], location: location)
+            return [.u(theta: theta, phi: phi, lambda: lambda, target: target)]
+
+        case "CX":
+            // OpenQASM 2 hardware primitive → Gate.cx (used by qelib1 `gate cx`).
+            try requireParamCount(params, expected: 0, gate: name, location: location)
+            let pair = try requireTwoQubits(qubits, gate: name, location: location)
+            return [.cx(control: pair.0, target: pair.1)]
+
+        case "u0":
+            // qelib1 idle with ignored duration parameter → identity.
+            try requireParamCount(params, expected: 1, gate: name, location: location)
+            _ = try evaluateNumeric(params[0], location: location)
+            let target = try requireSingleQubit(qubits, gate: name, location: location)
+            return [.id(target: target)]
+
         case "id", "x", "y", "z", "h", "s", "sdg", "t", "tdg", "sx", "sxdg":
             try requireParamCount(params, expected: 0, gate: name, location: location)
             let target = try requireSingleQubit(qubits, gate: name, location: location)

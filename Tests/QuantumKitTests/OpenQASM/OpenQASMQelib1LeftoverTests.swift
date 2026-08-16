@@ -164,6 +164,42 @@ extension QuantumKitTests {
         XCTAssertFalse(circuit.gates.isEmpty)
     }
 
+    func testOpenQASM2ImporterPrimitiveUAndCX() throws {
+        let source = """
+        OPENQASM 2.0;
+        include "qelib1.inc";
+        qreg q[2];
+        U(pi,0,pi) q[0];
+        CX q[0],q[1];
+        """
+        let circuit = try OpenQASM2Importer().`import`(source: source)
+        XCTAssertEqual(circuit.gates.count, 2)
+        guard case .u(let theta, let phi, let lambda, let target) = circuit.gates[0] else {
+            return XCTFail("Expected U → Gate.u")
+        }
+        XCTAssertEqual(target, 0)
+        guard case .literal(let t) = theta,
+              case .literal(let p) = phi,
+              case .literal(let l) = lambda else {
+            return XCTFail("Expected literal U angles")
+        }
+        XCTAssertEqual(Double(t), Double.pi, accuracy: 1e-5)
+        XCTAssertEqual(Double(p), 0, accuracy: 1e-5)
+        XCTAssertEqual(Double(l), Double.pi, accuracy: 1e-5)
+        XCTAssertEqual(circuit.gates[1], .cx(control: 0, target: 1))
+    }
+
+    func testOpenQASM2ImporterU0MapsToId() throws {
+        let source = """
+        OPENQASM 2.0;
+        include "qelib1.inc";
+        qreg q[1];
+        u0(3.5) q[0];
+        """
+        let circuit = try OpenQASM2Importer().`import`(source: source)
+        XCTAssertEqual(circuit.gates, [.id(target: 0)])
+    }
+
     func testOpenQASM2ImporterMCXTooFewQubitsFails() {
         let source = """
         OPENQASM 2.0;

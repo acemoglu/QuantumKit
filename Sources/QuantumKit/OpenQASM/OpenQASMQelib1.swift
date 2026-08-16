@@ -23,13 +23,16 @@ public enum OpenQASMQelib1: Sendable {
     /// These take precedence over embedded qelib1 expansions when both exist.
     /// `ch` / `cy` lower via compact decompositions (see importer). `mcx` / `mcz`
     /// are QuantumKit extensions (not in stock qelib1). `cu1` aliases ``Gate/cp``.
+    /// Capital `U` / `CX` are OpenQASM 2 primitives; `u0(gamma)` lowers to ``Gate/id``.
     public static let mappedGateNames: Set<String> = [
+        // OpenQASM 2 hardware primitives (required by qelib1 gate bodies)
+        "U", "CX",
         // Parameter-free
         "id", "x", "y", "z", "h", "s", "sdg", "t", "tdg", "sx", "sxdg",
         "cx", "cz", "cy", "ch", "swap", "ccx", "cswap",
         "mcx", "mcz",
         // Parametric (numeric angle expressions)
-        "u", "u1", "u2", "u3", "p",
+        "u", "u0", "u1", "u2", "u3", "p",
         "rx", "ry", "rz",
         "crx", "cry", "crz", "cp", "cu1",
     ]
