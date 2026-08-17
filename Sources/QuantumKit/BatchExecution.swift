@@ -21,14 +21,29 @@ public struct SampleCountOptions: Sendable, Equatable {
     ///   must **not** change seeded histograms *within that per-shot-stream contract*.
     ///   ``ShotExecutionPolicy/mustSerial`` forces pool size `1` and one sequential ``QuantumRNG``.
     ///
+    /// When ``preferPreparedSampling`` is true (default) and the circuit qualifies for
+    /// evolve-once sampling, `batchSize` is unused: one unitary evolution feeds a multinomial
+    /// draw. Trajectory / noisy unraveling paths still honor `batchSize` as above.
+    ///
     /// **Seed contract (breaking vs pre-shot-parallel CPU):** for ``canBatch`` circuits, a
     /// fixed ``QuantumRunOptions/seed`` no longer matches (1) legacy single-stream sequential
     /// CPU consumption or (2) Metal’s sequential measurement RNG. Prefer matching goldens to
     /// ``independentShotStream``, or pin ``mustSerial`` circuits if you need one shared stream.
+    /// Prepared sampling uses one sequential measurement stream after a single evolution
+    /// (same seed → same histogram across `batchSize`, but not bit-identical to trajectory).
     public var batchSize: Int
 
-    public init(batchSize: Int = 32) {
+    /// Prefer evolve-once + Born multinomial sampling when the circuit has no mid-circuit
+    /// collapse / classical control and (for statevector) no evolution-time noise unraveling.
+    ///
+    /// Set `false` to force per-shot trajectory re-execution (tests, noise audits, legacy
+    /// seed goldens). Default `true` — noiseless Bell/GHZ-style circuits should not pay
+    /// `O(shots × gates)` unitary work.
+    public var preferPreparedSampling: Bool
+
+    public init(batchSize: Int = 32, preferPreparedSampling: Bool = true) {
         self.batchSize = max(batchSize, 1)
+        self.preferPreparedSampling = preferPreparedSampling
     }
 }
 
@@ -91,11 +106,63 @@ extension QuantumCircuit {
     /// `true` when density-matrix evolution is deterministic for `noise`, so terminal shots can
     /// be drawn from a single prepared ρ without re-executing the circuit.
     ///
-    /// Same coupling rule as ``ShotExecutionPolicy/mustSerial(circuit:noise:)``: projective
-    /// mid-circuit measures (and `c_if`) make each run stochastic;
-    /// ``MeasurementMode/dephasingOnly`` remains deterministic on ρ.
+    /// Eligible when ``ShotExecutionPolicy/canBatch(circuit:noise:)`` **or** the circuit is a
+    /// unitary/barrier/delay prefix with only trailing ``Gate/measure`` ops (Qiskit-style
+    /// terminal measures). Projective mid-circuit measure / `c_if` / `while_c` / `reset` /
+    /// `initialize` still force per-shot re-execution.
     public func allowsPreparedDensityShotBatching(noise: NoiseModel? = nil) -> Bool {
-        ShotExecutionPolicy.canBatch(circuit: self, noise: noise)
+        if ShotExecutionPolicy.canBatch(circuit: self, noise: noise) {
+            return true
+        }
+        return preparedShotUnitaryPrefix() != nil
+    }
+
+    /// Statevector counterpart of ``allowsPreparedDensityShotBatching(noise:)``.
+    ///
+    /// Also requires no evolution-time noise unraveling (``ShotExecutionPolicy/requiresEvolutionNoise``):
+    /// SV depolarizing / damping is stochastic per shot, unlike a deterministic DM channel.
+    public func allowsPreparedStatevectorShotSampling(noise: NoiseModel? = nil) -> Bool {
+        allowsPreparedDensityShotBatching(noise: noise)
+            && !ShotExecutionPolicy.requiresEvolutionNoise(noise, circuit: self)
+    }
+
+    /// Unitary / barrier / delay prefix before trailing terminal measures, or the full gate
+    /// list when there are no measures. `nil` when the circuit is not eligible for evolve-once
+    /// shot sampling (mid-circuit measure, classical control, reset, initialize).
+    public func preparedShotUnitaryPrefix() -> QuantumCircuit? {
+        for gate in gates {
+            switch gate {
+            case .c_if, .while_c, .reset, .initialize:
+                return nil
+            default:
+                continue
+            }
+        }
+
+        let split = gates.firstIndex {
+            if case .measure = $0 { return true }
+            return false
+        } ?? gates.endIndex
+
+        for gate in gates[split...] {
+            switch gate {
+            case .measure, .barrier, .delay:
+                continue
+            default:
+                return nil
+            }
+        }
+
+        var prefix: QuantumCircuit
+        do {
+            prefix = try QuantumCircuit(qubitCount: qubitCount, classicalRegisters: classicalRegisters)
+            for gate in gates[..<split] {
+                try prefix.apply(gate)
+            }
+        } catch {
+            return nil
+        }
+        return prefix
     }
 
     /// `true` when the circuit contains at least one ``Gate/delay`` (including nested
@@ -176,6 +243,29 @@ enum BatchSampleExecutor {
         let device = engine.device
         guard shots > 0 else {
             throw QuantumMeasurementError.invalidShotCount(shots)
+        }
+
+        if options.preferPreparedSampling,
+           circuit.allowsPreparedStatevectorShotSampling(noise: noise),
+           let prefix = circuit.preparedShotUnitaryPrefix() {
+            try cancellationCheck?()
+            let state = try StateVector(qubitCount: circuit.qubitCount, on: device)
+            _ = try engine.executeRNG(
+                prefix,
+                on: state,
+                rng: &rng,
+                noise: nil,
+                cancellationCheck: cancellationCheck
+            )
+            let probabilities = try QuantumMeasurement.probabilities(state: state, engine: engine)
+            return try DensityMatrixShotSampler.sampleTerminalShots(
+                probabilities: probabilities,
+                shots: shots,
+                measuredQubitCount: circuit.qubitCount,
+                rng: &rng,
+                noise: noise,
+                cancellationCheck: cancellationCheck
+            )
         }
 
         var histogram: [Int: Int] = [:]

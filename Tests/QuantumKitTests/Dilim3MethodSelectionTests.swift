@@ -268,7 +268,11 @@ extension QuantumKitTests {
         var measured = try QuantumCircuit(qubitCount: 2, classicalRegisters: [creg])
         try measured.h(0)
         try measured.measure(qubits: [0], classicalRegister: 0)
-        XCTAssertFalse(measured.allowsPreparedDensityShotBatching(noise: nil))
+        // Trailing terminal measure: evolve-once is allowed (Qiskit-style).
+        XCTAssertTrue(measured.allowsPreparedDensityShotBatching(noise: nil))
+        XCTAssertNotNil(measured.preparedShotUnitaryPrefix())
+        // Mid-circuit projective measure still cannot batch trajectories.
+        XCTAssertFalse(ShotExecutionPolicy.canBatch(circuit: measured, noise: nil))
 
         var dephasingOnly = NoiseModel()
         dephasingOnly.measurementMode = .dephasingOnly

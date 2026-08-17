@@ -173,8 +173,99 @@ extension QuantumKitTests {
         var measured = try QuantumCircuit(qubitCount: 1, classicalRegisters: [creg])
         try measured.h(0)
         try measured.measure(qubits: [0], classicalRegister: 0)
+        // Projective measure still forces trajectory *parallelism* off…
         XCTAssertFalse(ShotExecutionPolicy.canBatch(circuit: measured, noise: nil))
-        XCTAssertFalse(measured.allowsPreparedDensityShotBatching(noise: nil))
+        // …but trailing terminal measures allow evolve-once sampling.
+        XCTAssertTrue(measured.allowsPreparedDensityShotBatching(noise: nil))
+        XCTAssertTrue(measured.allowsPreparedStatevectorShotSampling(noise: nil))
+        XCTAssertNotNil(measured.preparedShotUnitaryPrefix())
+    }
+
+    func testPreparedSamplingMidCircuitMeasureStillRejected() throws {
+        let creg = try ClassicalRegisterSpec(bitCount: 1)
+        var circuit = try QuantumCircuit(qubitCount: 2, classicalRegisters: [creg])
+        try circuit.h(0)
+        try circuit.measure(qubits: [0], classicalRegister: 0)
+        try circuit.x(1)
+        XCTAssertNil(circuit.preparedShotUnitaryPrefix())
+        XCTAssertFalse(circuit.allowsPreparedStatevectorShotSampling(noise: nil))
+    }
+
+    func testPreparedSamplingMatchesBornDistribution() throws {
+        let creg = try ClassicalRegisterSpec(bitCount: 2)
+        var withMeasure = try QuantumCircuit(qubitCount: 2, classicalRegisters: [creg])
+        try withMeasure.h(0)
+        try withMeasure.cx(0, 1)
+        try withMeasure.measure(qubits: [0, 1], classicalRegister: 0)
+
+        var unitary = try QuantumCircuit(qubitCount: 2)
+        try unitary.h(0)
+        try unitary.cx(0, 1)
+
+        let seed: UInt64 = 123
+        let shots = 512
+        let measured = try CPUStatevectorBackend().run(
+            circuit: withMeasure,
+            options: QuantumRunOptions(seed: seed, shots: shots)
+        )
+        let plain = try CPUStatevectorBackend().run(
+            circuit: unitary,
+            options: QuantumRunOptions(seed: seed, shots: shots)
+        )
+        XCTAssertEqual(measured.shotCounts, plain.shotCounts)
+
+        // Same seed + prepared path must not depend on batchSize.
+        let batch1 = try CPUStatevectorBackend().run(
+            circuit: withMeasure,
+            options: QuantumRunOptions(
+                seed: seed,
+                shots: shots,
+                sampleOptions: SampleCountOptions(batchSize: 1)
+            )
+        )
+        let batch32 = try CPUStatevectorBackend().run(
+            circuit: withMeasure,
+            options: QuantumRunOptions(
+                seed: seed,
+                shots: shots,
+                sampleOptions: SampleCountOptions(batchSize: 32)
+            )
+        )
+        XCTAssertEqual(batch1.shotCounts, batch32.shotCounts)
+    }
+
+    func testPreparedSamplingOptOutKeepsTrajectory() throws {
+        var circuit = try QuantumCircuit(qubitCount: 1)
+        try circuit.h(0)
+        let seed: UInt64 = 7
+        let shots = 64
+        let prepared = try CPUStatevectorBackend().run(
+            circuit: circuit,
+            options: QuantumRunOptions(
+                seed: seed,
+                shots: shots,
+                sampleOptions: SampleCountOptions(preferPreparedSampling: true)
+            )
+        )
+        let trajectory = try CPUStatevectorBackend().run(
+            circuit: circuit,
+            options: QuantumRunOptions(
+                seed: seed,
+                shots: shots,
+                sampleOptions: SampleCountOptions(preferPreparedSampling: false)
+            )
+        )
+        // Different RNG schedules — not required to match; both must be valid histograms.
+        XCTAssertEqual(prepared.shotCounts?.shots, shots)
+        XCTAssertEqual(trajectory.shotCounts?.shots, shots)
+        XCTAssertEqual(
+            prepared.shotCounts?.counts.values.reduce(0, +),
+            shots
+        )
+        XCTAssertEqual(
+            trajectory.shotCounts?.counts.values.reduce(0, +),
+            shots
+        )
     }
 
     // MARK: - Independent unitary parity
@@ -190,7 +281,7 @@ extension QuantumKitTests {
             options: QuantumRunOptions(
                 seed: seed,
                 shots: shots,
-                sampleOptions: SampleCountOptions(batchSize: 32)
+                sampleOptions: SampleCountOptions(batchSize: 32, preferPreparedSampling: false)
             )
         )
         let reference = try cpuIndependentShotHistogram(
@@ -213,7 +304,7 @@ extension QuantumKitTests {
             options: QuantumRunOptions(
                 seed: seed,
                 shots: shots,
-                sampleOptions: SampleCountOptions(batchSize: 1)
+                sampleOptions: SampleCountOptions(batchSize: 1, preferPreparedSampling: false)
             )
         )
         let parallelPool = try CPUStatevectorBackend().run(
@@ -221,7 +312,7 @@ extension QuantumKitTests {
             options: QuantumRunOptions(
                 seed: seed,
                 shots: shots,
-                sampleOptions: SampleCountOptions(batchSize: 32)
+                sampleOptions: SampleCountOptions(batchSize: 32, preferPreparedSampling: false)
             )
         )
         XCTAssertEqual(serialPool.shotCounts, parallelPool.shotCounts)
@@ -269,7 +360,7 @@ extension QuantumKitTests {
             options: QuantumRunOptions(
                 seed: seed,
                 shots: shots,
-                sampleOptions: SampleCountOptions(batchSize: 1)
+                sampleOptions: SampleCountOptions(batchSize: 1, preferPreparedSampling: false)
             )
         )
         let legacy = try cpuLegacySequentialShotHistogram(
@@ -286,7 +377,7 @@ extension QuantumKitTests {
         )
     }
 
-    func testCPUIndependentSeedDivergesFromMetalSequentialSchedule() throws {
+    func testCPUAndMetalPreparedSamplingShareSeededHistogram() throws {
         guard makeDevice() != nil else {
             throw XCTSkip("Metal device unavailable")
         }
@@ -312,8 +403,8 @@ extension QuantumKitTests {
             rng: &metalRNG,
             options: SampleCountOptions(batchSize: 1)
         )
-        XCTAssertNotEqual(cpu.shotCounts, metal)
-        // Metal still matches its own sequential schedule across batch sizes.
+        // Evolve-once + multinomial uses the same sequential measurement stream on both.
+        XCTAssertEqual(cpu.shotCounts, metal)
         var metalBatchedRNG: QuantumRNG = .seeded(seed)
         let metalBatched = try QuantumMeasurement.runSampleCountsRNG(
             circuit: circuit,
@@ -323,6 +414,35 @@ extension QuantumKitTests {
             options: SampleCountOptions(batchSize: 32)
         )
         XCTAssertEqual(metal, metalBatched)
+    }
+
+    func testCPUIndependentSeedDivergesFromMetalSequentialScheduleWhenTrajectoryForced() throws {
+        guard makeDevice() != nil else {
+            throw XCTSkip("Metal device unavailable")
+        }
+        var circuit = try QuantumCircuit(qubitCount: 2)
+        try circuit.applyBellState()
+        let seed: UInt64 = 42
+        let shots = 128
+
+        let cpu = try CPUStatevectorBackend().run(
+            circuit: circuit,
+            options: QuantumRunOptions(
+                seed: seed,
+                shots: shots,
+                sampleOptions: SampleCountOptions(batchSize: 8, preferPreparedSampling: false)
+            )
+        )
+        let engine = try QuantumEngine()
+        var metalRNG: QuantumRNG = .seeded(seed)
+        let metal = try QuantumMeasurement.runSampleCountsRNG(
+            circuit: circuit,
+            engine: engine,
+            shots: shots,
+            rng: &metalRNG,
+            options: SampleCountOptions(batchSize: 1, preferPreparedSampling: false)
+        )
+        XCTAssertNotEqual(cpu.shotCounts, metal)
     }
 
     // MARK: - Mid-circuit forced serial
@@ -557,7 +677,7 @@ extension QuantumKitTests {
                 options: QuantumRunOptions(
                     seed: 1,
                     shots: 200_000,
-                    sampleOptions: SampleCountOptions(batchSize: 32)
+                    sampleOptions: SampleCountOptions(batchSize: 32, preferPreparedSampling: false)
                 )
             )
         }
@@ -581,7 +701,7 @@ extension QuantumKitTests {
         let options = QuantumRunOptions(
             seed: 5,
             shots: 24,
-            sampleOptions: SampleCountOptions(batchSize: 8),
+            sampleOptions: SampleCountOptions(batchSize: 8, preferPreparedSampling: false),
             profiling: .detailed
         )
         let result = try CPUStatevectorBackend().run(circuit: circuit, options: options)
@@ -609,7 +729,7 @@ extension QuantumKitTests {
             options: QuantumRunOptions(
                 seed: 13,
                 shots: 40,
-                sampleOptions: SampleCountOptions(batchSize: 8)
+                sampleOptions: SampleCountOptions(batchSize: 8, preferPreparedSampling: false)
             )
         )
         let on = try CPUStatevectorBackend().run(
@@ -617,7 +737,7 @@ extension QuantumKitTests {
             options: QuantumRunOptions(
                 seed: 13,
                 shots: 40,
-                sampleOptions: SampleCountOptions(batchSize: 8),
+                sampleOptions: SampleCountOptions(batchSize: 8, preferPreparedSampling: false),
                 profiling: .detailed
             )
         )

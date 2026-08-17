@@ -7,9 +7,11 @@ import XCTest
 /// → identical ``shotCounts`` (sampling) or identical CPU SV amplitudes (exact evolution).
 ///
 /// **Intentional exceptions (do not “fix”):**
-/// - CPU ``ShotExecutionPolicy/canBatch`` uses ``QuantumRNG/independentShotStream``;
-///   Metal unitary / serial measurement uses one sequential ``QuantumRNG``. Same seed
-///   does **not** imply CPU ≡ Metal histograms for independent circuits.
+/// - With ``SampleCountOptions/preferPreparedSampling`` `false`, CPU ``canBatch`` uses
+///   ``QuantumRNG/independentShotStream`` while Metal trajectory uses one sequential
+///   ``QuantumRNG``. Same seed does **not** imply CPU ≡ Metal for that opt-out path.
+/// - Default prepared sampling (evolve-once + multinomial) uses one sequential measurement
+///   stream on both CPU and Metal — same seed ⇒ matching histograms for noiseless unitaries.
 /// - ``ShotExecutionPolicy/mustSerial`` (mid-circuit measure / `c_if`) keeps one shared
 ///   sequential stream on CPU — distinct from the independent-shot schedule.
 ///
@@ -146,18 +148,36 @@ extension QuantumKitTests {
         let options = QuantumRunOptions(
             seed: seed,
             shots: shots,
-            sampleOptions: SampleCountOptions(batchSize: 8)
+            sampleOptions: SampleCountOptions(batchSize: 8, preferPreparedSampling: false)
         )
 
         let cpu = try CPUStatevectorBackend().run(circuit: circuit, options: options)
         let metal = try StatevectorBackend().run(circuit: circuit, options: options)
 
-        // Documented asymmetry: independentShotStream (CPU) ≠ sequential Metal RNG.
+        // Documented asymmetry on the trajectory opt-out path.
         XCTAssertNotEqual(
             cpu.shotCounts,
             metal.shotCounts,
             "CPU canBatch and Metal sequential schedules must remain distinct under the same seed"
         )
+    }
+
+    func testPreparedSamplingCPUMatchesMetalUnderSameSeed() throws {
+        guard MetalRuntime.isAvailable else {
+            throw XCTSkip("Metal device unavailable")
+        }
+
+        var circuit = try QuantumCircuit(qubitCount: 2)
+        try circuit.applyBellState()
+
+        let options = QuantumRunOptions(
+            seed: 42,
+            shots: 128,
+            sampleOptions: SampleCountOptions(batchSize: 8)
+        )
+        let cpu = try CPUStatevectorBackend().run(circuit: circuit, options: options)
+        let metal = try StatevectorBackend().run(circuit: circuit, options: options)
+        XCTAssertEqual(cpu.shotCounts, metal.shotCounts)
     }
 
     func testMustSerialUsesSequentialStreamDistinctFromIndependentCanBatch() throws {

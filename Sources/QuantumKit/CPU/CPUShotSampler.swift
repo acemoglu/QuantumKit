@@ -54,6 +54,28 @@ enum CPUShotSampler {
             throw QuantumMeasurementError.invalidShotCount(shots)
         }
 
+        if options.preferPreparedSampling,
+           circuit.allowsPreparedStatevectorShotSampling(noise: noise),
+           let prefix = circuit.preparedShotUnitaryPrefix() {
+            try cancellationCheck?()
+            let state = try CPUStateVector(qubitCount: circuit.qubitCount)
+            _ = try engine.executeRNG(
+                prefix,
+                on: state,
+                rng: &rng,
+                noise: nil,
+                cancellationCheck: cancellationCheck
+            )
+            return try DensityMatrixShotSampler.sampleTerminalShots(
+                probabilities: state.probabilities(),
+                shots: shots,
+                measuredQubitCount: circuit.qubitCount,
+                rng: &rng,
+                noise: noise,
+                cancellationCheck: cancellationCheck
+            )
+        }
+
         // Independent shots always use per-shot streams so batchSize 1 vs N match.
         if ShotExecutionPolicy.canBatch(circuit: circuit, noise: noise) {
             let streamSeed = Self.independentStreamRoot(seed: seed, rng: rng)
