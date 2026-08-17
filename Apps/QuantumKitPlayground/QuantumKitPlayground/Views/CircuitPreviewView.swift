@@ -43,11 +43,7 @@ struct CircuitPreviewView: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: PlaygroundChrome.cornerRadius, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: PlaygroundChrome.cornerRadius, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.12))
-        )
+        .playgroundPanel()
     }
 }
 

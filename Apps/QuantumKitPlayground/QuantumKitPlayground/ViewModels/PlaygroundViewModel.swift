@@ -6,6 +6,7 @@ final class PlaygroundViewModel: ObservableObject {
     @Published var sourceText: String {
         didSet {
             guard !suppressSourceSideEffects else { return }
+            runBanner = nil
             scheduleDebouncedParse()
         }
     }
@@ -17,9 +18,13 @@ final class PlaygroundViewModel: ObservableObject {
     @Published private(set) var isBusy = false
     @Published private(set) var parseError: String?
     @Published private(set) var runError: String?
-    @Published var selectedSampleID: SampleCircuit.ID?
+    @Published private(set) var runBanner: RunBanner?
+    @Published var selectedLibraryID: String?
     @Published var isPresentingOpen = false
     @Published var isPresentingSave = false
+    @Published var isPresentingSaveToLibrary = false
+    @Published var libraryNameDraft = ""
+    @Published var savedCircuits: [SavedCircuit] = CircuitLibraryStore.load()
     @Published var selectedCompactTab: PlaygroundTab = .circuit
     @Published var centerPane: CenterPane = .circuit
     @Published var selectedPaletteTool: PaletteTool?
@@ -53,14 +58,16 @@ final class PlaygroundViewModel: ObservableObject {
     var canUndoCanvas: Bool { !canvasUndoStack.isEmpty }
 
     var selectedSampleName: String? {
-        guard let selectedSampleID else { return nil }
-        return SampleCircuit.bundled.first(where: { $0.id == selectedSampleID })?.name
+        libraryItemName(for: selectedLibraryID)
     }
 
     var suggestedFilename: String {
-        if let id = selectedSampleID,
-           let sample = SampleCircuit.bundled.first(where: { $0.id == id }) {
-            return sample.filename
+        if let name = libraryItemName(for: selectedLibraryID) {
+            let slug = name
+                .lowercased()
+                .replacingOccurrences(of: " ", with: "-")
+                .filter { $0.isLetter || $0.isNumber || $0 == "-" }
+            if !slug.isEmpty { return "\(slug).qasm" }
         }
         return "circuit.qasm"
     }
@@ -80,20 +87,72 @@ final class PlaygroundViewModel: ObservableObject {
     init() {
         sourceText = SampleCircuit.bundled.first?.loadSource()
             ?? Self.fallbackSource
-        selectedSampleID = SampleCircuit.bundled.first?.id
+        selectedLibraryID = SampleCircuit.bundled.first?.id
         Task { await self.performParse() }
     }
 
     func loadSample(_ sample: SampleCircuit) {
-        selectedSampleID = sample.id
+        selectedLibraryID = sample.id
         if let text = sample.loadSource() {
-            replaceSource(text, clearSampleSelection: false)
+            replaceSource(text, clearLibrarySelection: false)
             statusMessage = "Loaded sample “\(sample.name)”."
             parse()
         } else {
-            parseError = "Sample “\(sample.name)” is missing from the app bundle."
             statusMessage = "Sample missing."
         }
+    }
+
+    func loadSavedCircuit(_ circuit: SavedCircuit) {
+        selectedLibraryID = circuit.id.uuidString
+        replaceSource(circuit.source, clearLibrarySelection: false)
+        statusMessage = "Loaded “\(circuit.name)”."
+        parse()
+    }
+
+    func newBlankCircuit() {
+        selectedLibraryID = nil
+        replaceSource(Self.blankSource, clearLibrarySelection: false)
+        selectedLibraryID = nil
+        statusMessage = "New circuit."
+        parse()
+    }
+
+    func presentSaveToLibrary() {
+        if let saved = selectedSavedCircuit {
+            libraryNameDraft = saved.name
+        } else if let sample = selectedBundledSample {
+            libraryNameDraft = sample.name
+        } else {
+            libraryNameDraft = "Untitled"
+        }
+        isPresentingSaveToLibrary = true
+    }
+
+    func confirmSaveToLibrary() {
+        let name = libraryNameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolved = name.isEmpty ? "Untitled" : name
+        if let existing = selectedSavedCircuit,
+           let index = savedCircuits.firstIndex(where: { $0.id == existing.id }) {
+            savedCircuits[index].name = resolved
+            savedCircuits[index].source = sourceText
+            savedCircuits[index].updatedAt = Date()
+            selectedLibraryID = existing.id.uuidString
+        } else {
+            let item = SavedCircuit(id: UUID(), name: resolved, source: sourceText, updatedAt: Date())
+            savedCircuits.insert(item, at: 0)
+            selectedLibraryID = item.id.uuidString
+        }
+        CircuitLibraryStore.persist(savedCircuits)
+        statusMessage = "Saved “\(resolved)”."
+    }
+
+    func deleteSavedCircuit(_ circuit: SavedCircuit) {
+        savedCircuits.removeAll { $0.id == circuit.id }
+        CircuitLibraryStore.persist(savedCircuits)
+        if selectedLibraryID == circuit.id.uuidString {
+            newBlankCircuit()
+        }
+        statusMessage = "Deleted “\(circuit.name)”."
     }
 
     func parse() {
@@ -125,9 +184,10 @@ final class PlaygroundViewModel: ObservableObject {
     }
 
     func resetToSelectedSample() {
-        if let id = selectedSampleID,
-           let sample = SampleCircuit.bundled.first(where: { $0.id == id }) {
+        if let sample = selectedBundledSample {
             loadSample(sample)
+        } else if let saved = selectedSavedCircuit {
+            loadSavedCircuit(saved)
         } else if let first = SampleCircuit.bundled.first {
             loadSample(first)
         }
@@ -147,7 +207,7 @@ final class PlaygroundViewModel: ObservableObject {
             guard let url = urls.first else { return }
             loadFile(at: url)
         case .failure(let error):
-            parseError = Self.errorDescription(error)
+            runBanner = RunBanner(title: "Open Error", message: Self.errorDescription(error))
             statusMessage = "Open failed."
         }
     }
@@ -157,7 +217,7 @@ final class PlaygroundViewModel: ObservableObject {
         case .success:
             statusMessage = "Saved OpenQASM."
         case .failure(let error):
-            parseError = Self.errorDescription(error)
+            runBanner = RunBanner(title: "Save Error", message: Self.errorDescription(error))
             statusMessage = "Save failed."
         }
     }
@@ -168,13 +228,13 @@ final class PlaygroundViewModel: ObservableObject {
             applyOpenedSource(text)
             statusMessage = "Opened \(url.lastPathComponent)."
         } catch {
-            parseError = Self.errorDescription(error)
+            runBanner = RunBanner(title: "Open Error", message: Self.errorDescription(error))
             statusMessage = "Could not load file."
         }
     }
 
     func applyOpenedSource(_ text: String) {
-        replaceSource(text, clearSampleSelection: true)
+        replaceSource(text, clearLibrarySelection: true)
         parse()
     }
 
@@ -334,8 +394,11 @@ final class PlaygroundViewModel: ObservableObject {
         asciiPreview = circuit.asciiDiagram()
         parseError = nil
         runError = nil
+        runBanner = nil
         runOutput = nil
-        selectedSampleID = nil
+        if selectedBundledSample != nil {
+            selectedLibraryID = nil
+        }
         suppressSourceSideEffects = true
         if let qasm = try? circuit.openQASM2() {
             sourceText = qasm
@@ -374,19 +437,28 @@ final class PlaygroundViewModel: ObservableObject {
                 self?.applyOpenedSource(text)
                 self?.statusMessage = "Loaded dropped OpenQASM."
             } catch {
-                self?.parseError = Self.errorDescription(error)
+                self?.runBanner = RunBanner(title: "Open Error", message: Self.errorDescription(error))
                 self?.statusMessage = "Drop failed."
             }
         }
         return true
     }
 
-    func selectSample(id: SampleCircuit.ID?) {
-        guard let id, let sample = SampleCircuit.bundled.first(where: { $0.id == id }) else { return }
-        if selectedSampleID == id, sourceText == sample.loadSource() {
+    func selectLibraryItem(id: String?) {
+        guard let id else { return }
+        if let sample = SampleCircuit.bundled.first(where: { $0.id == id }) {
+            if selectedLibraryID == id, sourceText == sample.loadSource() {
+                return
+            }
+            loadSample(sample)
             return
         }
-        loadSample(sample)
+        if let saved = savedCircuits.first(where: { $0.id.uuidString == id }) {
+            if selectedLibraryID == id, sourceText == saved.source {
+                return
+            }
+            loadSavedCircuit(saved)
+        }
     }
 
     private func scheduleDebouncedParse() {
@@ -439,33 +511,55 @@ final class PlaygroundViewModel: ObservableObject {
             parseError = nil
             runOutput = output
             runError = nil
+            runBanner = nil
             statusMessage = "Run finished (\(output.metadata.method.rawValue))."
         case .parseFailure(let message):
             parsedCircuit = nil
             asciiPreview = ""
             parseError = message
+            runBanner = RunBanner(title: "Parse Error", message: message)
             statusMessage = "Parse failed."
         case .runFailure(let circuit, let ascii, let message):
             parsedCircuit = circuit
             asciiPreview = ascii
             parseError = nil
             runError = message
+            runBanner = RunBanner(title: "Run Error", message: message)
             statusMessage = "Run failed."
         }
     }
 
-    private func replaceSource(_ text: String, clearSampleSelection: Bool) {
+    private func replaceSource(_ text: String, clearLibrarySelection: Bool) {
         suppressSourceSideEffects = true
         sourceText = text
         suppressSourceSideEffects = false
-        if clearSampleSelection {
-            selectedSampleID = nil
+        if clearLibrarySelection {
+            selectedLibraryID = nil
         }
         runOutput = nil
         runError = nil
+        runBanner = nil
         parseError = nil
         selectedGateIndex = nil
         pendingPlacement = nil
+    }
+
+    private var selectedBundledSample: SampleCircuit? {
+        guard let selectedLibraryID else { return nil }
+        return SampleCircuit.bundled.first(where: { $0.id == selectedLibraryID })
+    }
+
+    private var selectedSavedCircuit: SavedCircuit? {
+        guard let selectedLibraryID else { return nil }
+        return savedCircuits.first(where: { $0.id.uuidString == selectedLibraryID })
+    }
+
+    private func libraryItemName(for id: String?) -> String? {
+        guard let id else { return nil }
+        if let sample = SampleCircuit.bundled.first(where: { $0.id == id }) {
+            return sample.name
+        }
+        return savedCircuits.first(where: { $0.id.uuidString == id })?.name
     }
 
     nonisolated private static func detachedRun(
@@ -507,6 +601,18 @@ final class PlaygroundViewModel: ObservableObject {
     cx q[0],q[1];
     measure q -> c;
     """
+
+    private static let blankSource = """
+    OPENQASM 2.0;
+    include "qelib1.inc";
+    qreg q[2];
+    creg c[2];
+    """
+}
+
+struct RunBanner: Equatable {
+    var title: String
+    var message: String
 }
 
 enum CenterPane: String, Hashable, CaseIterable, Identifiable {

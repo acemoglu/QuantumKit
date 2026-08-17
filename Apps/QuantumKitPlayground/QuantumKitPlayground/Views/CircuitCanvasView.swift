@@ -24,18 +24,7 @@ struct CircuitCanvasView: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background {
-            if !isPhoneLayout {
-                RoundedRectangle(cornerRadius: PlaygroundChrome.cornerRadius, style: .continuous)
-                    .fill(.regularMaterial)
-            }
-        }
-        .overlay {
-            if !isPhoneLayout {
-                RoundedRectangle(cornerRadius: PlaygroundChrome.cornerRadius, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(0.12))
-            }
-        }
+        .playgroundPanel(enabled: !isPhoneLayout)
     }
 
     private var phoneHeader: some View {
@@ -155,7 +144,7 @@ struct CircuitCanvasView: View {
             Text("q\(qubit)")
                 .font(.system(.caption, design: .monospaced).weight(.semibold))
                 .frame(width: labelWidth, alignment: .leading)
-                .foregroundStyle(isPending ? Color.orange : Color.secondary)
+                .foregroundStyle(isPending ? Color.quantumPending : Color.secondary)
 
             ZStack(alignment: .leading) {
                 Rectangle()
@@ -181,7 +170,7 @@ struct CircuitCanvasView: View {
             }
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(isPending ? Color.orange.opacity(0.12) : Color.clear)
+                    .fill(isPending ? Color.quantumPending.opacity(0.12) : Color.clear)
             )
         }
     }
@@ -308,13 +297,12 @@ struct GateGlyphView: View {
     }
 
     private var chipBackground: some View {
-        RoundedRectangle(cornerRadius: 6, style: .continuous)
-            .fill(Color.playgroundEditorBackground)
+        RoundedRectangle(cornerRadius: PlaygroundChrome.chipRadius, style: .continuous)
+            .fill(Color.quantumCard)
             .overlay(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .strokeBorder(isSelected ? Color.accentColor : Color.primary.opacity(0.25), lineWidth: isSelected ? 2 : 1)
+                RoundedRectangle(cornerRadius: PlaygroundChrome.chipRadius, style: .continuous)
+                    .strokeBorder(isSelected ? Color.accentColor : Color.quantumInk.opacity(0.22), lineWidth: isSelected ? 2 : 1)
             )
-            .shadow(color: .black.opacity(0.06), radius: isSelected ? 3 : 0, y: 1)
     }
 }
 

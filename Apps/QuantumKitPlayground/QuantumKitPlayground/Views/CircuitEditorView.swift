@@ -23,7 +23,7 @@ struct CircuitEditorView: View {
                 .overlay {
                     if !isPhoneLayout {
                         RoundedRectangle(cornerRadius: PlaygroundChrome.cornerRadius, style: .continuous)
-                            .strokeBorder(isDropTargeted ? Color.accentColor : Color.primary.opacity(0.18), lineWidth: isDropTargeted ? 2 : 1)
+                            .strokeBorder(isDropTargeted ? Color.accentColor : Color.quantumInk.opacity(0.14), lineWidth: isDropTargeted ? 2 : 1)
                     }
                 }
                 .overlay(alignment: .topTrailing) {
@@ -31,7 +31,7 @@ struct CircuitEditorView: View {
                         Label("Drop OpenQASM", systemImage: "square.and.arrow.down")
                             .font(.caption.weight(.semibold))
                             .padding(8)
-                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            .background(Color.quantumCard, in: RoundedRectangle(cornerRadius: PlaygroundChrome.chipRadius, style: .continuous))
                             .padding(10)
                     }
                 }

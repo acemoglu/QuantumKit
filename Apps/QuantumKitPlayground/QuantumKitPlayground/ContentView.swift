@@ -6,6 +6,7 @@ struct ContentView: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var isPresentingSamples = false
+    @State private var toolbarHint: String?
 
     var body: some View {
         Group {
@@ -17,25 +18,26 @@ struct ContentView: View {
         }
         .environment(\.isPhoneLayout, usesCompactChrome)
         .overlay(alignment: .top) {
-            #if os(iOS)
             errorBanners
                 .padding(.horizontal, 12)
                 .padding(.top, 8)
-            #endif
         }
-        .safeAreaInset(edge: .top, spacing: 0) {
-            #if os(macOS)
-            errorBanners
-            #endif
-        }
-        .safeAreaInset(edge: .bottom) {
-            #if os(macOS)
-            StatusBarView(
-                message: viewModel.statusMessage,
-                isBusy: viewModel.isBusy,
-                lastRunSummary: viewModel.lastRunSummary
-            )
-            #endif
+        .overlay(alignment: .topTrailing) {
+            if let toolbarHint {
+                Text(toolbarHint)
+                    .font(.caption)
+                    .foregroundStyle(Color.quantumInk)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Color.quantumCard, in: Capsule())
+                    .overlay(
+                        Capsule()
+                            .strokeBorder(Color.quantumInk.opacity(0.12))
+                    )
+                    .padding(.top, 6)
+                    .padding(.trailing, 16)
+                    .allowsHitTesting(false)
+            }
         }
         .fileImporter(
             isPresented: $viewModel.isPresentingOpen,
@@ -70,8 +72,17 @@ struct ContentView: View {
             #endif
             .modifier(DismissSamplesWhenSelectionChanges(
                 isPresented: $isPresentingSamples,
-                sampleID: viewModel.selectedSampleID
+                sampleID: viewModel.selectedLibraryID
             ))
+        }
+        .alert("Save Circuit", isPresented: $viewModel.isPresentingSaveToLibrary) {
+            TextField("Name", text: $viewModel.libraryNameDraft)
+            Button("Save") {
+                viewModel.confirmSaveToLibrary()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Stored in the sidebar under My Circuits.")
         }
     }
 
@@ -87,6 +98,9 @@ struct ContentView: View {
     private var regularChrome: some View {
         regularLayout
             .navigationTitle("QuantumKit")
+            #if os(macOS)
+            .toolbarBackground(Color.quantumCanvas, for: .windowToolbar)
+            #endif
             .toolbar {
                 ToolbarItem(placement: .navigation) {
                     QuantumKitMark(size: 22)
@@ -165,6 +179,8 @@ struct ContentView: View {
             }
         }
         .modifier(IOSTabBarOnlyStyle())
+        .toolbarBackground(Color.quantumCanvas, for: .tabBar)
+        .toolbarBackground(.visible, for: .tabBar)
     }
 
     private func iosTab<Content: View>(
@@ -176,6 +192,8 @@ struct ContentView: View {
                 .navigationTitle(tab.title)
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar { iosToolbar }
+                .toolbarBackground(Color.quantumCanvas, for: .navigationBar)
+                .toolbarBackground(.visible, for: .navigationBar)
         }
         .tabItem {
             Label(tab.title, systemImage: tab.systemImage)
@@ -201,6 +219,9 @@ struct ContentView: View {
                 }
                 Button("Save…", systemImage: "square.and.arrow.down") {
                     viewModel.presentSave()
+                }
+                Button("Save to My Circuits", systemImage: "tray.and.arrow.down") {
+                    viewModel.presentSaveToLibrary()
                 }
                 Button("Parse", systemImage: "text.alignleft") {
                     viewModel.parse()
@@ -236,6 +257,7 @@ struct ContentView: View {
             } label: {
                 Label("Open…", systemImage: "folder")
             }
+            .delayedHoverHint("Open an OpenQASM file", activeHint: $toolbarHint)
             .help("Open an OpenQASM file")
 
             Button {
@@ -243,7 +265,16 @@ struct ContentView: View {
             } label: {
                 Label("Save…", systemImage: "square.and.arrow.down")
             }
-            .help("Save OpenQASM")
+            .delayedHoverHint("Export OpenQASM to a file", activeHint: $toolbarHint)
+            .help("Export OpenQASM to a file")
+
+            Button {
+                viewModel.presentSaveToLibrary()
+            } label: {
+                Label("Save Circuit", systemImage: "tray.and.arrow.down")
+            }
+            .delayedHoverHint("Save to My Circuits in the sidebar", activeHint: $toolbarHint)
+            .help("Save to My Circuits in the sidebar")
         }
 
         ToolbarItemGroup(placement: .primaryAction) {
@@ -253,7 +284,8 @@ struct ContentView: View {
                 Label("Parse", systemImage: "text.alignleft")
             }
             .disabled(viewModel.isBusy)
-            .help("Parse OpenQASM")
+            .delayedHoverHint("Check OpenQASM without running", activeHint: $toolbarHint)
+            .help("Check OpenQASM without running")
 
             if viewModel.isBusy {
                 ProgressView()
@@ -267,24 +299,16 @@ struct ContentView: View {
             }
             .keyboardShortcut("r", modifiers: .command)
             .disabled(viewModel.isBusy)
-            .help("Run the circuit (⌘R)")
+            .delayedHoverHint("Simulate the circuit (⌘R)", activeHint: $toolbarHint)
+            .help("Simulate the circuit (⌘R)")
         }
     }
 
     @ViewBuilder
     private var errorBanners: some View {
-        if viewModel.parseError != nil || viewModel.runError != nil {
-            VStack(spacing: 8) {
-                if let parseError = viewModel.parseError {
-                    ErrorBannerView(title: "Parse Error", message: parseError)
-                }
-                if let runError = viewModel.runError {
-                    ErrorBannerView(title: "Run Error", message: runError)
-                }
-            }
-            .padding(.horizontal, usesCompactChrome ? 0 : 12)
-            .padding(.top, usesCompactChrome ? 0 : 8)
-            .padding(.bottom, usesCompactChrome ? 0 : 4)
+        if let banner = viewModel.runBanner {
+            ErrorBannerView(title: banner.title, message: banner.message)
+                .padding(.horizontal, 12)
         }
     }
 }

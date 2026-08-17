@@ -8,10 +8,6 @@ struct ResultsPanelView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                if isPhoneLayout {
-                    phoneStatus
-                }
-
                 if showsSettings {
                     SettingsPanelView()
                 }
@@ -47,25 +43,7 @@ struct ResultsPanelView: View {
             .padding(isPhoneLayout ? 16 : 16)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .background {
-            if !isPhoneLayout {
-                RoundedRectangle(cornerRadius: PlaygroundChrome.cornerRadius, style: .continuous)
-                    .fill(.regularMaterial)
-            }
-        }
-        .overlay {
-            if !isPhoneLayout {
-                RoundedRectangle(cornerRadius: PlaygroundChrome.cornerRadius, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(0.12))
-            }
-        }
-    }
-
-    private var phoneStatus: some View {
-        Text(viewModel.statusMessage)
-            .font(.footnote)
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity, alignment: .leading)
+        .playgroundPanel(enabled: !isPhoneLayout)
     }
 
     private func histogramBars(from output: PlaygroundRunOutput) -> [HistogramBar] {
@@ -154,9 +132,10 @@ private struct ParsedSummarySection: View {
 private struct PlaceholderSection: View {
     var body: some View {
         VStack(spacing: 12) {
-            QuantumKitMark(size: 40)
+            QuantumKitMark(size: 56)
             Text("No Results Yet")
                 .font(.title3.weight(.semibold))
+                .foregroundStyle(Color.quantumInk)
             Text("Parse OpenQASM to preview the circuit, then Run to simulate with QuantumKit.")
                 .font(.body)
                 .foregroundStyle(.secondary)

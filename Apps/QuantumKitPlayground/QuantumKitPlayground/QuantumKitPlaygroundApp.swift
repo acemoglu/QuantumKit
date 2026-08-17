@@ -8,6 +8,7 @@ struct QuantumKitPlaygroundApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(viewModel)
+                .background(Color.quantumCanvas.ignoresSafeArea())
         }
         #if os(macOS)
         .defaultSize(width: 1280, height: 820)

@@ -20,7 +20,7 @@ struct GatePaletteView: View {
                 if let pending = viewModel.pendingPlacement {
                     Text(pendingHint(pending))
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(Color.quantumPending)
                         .lineLimit(2)
                     Spacer(minLength: 0)
                     Button("Cancel") { viewModel.cancelPendingPlacement() }
@@ -40,7 +40,7 @@ struct GatePaletteView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(.bar)
+        .background(Color.quantumCanvas)
     }
 
     private func phoneChipRow(_ tools: [PaletteTool]) -> some View {
@@ -62,7 +62,7 @@ struct GatePaletteView: View {
                 if let pending = viewModel.pendingPlacement {
                     Text(pendingHint(pending))
                         .font(.caption)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(Color.quantumPending)
                         .lineLimit(1)
                     Button("Cancel") { viewModel.cancelPendingPlacement() }
                         .controlSize(.small)
@@ -90,11 +90,7 @@ struct GatePaletteView: View {
             }
         }
         .padding(10)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: PlaygroundChrome.cornerRadius, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: PlaygroundChrome.cornerRadius, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.12))
-        )
+        .playgroundPanel()
     }
 
     private func chip(_ tool: PaletteTool, minWidth: CGFloat, minHeight: CGFloat) -> some View {
@@ -123,16 +119,16 @@ struct PaletteChipView: View {
     var body: some View {
         Text(tool.title)
             .font(.system(.caption, design: .rounded).weight(.bold))
-            .foregroundStyle(isSelected ? Color.white : Color.primary)
+            .foregroundStyle(isSelected ? Color.quantumOnAccent : Color.quantumInk)
             .frame(minWidth: minWidth, minHeight: minHeight)
             .padding(.horizontal, 7)
             .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(isSelected ? Color.accentColor : Color.playgroundEditorBackground)
+                RoundedRectangle(cornerRadius: PlaygroundChrome.chipRadius, style: .continuous)
+                    .fill(isSelected ? Color.accentColor : Color.quantumCard)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(isSelected ? Color.accentColor : Color.primary.opacity(0.18), lineWidth: isSelected ? 2 : 1)
+                RoundedRectangle(cornerRadius: PlaygroundChrome.chipRadius, style: .continuous)
+                    .strokeBorder(isSelected ? Color.accentColor : Color.quantumInk.opacity(0.16), lineWidth: isSelected ? 2 : 1)
             )
     }
 }
