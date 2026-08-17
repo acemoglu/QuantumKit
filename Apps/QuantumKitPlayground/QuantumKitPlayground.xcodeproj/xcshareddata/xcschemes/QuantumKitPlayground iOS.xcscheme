@@ -15,9 +15,9 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "F00100000000000000000001"
+               BlueprintIdentifier = "F10100000000000000000001"
                BuildableName = "QuantumKit.app"
-               BlueprintName = "QuantumKitPlayground"
+               BlueprintName = "QuantumKitPlaygroundiOS"
                ReferencedContainer = "container:QuantumKitPlayground.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
@@ -44,9 +44,9 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "F00100000000000000000001"
+            BlueprintIdentifier = "F10100000000000000000001"
             BuildableName = "QuantumKit.app"
-            BlueprintName = "QuantumKitPlayground"
+            BlueprintName = "QuantumKitPlaygroundiOS"
             ReferencedContainer = "container:QuantumKitPlayground.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
@@ -61,9 +61,9 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "F00100000000000000000001"
+            BlueprintIdentifier = "F10100000000000000000001"
             BuildableName = "QuantumKit.app"
-            BlueprintName = "QuantumKitPlayground"
+            BlueprintName = "QuantumKitPlaygroundiOS"
             ReferencedContainer = "container:QuantumKitPlayground.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>

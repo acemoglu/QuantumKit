@@ -1,0 +1,12 @@
+{
+  "images" : [
+    {
+      "filename" : "QuantumKitLogo.png",
+      "idiom" : "universal"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}

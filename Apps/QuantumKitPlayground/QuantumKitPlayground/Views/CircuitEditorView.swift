@@ -3,28 +3,29 @@ import UniformTypeIdentifiers
 
 struct CircuitEditorView: View {
     @EnvironmentObject private var viewModel: PlaygroundViewModel
-    @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.isPhoneLayout) private var isPhoneLayout
     @State private var isDropTargeted = false
 
     var showsSettings: Bool = false
-    var compactEditor: Bool = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            if !compactEditor {
+        VStack(alignment: .leading, spacing: isPhoneLayout ? 0 : 12) {
+            if !isPhoneLayout {
                 header
             }
 
             TextEditor(text: $viewModel.sourceText)
                 .font(.system(.body, design: .monospaced))
                 .scrollContentBackground(.hidden)
-                .padding(8)
+                .padding(isPhoneLayout ? 12 : 8)
                 .background(Color.playgroundEditorBackground)
-                .clipShape(RoundedRectangle(cornerRadius: PlaygroundChrome.cornerRadius, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: PlaygroundChrome.cornerRadius, style: .continuous)
-                        .strokeBorder(isDropTargeted ? Color.accentColor : Color.primary.opacity(0.18), lineWidth: isDropTargeted ? 2 : 1)
-                )
+                .clipShape(RoundedRectangle(cornerRadius: isPhoneLayout ? 0 : PlaygroundChrome.cornerRadius, style: .continuous))
+                .overlay {
+                    if !isPhoneLayout {
+                        RoundedRectangle(cornerRadius: PlaygroundChrome.cornerRadius, style: .continuous)
+                            .strokeBorder(isDropTargeted ? Color.accentColor : Color.primary.opacity(0.18), lineWidth: isDropTargeted ? 2 : 1)
+                    }
+                }
                 .overlay(alignment: .topTrailing) {
                     if isDropTargeted {
                         Label("Drop OpenQASM", systemImage: "square.and.arrow.down")
@@ -39,10 +40,13 @@ struct CircuitEditorView: View {
                 SettingsPanelView()
             }
         }
-        .padding(compactEditor ? 0 : 16)
+        .padding(isPhoneLayout ? 0 : 16)
         .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
             viewModel.applyDroppedProviders(providers)
         }
+        #if os(iOS)
+        .scrollDismissesKeyboard(.interactively)
+        #endif
         // v1: LLM generate-circuit UI is intentionally omitted.
     }
 
@@ -53,21 +57,6 @@ struct CircuitEditorView: View {
             Text("OpenQASM")
                 .font(.headline)
             Spacer()
-            if sizeClass == .compact {
-                sampleMenu
-            }
-        }
-    }
-
-    private var sampleMenu: some View {
-        Menu {
-            ForEach(SampleCircuit.bundled) { sample in
-                Button(sample.name) {
-                    viewModel.loadSample(sample)
-                }
-            }
-        } label: {
-            Label(viewModel.selectedSampleName ?? "Samples", systemImage: "square.stack")
         }
     }
 }

@@ -3,6 +3,7 @@ import QuantumKit
 
 struct SettingsPanelView: View {
     @EnvironmentObject private var viewModel: PlaygroundViewModel
+    @Environment(\.isPhoneLayout) private var isPhoneLayout
 
     var body: some View {
         GroupBox {
@@ -50,9 +51,11 @@ struct SettingsPanelView: View {
                     step: 256
                 )
                 .labelsHidden()
-                Text("\(viewModel.settings.shots)")
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
+                if !isPhoneLayout {
+                    Text("\(viewModel.settings.shots)")
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                }
                 Spacer()
             }
         }
@@ -62,17 +65,25 @@ struct SettingsPanelView: View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Seed")
                 .font(.subheadline.weight(.semibold))
-            HStack(spacing: 8) {
+            if isPhoneLayout {
                 TextField("Seed", text: seedTextBinding)
                     .textFieldStyle(.roundedBorder)
                     .font(.body.monospaced())
-                    .frame(maxWidth: 160)
                     .disabled(viewModel.settings.useRandomSeed)
                     #if os(iOS)
                     .keyboardType(.numberPad)
                     #endif
                 Toggle("Random seed", isOn: $viewModel.settings.useRandomSeed)
-                    .toggleStyle(.checkboxCompatible)
+            } else {
+                HStack(spacing: 8) {
+                    TextField("Seed", text: seedTextBinding)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.body.monospaced())
+                        .frame(maxWidth: 160)
+                        .disabled(viewModel.settings.useRandomSeed)
+                    Toggle("Random seed", isOn: $viewModel.settings.useRandomSeed)
+                        .toggleStyle(.checkboxCompatible)
+                }
             }
         }
     }

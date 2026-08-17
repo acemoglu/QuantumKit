@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A22CFE6F30337B3700CA5BE4 /* QuantumKit in Frameworks */ = {isa = PBXBuildFile; productRef = H00100000000000000000002 /* QuantumKit */; };
+		A22CFE7030337B3700CA5BE4 /* QuantumKit in Frameworks */ = {isa = PBXBuildFile; productRef = H10100000000000000000002 /* QuantumKit */; };
 		C00100000000000000000001 /* QuantumKitPlaygroundApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00100000000000000000001 /* QuantumKitPlaygroundApp.swift */; };
 		C00100000000000000000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00100000000000000000002 /* ContentView.swift */; };
 		C00100000000000000000003 /* PlaygroundSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00100000000000000000003 /* PlaygroundSettings.swift */; };
@@ -18,25 +20,52 @@
 		C00100000000000000000009 /* SettingsPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00100000000000000000009 /* SettingsPanelView.swift */; };
 		C0010000000000000000000A /* ResultsPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0010000000000000000000A /* ResultsPanelView.swift */; };
 		C0010000000000000000000B /* SimulationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0010000000000000000000B /* SimulationService.swift */; };
-		C00100000000000000000012 /* CircuitPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00100000000000000000012 /* CircuitPreviewView.swift */; };
-		C00100000000000000000013 /* ResultsHistogramView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00100000000000000000013 /* ResultsHistogramView.swift */; };
-		C00100000000000000000014 /* QASMFileIO.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00100000000000000000014 /* QASMFileIO.swift */; };
-		C00100000000000000000015 /* PlaygroundChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00100000000000000000015 /* PlaygroundChrome.swift */; };
-		C00100000000000000000017 /* PaletteTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00100000000000000000017 /* PaletteTool.swift */; };
-		C00100000000000000000018 /* GatePaletteView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00100000000000000000018 /* GatePaletteView.swift */; };
-		C00100000000000000000019 /* CircuitCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00100000000000000000019 /* CircuitCanvasView.swift */; };
-		C0010000000000000000001A /* CircuitComposerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0010000000000000000001A /* CircuitComposerView.swift */; };
 		C0010000000000000000000C /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B0010000000000000000000C /* Assets.xcassets */; };
 		C0010000000000000000000D /* bell.qasm in Resources */ = {isa = PBXBuildFile; fileRef = B0010000000000000000000D /* bell.qasm */; };
 		C0010000000000000000000E /* toffoli.qasm in Resources */ = {isa = PBXBuildFile; fileRef = B0010000000000000000000E /* toffoli.qasm */; };
 		C0010000000000000000000F /* teleport.qasm in Resources */ = {isa = PBXBuildFile; fileRef = B0010000000000000000000F /* teleport.qasm */; };
 		C00100000000000000000010 /* grover_2q.qasm in Resources */ = {isa = PBXBuildFile; fileRef = B00100000000000000000010 /* grover_2q.qasm */; };
 		C00100000000000000000011 /* parametric.qasm in Resources */ = {isa = PBXBuildFile; fileRef = B00100000000000000000011 /* parametric.qasm */; };
+		C00100000000000000000012 /* CircuitPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00100000000000000000012 /* CircuitPreviewView.swift */; };
+		C00100000000000000000013 /* ResultsHistogramView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00100000000000000000013 /* ResultsHistogramView.swift */; };
+		C00100000000000000000014 /* QASMFileIO.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00100000000000000000014 /* QASMFileIO.swift */; };
+		C00100000000000000000015 /* PlaygroundChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00100000000000000000015 /* PlaygroundChrome.swift */; };
 		C00100000000000000000016 /* ghz4.qasm in Resources */ = {isa = PBXBuildFile; fileRef = B00100000000000000000016 /* ghz4.qasm */; };
+		C00100000000000000000017 /* PaletteTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00100000000000000000017 /* PaletteTool.swift */; };
+		C00100000000000000000018 /* GatePaletteView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00100000000000000000018 /* GatePaletteView.swift */; };
+		C00100000000000000000019 /* CircuitCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00100000000000000000019 /* CircuitCanvasView.swift */; };
+		C0010000000000000000001A /* CircuitComposerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0010000000000000000001A /* CircuitComposerView.swift */; };
+		C10100000000000000000001 /* QuantumKitPlaygroundApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00100000000000000000001 /* QuantumKitPlaygroundApp.swift */; };
+		C10100000000000000000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00100000000000000000002 /* ContentView.swift */; };
+		C10100000000000000000003 /* PlaygroundSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00100000000000000000003 /* PlaygroundSettings.swift */; };
+		C10100000000000000000004 /* SampleCircuit.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00100000000000000000004 /* SampleCircuit.swift */; };
+		C10100000000000000000005 /* PlaygroundRunOutput.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00100000000000000000005 /* PlaygroundRunOutput.swift */; };
+		C10100000000000000000006 /* PlaygroundViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00100000000000000000006 /* PlaygroundViewModel.swift */; };
+		C10100000000000000000007 /* SamplePickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00100000000000000000007 /* SamplePickerView.swift */; };
+		C10100000000000000000008 /* CircuitEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00100000000000000000008 /* CircuitEditorView.swift */; };
+		C10100000000000000000009 /* SettingsPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00100000000000000000009 /* SettingsPanelView.swift */; };
+		C1010000000000000000000A /* ResultsPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0010000000000000000000A /* ResultsPanelView.swift */; };
+		C1010000000000000000000B /* SimulationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0010000000000000000000B /* SimulationService.swift */; };
+		C1010000000000000000000C /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B0010000000000000000000C /* Assets.xcassets */; };
+		C1010000000000000000000D /* bell.qasm in Resources */ = {isa = PBXBuildFile; fileRef = B0010000000000000000000D /* bell.qasm */; };
+		C1010000000000000000000E /* toffoli.qasm in Resources */ = {isa = PBXBuildFile; fileRef = B0010000000000000000000E /* toffoli.qasm */; };
+		C1010000000000000000000F /* teleport.qasm in Resources */ = {isa = PBXBuildFile; fileRef = B0010000000000000000000F /* teleport.qasm */; };
+		C10100000000000000000010 /* grover_2q.qasm in Resources */ = {isa = PBXBuildFile; fileRef = B00100000000000000000010 /* grover_2q.qasm */; };
+		C10100000000000000000011 /* parametric.qasm in Resources */ = {isa = PBXBuildFile; fileRef = B00100000000000000000011 /* parametric.qasm */; };
+		C10100000000000000000012 /* CircuitPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00100000000000000000012 /* CircuitPreviewView.swift */; };
+		C10100000000000000000013 /* ResultsHistogramView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00100000000000000000013 /* ResultsHistogramView.swift */; };
+		C10100000000000000000014 /* QASMFileIO.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00100000000000000000014 /* QASMFileIO.swift */; };
+		C10100000000000000000015 /* PlaygroundChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00100000000000000000015 /* PlaygroundChrome.swift */; };
+		C10100000000000000000016 /* ghz4.qasm in Resources */ = {isa = PBXBuildFile; fileRef = B00100000000000000000016 /* ghz4.qasm */; };
+		C10100000000000000000017 /* PaletteTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00100000000000000000017 /* PaletteTool.swift */; };
+		C10100000000000000000018 /* GatePaletteView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00100000000000000000018 /* GatePaletteView.swift */; };
+		C10100000000000000000019 /* CircuitCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00100000000000000000019 /* CircuitCanvasView.swift */; };
+		C1010000000000000000001A /* CircuitComposerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0010000000000000000001A /* CircuitComposerView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		A00100000000000000000001 /* QuantumKitPlayground.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = QuantumKitPlayground.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A00100000000000000000001 /* QuantumKit.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = QuantumKit.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A00100000000000000000002 /* QuantumKit-iOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = QuantumKit.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B00100000000000000000001 /* QuantumKitPlaygroundApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuantumKitPlaygroundApp.swift; sourceTree = "<group>"; };
 		B00100000000000000000002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		B00100000000000000000003 /* PlaygroundSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaygroundSettings.swift; sourceTree = "<group>"; };
@@ -48,21 +77,21 @@
 		B00100000000000000000009 /* SettingsPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsPanelView.swift; sourceTree = "<group>"; };
 		B0010000000000000000000A /* ResultsPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResultsPanelView.swift; sourceTree = "<group>"; };
 		B0010000000000000000000B /* SimulationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimulationService.swift; sourceTree = "<group>"; };
-		B00100000000000000000012 /* CircuitPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CircuitPreviewView.swift; sourceTree = "<group>"; };
-		B00100000000000000000013 /* ResultsHistogramView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResultsHistogramView.swift; sourceTree = "<group>"; };
-		B00100000000000000000014 /* QASMFileIO.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QASMFileIO.swift; sourceTree = "<group>"; };
-		B00100000000000000000015 /* PlaygroundChrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaygroundChrome.swift; sourceTree = "<group>"; };
-		B00100000000000000000017 /* PaletteTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaletteTool.swift; sourceTree = "<group>"; };
-		B00100000000000000000018 /* GatePaletteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GatePaletteView.swift; sourceTree = "<group>"; };
-		B00100000000000000000019 /* CircuitCanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CircuitCanvasView.swift; sourceTree = "<group>"; };
-		B0010000000000000000001A /* CircuitComposerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CircuitComposerView.swift; sourceTree = "<group>"; };
 		B0010000000000000000000C /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		B0010000000000000000000D /* bell.qasm */ = {isa = PBXFileReference; lastKnownFileType = text; path = bell.qasm; sourceTree = "<group>"; };
 		B0010000000000000000000E /* toffoli.qasm */ = {isa = PBXFileReference; lastKnownFileType = text; path = toffoli.qasm; sourceTree = "<group>"; };
 		B0010000000000000000000F /* teleport.qasm */ = {isa = PBXFileReference; lastKnownFileType = text; path = teleport.qasm; sourceTree = "<group>"; };
 		B00100000000000000000010 /* grover_2q.qasm */ = {isa = PBXFileReference; lastKnownFileType = text; path = grover_2q.qasm; sourceTree = "<group>"; };
 		B00100000000000000000011 /* parametric.qasm */ = {isa = PBXFileReference; lastKnownFileType = text; path = parametric.qasm; sourceTree = "<group>"; };
+		B00100000000000000000012 /* CircuitPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CircuitPreviewView.swift; sourceTree = "<group>"; };
+		B00100000000000000000013 /* ResultsHistogramView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResultsHistogramView.swift; sourceTree = "<group>"; };
+		B00100000000000000000014 /* QASMFileIO.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QASMFileIO.swift; sourceTree = "<group>"; };
+		B00100000000000000000015 /* PlaygroundChrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaygroundChrome.swift; sourceTree = "<group>"; };
 		B00100000000000000000016 /* ghz4.qasm */ = {isa = PBXFileReference; lastKnownFileType = text; path = ghz4.qasm; sourceTree = "<group>"; };
+		B00100000000000000000017 /* PaletteTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaletteTool.swift; sourceTree = "<group>"; };
+		B00100000000000000000018 /* GatePaletteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GatePaletteView.swift; sourceTree = "<group>"; };
+		B00100000000000000000019 /* CircuitCanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CircuitCanvasView.swift; sourceTree = "<group>"; };
+		B0010000000000000000001A /* CircuitComposerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CircuitComposerView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -70,6 +99,15 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A22CFE6F30337B3700CA5BE4 /* QuantumKit in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D10100000000000000000003 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A22CFE7030337B3700CA5BE4 /* QuantumKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -101,7 +139,8 @@
 		E00100000000000000000003 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				A00100000000000000000001 /* QuantumKitPlayground.app */,
+				A00100000000000000000001 /* QuantumKit.app */,
+				A00100000000000000000002 /* QuantumKit-iOS.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -192,8 +231,28 @@
 			packageProductDependencies = (
 				H00100000000000000000002 /* QuantumKit */,
 			);
-			productName = QuantumKitPlayground;
-			productReference = A00100000000000000000001 /* QuantumKitPlayground.app */;
+			productName = QuantumKit;
+			productReference = A00100000000000000000001 /* QuantumKit.app */;
+			productType = "com.apple.product-type.application";
+		};
+		F10100000000000000000001 /* QuantumKitPlaygroundiOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = G10100000000000000000002 /* Build configuration list for PBXNativeTarget "QuantumKitPlaygroundiOS" */;
+			buildPhases = (
+				D10100000000000000000001 /* Sources */,
+				D10100000000000000000002 /* Resources */,
+				D10100000000000000000003 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = QuantumKitPlaygroundiOS;
+			packageProductDependencies = (
+				H10100000000000000000002 /* QuantumKit */,
+			);
+			productName = QuantumKit;
+			productReference = A00100000000000000000002 /* QuantumKit-iOS.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -207,6 +266,9 @@
 				LastUpgradeCheck = 1600;
 				TargetAttributes = {
 					F00100000000000000000001 = {
+						CreatedOnToolsVersion = 16.0;
+					};
+					F10100000000000000000001 = {
 						CreatedOnToolsVersion = 16.0;
 					};
 				};
@@ -228,6 +290,7 @@
 			projectRoot = "";
 			targets = (
 				F00100000000000000000001 /* QuantumKitPlayground */,
+				F10100000000000000000001 /* QuantumKitPlaygroundiOS */,
 			);
 		};
 /* End PBXProject section */
@@ -244,6 +307,20 @@
 				C00100000000000000000010 /* grover_2q.qasm in Resources */,
 				C00100000000000000000011 /* parametric.qasm in Resources */,
 				C00100000000000000000016 /* ghz4.qasm in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D10100000000000000000002 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C1010000000000000000000C /* Assets.xcassets in Resources */,
+				C1010000000000000000000D /* bell.qasm in Resources */,
+				C1010000000000000000000E /* toffoli.qasm in Resources */,
+				C1010000000000000000000F /* teleport.qasm in Resources */,
+				C10100000000000000000010 /* grover_2q.qasm in Resources */,
+				C10100000000000000000011 /* parametric.qasm in Resources */,
+				C10100000000000000000016 /* ghz4.qasm in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -273,6 +350,32 @@
 				C00100000000000000000018 /* GatePaletteView.swift in Sources */,
 				C00100000000000000000019 /* CircuitCanvasView.swift in Sources */,
 				C0010000000000000000001A /* CircuitComposerView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D10100000000000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C10100000000000000000001 /* QuantumKitPlaygroundApp.swift in Sources */,
+				C10100000000000000000002 /* ContentView.swift in Sources */,
+				C10100000000000000000003 /* PlaygroundSettings.swift in Sources */,
+				C10100000000000000000004 /* SampleCircuit.swift in Sources */,
+				C10100000000000000000005 /* PlaygroundRunOutput.swift in Sources */,
+				C10100000000000000000006 /* PlaygroundViewModel.swift in Sources */,
+				C10100000000000000000007 /* SamplePickerView.swift in Sources */,
+				C10100000000000000000008 /* CircuitEditorView.swift in Sources */,
+				C10100000000000000000009 /* SettingsPanelView.swift in Sources */,
+				C1010000000000000000000A /* ResultsPanelView.swift in Sources */,
+				C1010000000000000000000B /* SimulationService.swift in Sources */,
+				C10100000000000000000012 /* CircuitPreviewView.swift in Sources */,
+				C10100000000000000000013 /* ResultsHistogramView.swift in Sources */,
+				C10100000000000000000014 /* QASMFileIO.swift in Sources */,
+				C10100000000000000000015 /* PlaygroundChrome.swift in Sources */,
+				C10100000000000000000017 /* PaletteTool.swift in Sources */,
+				C10100000000000000000018 /* GatePaletteView.swift in Sources */,
+				C10100000000000000000019 /* CircuitCanvasView.swift in Sources */,
+				C1010000000000000000001A /* CircuitComposerView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -333,22 +436,24 @@
 				DEVELOPMENT_TEAM = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = "QuantumKit Playground";
+				INFOPLIST_KEY_CFBundleDisplayName = QuantumKit;
+				INFOPLIST_KEY_CFBundleName = QuantumKit;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.quantumkit.playground;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				PRODUCT_MODULE_NAME = QuantumKitPlayground;
+				PRODUCT_NAME = QuantumKit;
+				SDKROOT = macosx;
+				SUPPORTED_PLATFORMS = macosx;
 				SUPPORTS_MACCATALYST = NO;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 6.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
 		};
@@ -362,22 +467,97 @@
 				DEVELOPMENT_TEAM = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = "QuantumKit Playground";
+				INFOPLIST_KEY_CFBundleDisplayName = QuantumKit;
+				INFOPLIST_KEY_CFBundleName = QuantumKit;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.quantumkit.playground;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				PRODUCT_MODULE_NAME = QuantumKitPlayground;
+				PRODUCT_NAME = QuantumKit;
+				SDKROOT = macosx;
+				SUPPORTED_PLATFORMS = macosx;
 				SUPPORTS_MACCATALYST = NO;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		G10100000000000000000005 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 5B7RYMU42F;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = QuantumKit;
+				INFOPLIST_KEY_CFBundleName = QuantumKit;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.quantumkit.playground.ios;
+				PRODUCT_MODULE_NAME = QuantumKitPlaygroundiOS;
+				PRODUCT_NAME = QuantumKit;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 6.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		G10100000000000000000006 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 5B7RYMU42F;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = QuantumKit;
+				INFOPLIST_KEY_CFBundleName = QuantumKit;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.quantumkit.playground.ios;
+				PRODUCT_MODULE_NAME = QuantumKitPlaygroundiOS;
+				PRODUCT_NAME = QuantumKit;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
 			};
 			name = Release;
 		};
@@ -402,6 +582,15 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		G10100000000000000000002 /* Build configuration list for PBXNativeTarget "QuantumKitPlaygroundiOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				G10100000000000000000005 /* Debug */,
+				G10100000000000000000006 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
@@ -414,8 +603,13 @@
 /* Begin XCSwiftPackageProductDependency section */
 		H00100000000000000000002 /* QuantumKit */ = {
 			isa = XCSwiftPackageProductDependency;
-			productName = QuantumKit;
 			package = H00100000000000000000001 /* XCLocalSwiftPackageReference "../../" */;
+			productName = QuantumKit;
+		};
+		H10100000000000000000002 /* QuantumKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = H00100000000000000000001 /* XCLocalSwiftPackageReference "../../" */;
+			productName = QuantumKit;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

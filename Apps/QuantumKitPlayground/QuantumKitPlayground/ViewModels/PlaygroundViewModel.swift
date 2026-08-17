@@ -549,7 +549,7 @@ enum PlaygroundTab: String, Hashable, CaseIterable, Identifiable {
         switch self {
         case .circuit: return "point.3.connected.trianglepath.dotted"
         case .editor: return "chevron.left.forwardslash.chevron.right"
-        case .results: return "chart.bar"
+        case .results: return "chart.bar.fill"
         }
     }
 }

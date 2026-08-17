@@ -4,26 +4,38 @@ import UniformTypeIdentifiers
 struct ContentView: View {
     @EnvironmentObject private var viewModel: PlaygroundViewModel
     @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
+    @State private var isPresentingSamples = false
 
     var body: some View {
         Group {
-            if usesCompactTabs {
-                compactLayout
-            } else {
-                regularLayout
-            }
+            #if os(iOS)
+            iosTabLayout
+            #else
+            regularChrome
+            #endif
         }
-        .navigationTitle("QuantumKit Playground")
-        .toolbar { playgroundToolbar }
-        .safeAreaInset(edge: .top, spacing: 0) {
+        .environment(\.isPhoneLayout, usesCompactChrome)
+        .overlay(alignment: .top) {
+            #if os(iOS)
             errorBanners
+                .padding(.horizontal, 12)
+                .padding(.top, 8)
+            #endif
+        }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            #if os(macOS)
+            errorBanners
+            #endif
         }
         .safeAreaInset(edge: .bottom) {
+            #if os(macOS)
             StatusBarView(
                 message: viewModel.statusMessage,
                 isBusy: viewModel.isBusy,
                 lastRunSummary: viewModel.lastRunSummary
             )
+            #endif
         }
         .fileImporter(
             isPresented: $viewModel.isPresentingOpen,
@@ -40,14 +52,48 @@ struct ContentView: View {
         ) { result in
             viewModel.handleSaveResult(result)
         }
+        .sheet(isPresented: $isPresentingSamples) {
+            NavigationStack {
+                SamplePickerView()
+                    .navigationTitle("Samples")
+                    #if os(iOS)
+                    .navigationBarTitleDisplayMode(.inline)
+                    #endif
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { isPresentingSamples = false }
+                        }
+                    }
+            }
+            #if os(iOS)
+            .presentationDetents(usesCompactChrome ? [.medium, .large] : [.large])
+            #endif
+            .modifier(DismissSamplesWhenSelectionChanges(
+                isPresented: $isPresentingSamples,
+                sampleID: viewModel.selectedSampleID
+            ))
+        }
     }
 
-    private var usesCompactTabs: Bool {
+    /// Compact chrome: iPhone (including Plus/Max landscape) and iPad slide over.
+    private var usesCompactChrome: Bool {
         #if os(iOS)
-        sizeClass == .compact
+        sizeClass == .compact || verticalSizeClass == .compact
         #else
         false
         #endif
+    }
+
+    private var regularChrome: some View {
+        regularLayout
+            .navigationTitle("QuantumKit")
+            .toolbar {
+                ToolbarItem(placement: .navigation) {
+                    QuantumKitMark(size: 22)
+                        .help("QuantumKit")
+                }
+                desktopToolbar
+            }
     }
 
     private var regularLayout: some View {
@@ -105,45 +151,85 @@ struct ContentView: View {
         }
     }
 
-    private var compactLayout: some View {
+    #if os(iOS)
+    private var iosTabLayout: some View {
         TabView(selection: $viewModel.selectedCompactTab) {
-            NavigationStack {
-                VStack(spacing: 8) {
-                    CircuitComposerView()
-                    SettingsPanelView()
-                        .padding(.horizontal)
-                }
-                .padding(.bottom, 8)
-                .navigationTitle("Circuit")
+            iosTab(PlaygroundTab.circuit) {
+                CircuitComposerView()
             }
-            .tabItem {
-                Label(PlaygroundTab.circuit.title, systemImage: PlaygroundTab.circuit.systemImage)
-            }
-            .tag(PlaygroundTab.circuit)
-
-            NavigationStack {
+            iosTab(PlaygroundTab.editor) {
                 CircuitEditorView(showsSettings: false)
-                    .navigationTitle("Code")
             }
-            .tabItem {
-                Label(PlaygroundTab.editor.title, systemImage: PlaygroundTab.editor.systemImage)
+            iosTab(PlaygroundTab.results) {
+                ResultsPanelView(showsSettings: true)
             }
-            .tag(PlaygroundTab.editor)
-
-            NavigationStack {
-                ResultsPanelView(showsSettings: false)
-                    .padding()
-                    .navigationTitle("Results")
-            }
-            .tabItem {
-                Label(PlaygroundTab.results.title, systemImage: PlaygroundTab.results.systemImage)
-            }
-            .tag(PlaygroundTab.results)
         }
+        .modifier(IOSTabBarOnlyStyle())
+    }
+
+    private func iosTab<Content: View>(
+        _ tab: PlaygroundTab,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        NavigationStack {
+            content()
+                .navigationTitle(tab.title)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar { iosToolbar }
+        }
+        .tabItem {
+            Label(tab.title, systemImage: tab.systemImage)
+        }
+        .tag(tab)
     }
 
     @ToolbarContentBuilder
-    private var playgroundToolbar: some ToolbarContent {
+    private var iosToolbar: some ToolbarContent {
+        ToolbarItem(placement: .navigationBarLeading) {
+            Button {
+                isPresentingSamples = true
+            } label: {
+                Image(systemName: "square.stack")
+            }
+            .accessibilityLabel("Samples")
+        }
+
+        ToolbarItem(placement: .navigationBarTrailing) {
+            Menu {
+                Button("Open…", systemImage: "folder") {
+                    viewModel.presentOpen()
+                }
+                Button("Save…", systemImage: "square.and.arrow.down") {
+                    viewModel.presentSave()
+                }
+                Button("Parse", systemImage: "text.alignleft") {
+                    viewModel.parse()
+                }
+                .disabled(viewModel.isBusy)
+            } label: {
+                Image(systemName: "ellipsis.circle")
+            }
+            .accessibilityLabel("More")
+        }
+
+        ToolbarItem(placement: .navigationBarTrailing) {
+            if viewModel.isBusy {
+                ProgressView()
+            } else {
+                Button {
+                    viewModel.run()
+                    viewModel.selectedCompactTab = .results
+                } label: {
+                    Image(systemName: "play.fill")
+                }
+                .accessibilityLabel("Run")
+            }
+        }
+    }
+    #endif
+
+    @ToolbarContentBuilder
+    private var desktopToolbar: some ToolbarContent {
         ToolbarItemGroup(placement: .automatic) {
             Button {
                 viewModel.presentOpen()
@@ -152,14 +238,12 @@ struct ContentView: View {
             }
             .help("Open an OpenQASM file")
 
-            #if os(macOS)
             Button {
                 viewModel.presentSave()
             } label: {
                 Label("Save…", systemImage: "square.and.arrow.down")
             }
             .help("Save OpenQASM")
-            #endif
         }
 
         ToolbarItemGroup(placement: .primaryAction) {
@@ -198,14 +282,50 @@ struct ContentView: View {
                     ErrorBannerView(title: "Run Error", message: runError)
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.top, 8)
-            .padding(.bottom, 4)
+            .padding(.horizontal, usesCompactChrome ? 0 : 12)
+            .padding(.top, usesCompactChrome ? 0 : 8)
+            .padding(.bottom, usesCompactChrome ? 0 : 4)
         }
     }
 }
 
+#if os(iOS)
+/// iOS 18+ TabView becomes a sidebar on iPad; keep a real bottom tab bar.
+private struct IOSTabBarOnlyStyle: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content.tabViewStyle(.tabBarOnly)
+        } else {
+            content
+        }
+    }
+}
+#endif
+
 #Preview {
     ContentView()
         .environmentObject(PlaygroundViewModel.previewFactory())
+}
+
+private struct DismissSamplesWhenSelectionChanges: ViewModifier {
+    @Binding var isPresented: Bool
+    let sampleID: SampleCircuit.ID?
+
+    func body(content: Content) -> some View {
+        #if os(iOS)
+        if #available(iOS 17.0, *) {
+            content.onChange(of: sampleID) { _, _ in
+                if isPresented { isPresented = false }
+            }
+        } else {
+            content.onChange(of: sampleID) { _ in
+                if isPresented { isPresented = false }
+            }
+        }
+        #else
+        content.onChange(of: sampleID) { _, _ in
+            if isPresented { isPresented = false }
+        }
+        #endif
+    }
 }

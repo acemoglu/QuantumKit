@@ -3,14 +3,19 @@ import SwiftUI
 
 struct CircuitCanvasView: View {
     @EnvironmentObject private var viewModel: PlaygroundViewModel
+    @Environment(\.isPhoneLayout) private var isPhoneLayout
 
-    private let rowHeight: CGFloat = 52
-    private let columnWidth: CGFloat = 52
-    private let labelWidth: CGFloat = 44
+    private var rowHeight: CGFloat { isPhoneLayout ? 44 : 52 }
+    private var columnWidth: CGFloat { isPhoneLayout ? 44 : 52 }
+    private var labelWidth: CGFloat { isPhoneLayout ? 36 : 44 }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            header
+        VStack(alignment: .leading, spacing: isPhoneLayout ? 6 : 8) {
+            if isPhoneLayout {
+                phoneHeader
+            } else {
+                desktopHeader
+            }
             ScrollView([.horizontal, .vertical]) {
                 canvas
                     .padding(.vertical, 8)
@@ -19,14 +24,54 @@ struct CircuitCanvasView: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: PlaygroundChrome.cornerRadius, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: PlaygroundChrome.cornerRadius, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.12))
-        )
+        .background {
+            if !isPhoneLayout {
+                RoundedRectangle(cornerRadius: PlaygroundChrome.cornerRadius, style: .continuous)
+                    .fill(.regularMaterial)
+            }
+        }
+        .overlay {
+            if !isPhoneLayout {
+                RoundedRectangle(cornerRadius: PlaygroundChrome.cornerRadius, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.12))
+            }
+        }
     }
 
-    private var header: some View {
+    private var phoneHeader: some View {
+        HStack(spacing: 4) {
+            if let circuit = viewModel.editableCircuit {
+                Text("\(circuit.qubitCount)q · \(circuit.gates.count)g")
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            iconButton("plus", "Add qubit", enabled: viewModel.canAddQubit, action: viewModel.addQubit)
+            iconButton("minus", "Remove qubit", enabled: viewModel.canRemoveQubit, action: viewModel.removeLastQubit)
+            iconButton("arrow.uturn.backward", "Undo", enabled: viewModel.canUndoCanvas, action: viewModel.undoCanvas)
+            iconButton("trash", "Delete gate", enabled: viewModel.selectedGateIndex != nil, role: .destructive, action: viewModel.deleteSelectedGate)
+            Button("Clear", action: viewModel.clearCanvas)
+                .font(.caption)
+                .controlSize(.small)
+        }
+    }
+
+    private func iconButton(
+        _ systemImage: String,
+        _ label: String,
+        enabled: Bool,
+        role: ButtonRole? = nil,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(role: role, action: action) {
+            Image(systemName: systemImage)
+                .frame(width: 32, height: 32)
+        }
+        .disabled(!enabled)
+        .accessibilityLabel(label)
+    }
+
+    private var desktopHeader: some View {
         HStack(spacing: 8) {
             Image(systemName: "point.3.connected.trianglepath.dotted")
                 .foregroundStyle(.secondary)
@@ -93,7 +138,9 @@ struct CircuitCanvasView: View {
                     .foregroundStyle(.secondary)
                 Text("No circuit yet")
                     .font(.headline)
-                Text("Load a sample, or click a gate and then a qubit wire.")
+                Text(isPhoneLayout
+                     ? "Load a sample, or tap a gate and then a qubit wire."
+                     : "Load a sample, or click a gate and then a qubit wire.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)

@@ -2,11 +2,16 @@ import SwiftUI
 
 struct ResultsPanelView: View {
     @EnvironmentObject private var viewModel: PlaygroundViewModel
+    @Environment(\.isPhoneLayout) private var isPhoneLayout
     var showsSettings: Bool = true
 
     var body: some View {
-            ScrollView {
+        ScrollView {
             VStack(alignment: .leading, spacing: 16) {
+                if isPhoneLayout {
+                    phoneStatus
+                }
+
                 if showsSettings {
                     SettingsPanelView()
                 }
@@ -39,14 +44,28 @@ struct ResultsPanelView: View {
                     PlaceholderSection()
                 }
             }
-            .padding()
+            .padding(isPhoneLayout ? 16 : 16)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: PlaygroundChrome.cornerRadius, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: PlaygroundChrome.cornerRadius, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.12))
-        )
+        .background {
+            if !isPhoneLayout {
+                RoundedRectangle(cornerRadius: PlaygroundChrome.cornerRadius, style: .continuous)
+                    .fill(.regularMaterial)
+            }
+        }
+        .overlay {
+            if !isPhoneLayout {
+                RoundedRectangle(cornerRadius: PlaygroundChrome.cornerRadius, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.12))
+            }
+        }
+    }
+
+    private var phoneStatus: some View {
+        Text(viewModel.statusMessage)
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func histogramBars(from output: PlaygroundRunOutput) -> [HistogramBar] {
@@ -135,9 +154,7 @@ private struct ParsedSummarySection: View {
 private struct PlaceholderSection: View {
     var body: some View {
         VStack(spacing: 12) {
-            Image(systemName: "atom")
-                .font(.system(size: 36))
-                .foregroundStyle(.secondary)
+            QuantumKitMark(size: 40)
             Text("No Results Yet")
                 .font(.title3.weight(.semibold))
             Text("Parse OpenQASM to preview the circuit, then Run to simulate with QuantumKit.")

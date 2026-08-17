@@ -4,6 +4,33 @@ enum PlaygroundChrome {
     static let cornerRadius: CGFloat = 10
 }
 
+private struct PhoneLayoutKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    /// True on iPhone (including landscape) and iPad compact width (slide over).
+    var isPhoneLayout: Bool {
+        get { self[PhoneLayoutKey.self] }
+        set { self[PhoneLayoutKey.self] = newValue }
+    }
+}
+
+/// In-app mark: CPU die + atom (same artwork as the app icon).
+struct QuantumKitMark: View {
+    var size: CGFloat = 22
+
+    var body: some View {
+        Image("QuantumKitLogo")
+            .resizable()
+            .interpolation(.high)
+            .scaledToFit()
+            .frame(width: size, height: size)
+            .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
+            .accessibilityLabel("QuantumKit")
+    }
+}
+
 struct ErrorBannerView: View {
     let title: String
     let message: String
@@ -83,9 +110,12 @@ struct StatusBarView: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             } else {
-                Text("QuantumKit Playground")
-                    .font(.footnote.monospaced())
-                    .foregroundStyle(.tertiary)
+                HStack(spacing: 6) {
+                    QuantumKitMark(size: 14)
+                    Text("QuantumKit")
+                        .font(.footnote.monospaced())
+                        .foregroundStyle(.tertiary)
+                }
             }
         }
         .padding(.horizontal, 12)
