@@ -17,7 +17,8 @@ using namespace metal;
 // (Hillis–Steele) prefix scan. The compensation lives entirely in thread registers — no extra VRAM
 // traffic — so the gate kernels stay pure, single-precision Float32 and run at full speed.
 //
-// The two kernels that use these helpers (`prefix_sum_probabilities`, `find_collapsed_state`) are
+// The kernels that use these helpers (`prefix_sum_probabilities`, `find_collapsed_state`,
+// `find_collapsed_states`) are
 // compiled into a separate library with fast math OFF, so the compiler cannot algebraically cancel
 // the error term (`err`). That makes a `volatile` barrier unnecessary here and lets the scheduler
 // pipeline the dependent rounding steps — important since this scan is bandwidth-bound.
@@ -215,16 +216,10 @@ kernel void prefix_sum_probabilities_naive(device float* dataBuffer [[buffer(0)]
 // Binary search over the double-single CDF for the first index whose cumulative probability
 // exceeds the (also double-single) dice roll. Comparing in compensated precision is what lets the
 // search resolve states whose probability is below the float32 ulp of the running total.
-kernel void find_collapsed_state(device const float* cdfHi [[buffer(0)]],
-                                 device const float* cdfLo [[buffer(1)]],
-                                 constant float2& diceRoll [[buffer(2)]],
-                                 constant uint& elementCount [[buffer(3)]],
-                                 device uint* collapsedIndex [[buffer(4)]],
-                                 uint threadID [[thread_position_in_grid]]) {
-    if (threadID != 0 || elementCount == 0) {
-        return;
-    }
-
+inline uint search_collapsed_state(device const float* cdfHi,
+                                   device const float* cdfLo,
+                                   float2 diceRoll,
+                                   uint elementCount) {
     uint low = 0;
     uint high = elementCount - 1;
     uint result = elementCount - 1;
@@ -242,7 +237,36 @@ kernel void find_collapsed_state(device const float* cdfHi [[buffer(0)]],
         }
     }
 
-    collapsedIndex[0] = result;
+    return result;
+}
+
+kernel void find_collapsed_state(device const float* cdfHi [[buffer(0)]],
+                                 device const float* cdfLo [[buffer(1)]],
+                                 constant float2& diceRoll [[buffer(2)]],
+                                 constant uint& elementCount [[buffer(3)]],
+                                 device uint* collapsedIndex [[buffer(4)]],
+                                 uint threadID [[thread_position_in_grid]]) {
+    if (threadID != 0 || elementCount == 0) {
+        return;
+    }
+
+    collapsedIndex[0] = search_collapsed_state(cdfHi, cdfLo, diceRoll, elementCount);
+}
+
+// Independent samples from a prepared CDF (no collapse). One thread per shot; the host never
+// materializes the 2ⁿ probability vector.
+kernel void find_collapsed_states(device const float* cdfHi [[buffer(0)]],
+                                  device const float* cdfLo [[buffer(1)]],
+                                  device const float2* diceRolls [[buffer(2)]],
+                                  constant uint& elementCount [[buffer(3)]],
+                                  constant uint& shotCount [[buffer(4)]],
+                                  device uint* collapsedIndices [[buffer(5)]],
+                                  uint threadID [[thread_position_in_grid]]) {
+    if (threadID >= shotCount || elementCount == 0) {
+        return;
+    }
+
+    collapsedIndices[threadID] = search_collapsed_state(cdfHi, cdfLo, diceRolls[threadID], elementCount);
 }
 
 kernel void collapse_state_vector(device float* realBuffer [[buffer(0)]],

@@ -33,12 +33,16 @@ public struct SampleCountOptions: Sendable, Equatable {
     /// (same seed → same histogram across `batchSize`, but not bit-identical to trajectory).
     public var batchSize: Int
 
-    /// Prefer evolve-once + Born multinomial sampling when the circuit has no mid-circuit
+    /// Prefer evolve-once + Born sampling when the circuit has no mid-circuit
     /// collapse / classical control and (for statevector) no evolution-time noise unraveling.
     ///
     /// Set `false` to force per-shot trajectory re-execution (tests, noise audits, legacy
     /// seed goldens). Default `true` — noiseless Bell/GHZ-style circuits should not pay
     /// `O(shots × gates)` unitary work.
+    ///
+    /// Evolve-once is independent of shot count. The `2ⁿ` Born map is not scaled by shots;
+    /// Metal widths above ``ShotExecutionPolicy/hostPreparedSamplingMaxQubitCount`` sample
+    /// that map on the GPU and only return the histogram.
     public var preferPreparedSampling: Bool
 
     public init(batchSize: Int = 32, preferPreparedSampling: Bool = true) {
@@ -257,6 +261,20 @@ enum BatchSampleExecutor {
                 noise: nil,
                 cancellationCheck: cancellationCheck
             )
+            if ShotExecutionPolicy.usesDevicePreparedSampling(qubitCount: circuit.qubitCount) {
+                let base = try engine.sampleComputationalBasisCounts(
+                    on: state,
+                    shots: shots,
+                    rng: &rng,
+                    cancellationCheck: cancellationCheck
+                )
+                return try DensityMatrixShotSampler.applyReadoutFlips(
+                    base: base,
+                    measuredQubitCount: circuit.qubitCount,
+                    rng: &rng,
+                    noise: noise
+                )
+            }
             let probabilities = try QuantumMeasurement.probabilities(state: state, engine: engine)
             return try DensityMatrixShotSampler.sampleTerminalShots(
                 probabilities: probabilities,

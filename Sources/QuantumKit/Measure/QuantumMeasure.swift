@@ -75,6 +75,10 @@ public struct QuantumMeasurement {
             throw QuantumMeasurementError.invalidShotCount(shots)
         }
 
+        if ShotExecutionPolicy.usesDevicePreparedSampling(qubitCount: state.qubitCount) {
+            return try engine.sampleComputationalBasisCounts(on: state, shots: shots, rng: &rng)
+        }
+
         let distribution = try probabilities(state: state, engine: engine)
         return try buildHistogram(from: distribution, shots: shots, rng: &rng)
     }

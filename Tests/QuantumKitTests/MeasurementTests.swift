@@ -307,4 +307,31 @@ extension QuantumKitTests {
         // Sanity that the sampler isn't pinned to one branch across many seeds.
         XCTAssertTrue(sawZeros && sawOnes, "expected both GHZ branches across seeds")
     }
+
+    func testDeviceCDFSamplingDoesNotCollapseOrLeaveHostHistogram() throws {
+        let engine = try QuantumEngine()
+        guard makeDevice() != nil else {
+            XCTFail("Apple Silicon GPU not found!")
+            return
+        }
+
+        let state = try StateVector(qubitCount: 2)
+        var circuit = try QuantumCircuit(qubitCount: 2)
+        try circuit.applyBellState()
+        try engine.execute(circuit, on: state)
+
+        var rng: QuantumRNG = .seeded(42)
+        let counts = try engine.sampleComputationalBasisCounts(on: state, shots: 256, rng: &rng)
+        XCTAssertEqual(counts.shots, 256)
+        XCTAssertEqual(counts.counts.values.reduce(0, +), 256)
+        XCTAssertEqual(Set(counts.counts.keys), [0, 3])
+
+        let probabilities = try QuantumMeasurement.probabilities(state: state, engine: engine)
+        XCTAssertEqual(probabilities[0], 0.5, accuracy: 1e-5)
+        XCTAssertEqual(probabilities[3], 0.5, accuracy: 1e-5)
+
+        var replay: QuantumRNG = .seeded(42)
+        let again = try engine.sampleComputationalBasisCounts(on: state, shots: 256, rng: &replay)
+        XCTAssertEqual(again, counts)
+    }
 }

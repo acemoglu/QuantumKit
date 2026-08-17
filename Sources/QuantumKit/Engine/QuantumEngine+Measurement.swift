@@ -99,8 +99,8 @@ extension QuantumEngine {
     func normalizeState(on state: StateVector) throws {
         let stateCount = state.stateCount
         let probabilityBytes = stateCount * MemoryLayout<QFloat>.stride
-        let probHi = try bufferPool.acquire(length: probabilityBytes)
-        let probLo = try bufferPool.acquire(length: probabilityBytes)
+        let probHi = try bufferPool.acquire(length: probabilityBytes, zero: false)
+        let probLo = try bufferPool.acquire(length: probabilityBytes, zero: false)
         let aux = try makePrefixSumAuxBuffers(stateCount: stateCount, pooled: true)
         // Safe to recycle at scope exit: both command buffers below are waited on synchronously.
         defer {
@@ -340,67 +340,15 @@ extension QuantumEngine {
     /// these let the sampler resolve states whose probability is below the float32 ulp of the
     /// running total, eliminating the high-qubit CDF plateaus.
     func executeMeasurementCollapse(on state: StateVector, dice: Double) throws -> Int {
-        let stateCount = state.stateCount
-        let probabilityBytes = stateCount * MemoryLayout<QFloat>.stride
-
-        let probHi = try bufferPool.acquire(length: probabilityBytes)
-        let probLo = try bufferPool.acquire(length: probabilityBytes)
-        let collapsedBuffer = try makeSharedBuffer(length: MemoryLayout<UInt32>.stride)
-        let aux = try makePrefixSumAuxBuffers(stateCount: stateCount, pooled: true)
-        // Safe to recycle at scope exit: both command buffers below are waited on synchronously.
-        defer {
-            bufferPool.release(probHi)
-            bufferPool.release(probLo)
-            releasePrefixSumAuxBuffers(aux)
-        }
-
-        guard let commandBuffer = commandQueue.makeCommandBuffer(),
-              let computeEncoder = commandBuffer.makeComputeCommandEncoder() else {
-            throw QuantumEngineError.commandBufferCreationFailed
-        }
-
-        dispatchFullStateKernel(encoder: computeEncoder, pipeline: pipelines.probabilities, state: state) { encoder in
-            encoder.setBuffer(probHi, offset: 0, index: 2)
-        }
-
-        try encodeInclusivePrefixSum(
-            encoder: computeEncoder,
-            hiBuffer: probHi,
-            loBuffer: probLo,
-            elementCount: stateCount,
-            auxiliaryHi: aux.hi,
-            auxiliaryLo: aux.lo
-        )
-
-        // Split the Double dice roll into a double-single (hi, lo) float pair for the search.
-        let diceHi = Float(dice)
-        var dicePair = SIMD2<Float>(diceHi, Float(dice - Double(diceHi)))
-        var elementCount = UInt32(stateCount)
-        computeEncoder.setComputePipelineState(pipelines.collapseSearch)
-        computeEncoder.setBuffer(probHi, offset: 0, index: 0)
-        computeEncoder.setBuffer(probLo, offset: 0, index: 1)
-        computeEncoder.setBytes(&dicePair, length: MemoryLayout<SIMD2<Float>>.stride, index: 2)
-        computeEncoder.setBytes(&elementCount, length: MemoryLayout<UInt32>.stride, index: 3)
-        computeEncoder.setBuffer(collapsedBuffer, offset: 0, index: 4)
-        computeEncoder.dispatchThreads(MTLSize(width: 1, height: 1, depth: 1), threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1))
-
-        computeEncoder.endEncoding()
-        commandBuffer.commit()
-        commandBuffer.waitUntilCompleted()
-        if let error = commandBuffer.error {
-            throw QuantumEngineError.commandBufferExecutionFailed(underlying: error)
-        }
-
-        let collapsedPointer = collapsedBuffer.contents().assumingMemoryBound(to: UInt32.self)
-        let collapsedIndex = collapsedPointer[0]
+        let collapsedIndex = try sampleBasisIndexFromDeviceCDF(on: state, dice: dice)
 
         guard let collapseCommandBuffer = commandQueue.makeCommandBuffer(),
               let collapseEncoder = collapseCommandBuffer.makeComputeCommandEncoder() else {
             throw QuantumEngineError.commandBufferCreationFailed
         }
 
+        var index = UInt32(collapsedIndex)
         dispatchFullStateKernel(encoder: collapseEncoder, pipeline: pipelines.collapseState, state: state) { encoder in
-            var index = collapsedIndex
             encoder.setBytes(&index, length: MemoryLayout<UInt32>.stride, index: 2)
         }
 
@@ -411,7 +359,179 @@ extension QuantumEngine {
             throw QuantumEngineError.commandBufferExecutionFailed(underlying: error)
         }
 
-        return Int(collapsedIndex)
+        return collapsedIndex
+    }
+
+    /// Draws `shots` independent computational-basis samples without collapsing `state`.
+    ///
+    /// Builds the GPU CDF once, then binary-searches each dice roll on device. The host only
+    /// receives `shots` outcome indices — never a `2ⁿ` probability `Array`.
+    func sampleComputationalBasisCounts(
+        on state: StateVector,
+        shots: Int,
+        rng: inout QuantumRNG,
+        cancellationCheck: (() throws -> Void)? = nil
+    ) throws -> ShotCounts {
+        guard shots > 0 else {
+            throw QuantumMeasurementError.invalidShotCount(shots)
+        }
+
+        try cancellationCheck?()
+
+        let stateCount = state.stateCount
+        let probabilityBytes = stateCount * MemoryLayout<QFloat>.stride
+        let indexBytes = shots * MemoryLayout<UInt32>.stride
+        let diceBytes = shots * MemoryLayout<SIMD2<Float>>.stride
+
+        let probHi = try bufferPool.acquire(length: probabilityBytes, zero: false)
+        let probLo = try bufferPool.acquire(length: probabilityBytes, zero: false)
+        let diceBuffer = try makeSharedBuffer(length: diceBytes)
+        let collapsedBuffer = try makeSharedBuffer(length: indexBytes)
+        let aux = try makePrefixSumAuxBuffers(stateCount: stateCount, pooled: true)
+        defer {
+            bufferPool.release(probHi)
+            bufferPool.release(probLo)
+            releasePrefixSumAuxBuffers(aux)
+        }
+
+        let dicePointer = diceBuffer.contents().assumingMemoryBound(to: SIMD2<Float>.self)
+        for index in 0..<shots {
+            let dice = rng.nextUnitDouble()
+            let diceHi = Float(dice)
+            dicePointer[index] = SIMD2<Float>(diceHi, Float(dice - Double(diceHi)))
+        }
+
+        guard let commandBuffer = commandQueue.makeCommandBuffer(),
+              let encoder = commandBuffer.makeComputeCommandEncoder() else {
+            throw QuantumEngineError.commandBufferCreationFailed
+        }
+
+        try encodeProbabilityAndInclusivePrefixSum(
+            encoder: encoder,
+            state: state,
+            probHi: probHi,
+            probLo: probLo,
+            aux: aux
+        )
+
+        var elementCount = UInt32(stateCount)
+        var shotCount = UInt32(shots)
+        encoder.setComputePipelineState(pipelines.collapseSearchBatch)
+        encoder.setBuffer(probHi, offset: 0, index: 0)
+        encoder.setBuffer(probLo, offset: 0, index: 1)
+        encoder.setBuffer(diceBuffer, offset: 0, index: 2)
+        encoder.setBytes(&elementCount, length: MemoryLayout<UInt32>.stride, index: 3)
+        encoder.setBytes(&shotCount, length: MemoryLayout<UInt32>.stride, index: 4)
+        encoder.setBuffer(collapsedBuffer, offset: 0, index: 5)
+        encoder.dispatchThreads(
+            MTLSize(width: shots, height: 1, depth: 1),
+            threadsPerThreadgroup: MTLSize(width: min(pipelines.collapseSearchBatch.maxTotalThreadsPerThreadgroup, shots), height: 1, depth: 1)
+        )
+
+        encoder.endEncoding()
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+        if let error = commandBuffer.error {
+            throw QuantumEngineError.commandBufferExecutionFailed(underlying: error)
+        }
+
+        let indices = collapsedBuffer.contents().assumingMemoryBound(to: UInt32.self)
+        var histogram: [Int: Int] = [:]
+        histogram.reserveCapacity(min(shots, 1 << min(state.qubitCount, 16)))
+        for shot in 0..<shots {
+            histogram[Int(indices[shot]), default: 0] += 1
+        }
+        return ShotCounts(shots: shots, counts: histogram)
+    }
+
+    /// One-shot GPU CDF sample used by projective collapse. Does not mutate `state`.
+    private func sampleBasisIndexFromDeviceCDF(on state: StateVector, dice: Double) throws -> Int {
+        let stateCount = state.stateCount
+        let probabilityBytes = stateCount * MemoryLayout<QFloat>.stride
+
+        let probHi = try bufferPool.acquire(length: probabilityBytes, zero: false)
+        let probLo = try bufferPool.acquire(length: probabilityBytes, zero: false)
+        let collapsedBuffer = try makeSharedBuffer(length: MemoryLayout<UInt32>.stride)
+        let aux = try makePrefixSumAuxBuffers(stateCount: stateCount, pooled: true)
+        defer {
+            bufferPool.release(probHi)
+            bufferPool.release(probLo)
+            releasePrefixSumAuxBuffers(aux)
+        }
+
+        guard let commandBuffer = commandQueue.makeCommandBuffer(),
+              let encoder = commandBuffer.makeComputeCommandEncoder() else {
+            throw QuantumEngineError.commandBufferCreationFailed
+        }
+
+        try encodeProbabilityAndInclusivePrefixSum(
+            encoder: encoder,
+            state: state,
+            probHi: probHi,
+            probLo: probLo,
+            aux: aux
+        )
+        encodeFindCollapsedState(
+            encoder: encoder,
+            cdfHi: probHi,
+            cdfLo: probLo,
+            dice: dice,
+            elementCount: stateCount,
+            output: collapsedBuffer
+        )
+
+        encoder.endEncoding()
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+        if let error = commandBuffer.error {
+            throw QuantumEngineError.commandBufferExecutionFailed(underlying: error)
+        }
+
+        return Int(collapsedBuffer.contents().assumingMemoryBound(to: UInt32.self)[0])
+    }
+
+    private func encodeProbabilityAndInclusivePrefixSum(
+        encoder: MTLComputeCommandEncoder,
+        state: StateVector,
+        probHi: MTLBuffer,
+        probLo: MTLBuffer,
+        aux: (hi: [MTLBuffer], lo: [MTLBuffer])
+    ) throws {
+        dispatchFullStateKernel(encoder: encoder, pipeline: pipelines.probabilities, state: state) { encoder in
+            encoder.setBuffer(probHi, offset: 0, index: 2)
+        }
+        try encodeInclusivePrefixSum(
+            encoder: encoder,
+            hiBuffer: probHi,
+            loBuffer: probLo,
+            elementCount: state.stateCount,
+            auxiliaryHi: aux.hi,
+            auxiliaryLo: aux.lo
+        )
+    }
+
+    private func encodeFindCollapsedState(
+        encoder: MTLComputeCommandEncoder,
+        cdfHi: MTLBuffer,
+        cdfLo: MTLBuffer,
+        dice: Double,
+        elementCount: Int,
+        output: MTLBuffer,
+        outputOffset: Int = 0
+    ) {
+        let diceHi = Float(dice)
+        var dicePair = SIMD2<Float>(diceHi, Float(dice - Double(diceHi)))
+        var count = UInt32(elementCount)
+        encoder.setComputePipelineState(pipelines.collapseSearch)
+        encoder.setBuffer(cdfHi, offset: 0, index: 0)
+        encoder.setBuffer(cdfLo, offset: 0, index: 1)
+        encoder.setBytes(&dicePair, length: MemoryLayout<SIMD2<Float>>.stride, index: 2)
+        encoder.setBytes(&count, length: MemoryLayout<UInt32>.stride, index: 3)
+        encoder.setBuffer(output, offset: outputOffset, index: 4)
+        encoder.dispatchThreads(
+            MTLSize(width: 1, height: 1, depth: 1),
+            threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1)
+        )
     }
 
     /// Compensated GPU evaluation of ⟨ψ|P|ψ⟩ for a general Pauli tensor product `P`.

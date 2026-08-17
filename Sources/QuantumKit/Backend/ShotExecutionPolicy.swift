@@ -164,4 +164,16 @@ public enum ShotExecutionPolicy: Sendable {
     static func metalUnitaryBatchAllowedWithoutCircuit(noise: NoiseModel?) -> Bool {
         !requiresEvolutionNoise(noise, circuit: nil)
     }
+
+    /// Widest statevector still sampled via a host `[QFloat]` + `Double` CDF.
+    ///
+    /// That path is `O(2ⁿ)` RAM (probabilities plus an 8-byte CDF). At `n = 20` it is ~12 MB and
+    /// matches the CPU prepared-sampling histogram. Above this width Metal keeps the CDF on the
+    /// GPU and only returns the shot histogram — shot count does **not** shrink the `2ⁿ` map.
+    public static let hostPreparedSamplingMaxQubitCount = 20
+
+    /// `true` when Metal prepared sampling must not materialize a host probability vector.
+    public static func usesDevicePreparedSampling(qubitCount: Int) -> Bool {
+        qubitCount > hostPreparedSamplingMaxQubitCount
+    }
 }

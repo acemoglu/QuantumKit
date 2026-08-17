@@ -181,6 +181,14 @@ extension QuantumKitTests {
         XCTAssertNotNil(measured.preparedShotUnitaryPrefix())
     }
 
+    func testPreparedSamplingHostCDFThreshold() {
+        XCTAssertFalse(ShotExecutionPolicy.usesDevicePreparedSampling(qubitCount: 16))
+        XCTAssertFalse(ShotExecutionPolicy.usesDevicePreparedSampling(qubitCount: 20))
+        XCTAssertTrue(ShotExecutionPolicy.usesDevicePreparedSampling(qubitCount: 21))
+        XCTAssertTrue(ShotExecutionPolicy.usesDevicePreparedSampling(qubitCount: 30))
+        XCTAssertEqual(ShotExecutionPolicy.hostPreparedSamplingMaxQubitCount, 20)
+    }
+
     func testPreparedSamplingMidCircuitMeasureStillRejected() throws {
         let creg = try ClassicalRegisterSpec(bitCount: 1)
         var circuit = try QuantumCircuit(qubitCount: 2, classicalRegisters: [creg])

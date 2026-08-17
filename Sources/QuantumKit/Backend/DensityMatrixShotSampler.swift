@@ -179,7 +179,7 @@ enum DensityMatrixShotSampler {
         )
     }
 
-    private static func applyReadoutFlips(
+    static func applyReadoutFlips(
         base: ShotCounts,
         measuredQubitCount: Int,
         rng: inout QuantumRNG,

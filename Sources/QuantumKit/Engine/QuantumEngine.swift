@@ -63,6 +63,7 @@ struct Pipelines: @unchecked Sendable {
     let prefixSum: MTLComputePipelineState
     let prefixSumNaive: MTLComputePipelineState
     let collapseSearch: MTLComputePipelineState
+    let collapseSearchBatch: MTLComputePipelineState
     let collapseState: MTLComputePipelineState
     let partialCollapse: MTLComputePipelineState
     let resetQubit: MTLComputePipelineState
@@ -177,6 +178,9 @@ struct Pipelines: @unchecked Sendable {
         guard let collapseFunc = preciseLibrary.makeFunction(name: "find_collapsed_state") else { throw QuantumEngineError.functionNotFound("find_collapsed_state") }
         self.collapseSearch = try device.makeComputePipelineState(function: collapseFunc)
 
+        guard let collapseBatchFunc = preciseLibrary.makeFunction(name: "find_collapsed_states") else { throw QuantumEngineError.functionNotFound("find_collapsed_states") }
+        self.collapseSearchBatch = try device.makeComputePipelineState(function: collapseBatchFunc)
+
         guard let collapseStateFunc = library.makeFunction(name: "collapse_state_vector") else { throw QuantumEngineError.functionNotFound("collapse_state_vector") }
         self.collapseState = try device.makeComputePipelineState(function: collapseStateFunc)
 
@@ -258,12 +262,14 @@ final class BufferPool: @unchecked Sendable {
         self.device = device
     }
 
-    func acquire(length: Int) throws -> MTLBuffer {
+    func acquire(length: Int, zero: Bool = true) throws -> MTLBuffer {
         lock.lock()
         if var bucket = freeBuffersByLength[length], let reused = bucket.popLast() {
             freeBuffersByLength[length] = bucket
             lock.unlock()
-            memset(reused.contents(), 0, length)
+            if zero {
+                memset(reused.contents(), 0, length)
+            }
             return reused
         }
         lock.unlock()
@@ -272,7 +278,9 @@ final class BufferPool: @unchecked Sendable {
               let buffer = device.makeBuffer(length: length, options: .storageModeShared) else {
             throw QuantumEngineError.bufferAllocationFailed(requiredBytes: max(length, 0))
         }
-        memset(buffer.contents(), 0, length)
+        if zero {
+            memset(buffer.contents(), 0, length)
+        }
         return buffer
     }
 

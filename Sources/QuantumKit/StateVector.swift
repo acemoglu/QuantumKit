@@ -30,7 +30,11 @@ public enum StateVectorError: Error {
 ///   Distinct `StateVector` instances may be operated on concurrently (see ``QuantumEngine``).
 public final class StateVector {
 
-    public static let maxQubitCount = 28
+    /// Metal Float32 statevector width cap.
+    ///
+    /// n=30 is ~8 GB (real+imag). Raise only if the GPU `maxBufferLength` can hold one buffer
+    /// (`2ⁿ × 4` bytes). CPU SV stays at ``CPUStateVector/maxQubitCount`` (16).
+    public static let maxQubitCount = 31
 
     public let qubitCount: Int
     public let stateCount: Int
