@@ -36,7 +36,7 @@ final class PlaygroundViewModel: ObservableObject {
 
     var lastRunSummary: String? {
         guard let output = runOutput else { return nil }
-        var parts = [output.metadata.method.rawValue]
+        var parts = [output.metadata.method.displayName]
         if let device = output.metadata.deviceName, !device.isEmpty {
             parts.append(device)
         }
@@ -280,7 +280,7 @@ final class PlaygroundViewModel: ObservableObject {
                 pendingPlacement = PendingGatePlacement(tool: tool, pickedQubits: picked)
                 statusMessage = tool.qubitCount == 2
                     ? "Now click the second qubit for \(tool.title)."
-                    : "Pick \(tool.qubitCount - picked.count) more qubit(s) for \(tool.title)."
+                    : "Pick \(tool.qubitCount - picked.count) more \(tool.qubitCount - picked.count == 1 ? "qubit" : "qubits") for \(tool.title)."
                 return
             }
 
@@ -495,7 +495,7 @@ final class PlaygroundViewModel: ObservableObject {
             selectedGateIndex = nil
             pendingPlacement = nil
             canvasUndoStack.removeAll()
-            statusMessage = "Parsed \(circuit.qubitCount) qubit(s), \(circuit.gates.count) gate(s)."
+            statusMessage = "Parsed \(Self.countPhrase(circuit.qubitCount, singular: "qubit", plural: "qubits")), \(Self.countPhrase(circuit.gates.count, singular: "gate", plural: "gates"))."
         case .failure(let error):
             parsedCircuit = nil
             asciiPreview = ""
@@ -591,6 +591,10 @@ final class PlaygroundViewModel: ObservableObject {
             return description
         }
         return error.localizedDescription
+    }
+
+    private static func countPhrase(_ count: Int, singular: String, plural: String) -> String {
+        "\(count) \(count == 1 ? singular : plural)"
     }
 
     private static let fallbackSource = """

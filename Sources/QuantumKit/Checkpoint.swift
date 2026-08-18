@@ -145,7 +145,7 @@ public struct StateVectorSnapshot: Sendable, Equatable, Codable {
         self.cumulativeGlobalPhaseRadians = cumulativeGlobalPhaseRadians
     }
 
-    /// Pre-B16 snapshots omit \(\Phi\); missing key decodes as `0`.
+    /// Snapshots encoded before this field existed omit \(\Phi\); missing key decodes as `0`.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         qubitCount = try container.decode(Int.self, forKey: .qubitCount)
@@ -189,7 +189,7 @@ public struct CPUStateVectorSnapshot: Sendable, Equatable, Codable {
         self.cumulativeGlobalPhaseRadians = cumulativeGlobalPhaseRadians
     }
 
-    /// Pre-B16 snapshots omit \(\Phi\); missing key decodes as `0`.
+    /// Snapshots encoded before this field existed omit \(\Phi\); missing key decodes as `0`.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         qubitCount = try container.decode(Int.self, forKey: .qubitCount)

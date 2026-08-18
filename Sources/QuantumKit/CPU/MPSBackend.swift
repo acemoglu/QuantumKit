@@ -1,6 +1,6 @@
 import Foundation
 
-/// Host CPU matrix-product-state backend (B18 MVP, 1D open chain).
+/// Host CPU matrix-product-state backend (1D open chain).
 ///
 /// Construct explicitly via ``QuantumBackendFactory/makeMPS(configuration:)``.
 /// Width-only ``QuantumBackendFactory/recommendMethod(qubitCount:noise:policy:)`` never

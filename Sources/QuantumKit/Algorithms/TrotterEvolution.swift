@@ -35,7 +35,7 @@ public enum TrotterError: Error, Equatable, CustomStringConvertible {
     }
 }
 
-/// Host-side Trotterized Hamiltonian evolution (B20).
+/// Host-side Trotterized Hamiltonian evolution.
 ///
 /// Builds a ``QuantumCircuit`` approximating `exp(-i H t)` via a Pauli-term product
 /// formula. Gate angles follow QuantumKit’s convention `R_P(θ) = exp(-i θ P / 2)`, so a

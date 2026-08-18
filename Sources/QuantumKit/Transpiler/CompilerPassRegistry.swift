@@ -1,6 +1,6 @@
 import Foundation
 
-// MARK: - B14 lite: CompilerPass discovery (chosen extension point)
+// MARK: - CompilerPass discovery
 //
 // Extension points already close to plugins (documented, not marketplaces):
 // 1. ``CompilerPass`` + ``PassManager`` — ordered circuit transforms (THIS registry).

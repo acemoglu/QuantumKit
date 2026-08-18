@@ -1,4 +1,5 @@
 import SwiftUI
+import QuantumKit
 
 struct CircuitPreviewView: View {
     @EnvironmentObject private var viewModel: PlaygroundViewModel
@@ -12,7 +13,7 @@ struct CircuitPreviewView: View {
                     .font(.headline)
                 Spacer()
                 if let circuit = viewModel.parsedCircuit {
-                    Text("\(circuit.qubitCount)q · \(circuit.gates.count)g")
+                    Text(circuitSizeLabel(circuit))
                         .font(.caption.monospaced())
                         .foregroundStyle(.secondary)
                 }
@@ -44,6 +45,12 @@ struct CircuitPreviewView: View {
         .padding(12)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .playgroundPanel()
+    }
+
+    private func circuitSizeLabel(_ circuit: QuantumCircuit) -> String {
+        let qubits = circuit.qubitCount == 1 ? "1 qubit" : "\(circuit.qubitCount) qubits"
+        let gates = circuit.gates.count == 1 ? "1 gate" : "\(circuit.gates.count) gates"
+        return "\(qubits) · \(gates)"
     }
 }
 

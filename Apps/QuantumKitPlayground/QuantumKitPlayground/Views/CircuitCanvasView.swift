@@ -30,7 +30,7 @@ struct CircuitCanvasView: View {
     private var phoneHeader: some View {
         HStack(spacing: 4) {
             if let circuit = viewModel.editableCircuit {
-                Text("\(circuit.qubitCount)q · \(circuit.gates.count)g")
+                Text(circuitSizeLabel(circuit))
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
             }
@@ -60,6 +60,12 @@ struct CircuitCanvasView: View {
         .accessibilityLabel(label)
     }
 
+    private func circuitSizeLabel(_ circuit: QuantumCircuit) -> String {
+        let qubits = circuit.qubitCount == 1 ? "1 qubit" : "\(circuit.qubitCount) qubits"
+        let gates = circuit.gates.count == 1 ? "1 gate" : "\(circuit.gates.count) gates"
+        return "\(qubits) · \(gates)"
+    }
+
     private var desktopHeader: some View {
         HStack(spacing: 8) {
             Image(systemName: "point.3.connected.trianglepath.dotted")
@@ -67,7 +73,7 @@ struct CircuitCanvasView: View {
             Text("Circuit")
                 .font(.headline)
             if let circuit = viewModel.editableCircuit {
-                Text("\(circuit.qubitCount)q · \(circuit.gates.count)g")
+                Text(circuitSizeLabel(circuit))
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
             }

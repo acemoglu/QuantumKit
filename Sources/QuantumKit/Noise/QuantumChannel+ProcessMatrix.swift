@@ -2,7 +2,7 @@ import Foundation
 import Accelerate
 
 /*
- Process-matrix conventions (C12) — 1 qubit only
+ Process-matrix conventions — 1 qubit only
  ================================================
 
  Storage

@@ -84,7 +84,7 @@ public struct HeavyOutputProbability: Sendable, Equatable {
 
 /// Quantum Volume–**style** model circuits and Heavy Output Probability (HOP).
 ///
-/// MVP honesty: this is **not** an IBM QV certification suite. It implements Cross-style
+/// This is **not** an IBM QV certification suite. It implements Cross-style
 /// ideal HOP (`> 2/3`) on CPU statevector model circuits. Full device QV (shot HOP + CI)
 /// is out of scope here.
 ///

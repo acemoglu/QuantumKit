@@ -10,19 +10,19 @@ struct SampleCircuit: Identifiable, Hashable {
         SampleCircuit(
             id: "bell",
             name: "Bell State",
-            summary: "H + CNOT entangler with terminal measurement.",
+            summary: "Hadamard and CNOT, then measure.",
             filename: "bell.qasm"
         ),
         SampleCircuit(
             id: "toffoli",
             name: "Toffoli",
-            summary: "Three-qubit CCX gate (OpenQASM 2 / qelib1).",
+            summary: "Three-qubit Toffoli (CCX), then measure.",
             filename: "toffoli.qasm"
         ),
         SampleCircuit(
             id: "teleport",
-            name: "Teleport (sketch)",
-            summary: "Bell pair, bilateral measure, classically conditioned X/Z.",
+            name: "Teleport",
+            summary: "Bell pair, measure, then classically controlled X and Z.",
             filename: "teleport.qasm"
         ),
         SampleCircuit(
@@ -33,8 +33,8 @@ struct SampleCircuit: Identifiable, Hashable {
         ),
         SampleCircuit(
             id: "parametric",
-            name: "Parametric",
-            summary: "π-scaled rotations via OpenQASM 2 angle expressions.",
+            name: "Rotations",
+            summary: "RX, RY, and RZ with explicit angles.",
             filename: "parametric.qasm"
         ),
         SampleCircuit(

@@ -69,7 +69,7 @@ public struct LinearXEBResult: Sendable, Equatable {
 /// ```
 ///
 /// For chaotic / Porter–Thomas–like circuits this approaches `1` as `n` grows
-/// (`≈ (D−1)/(D+1)`). MVP honesty: this module does **not** claim Google Sycamore
+/// (`≈ (D−1)/(D+1)`). This module does **not** claim Google Sycamore
 /// experimental parity, full Porter–Thomas certification, or hardware XEB protocols.
 ///
 /// ## Ideal probabilities

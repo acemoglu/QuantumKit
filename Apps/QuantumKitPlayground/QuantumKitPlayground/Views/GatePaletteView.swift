@@ -106,7 +106,7 @@ struct GatePaletteView: View {
         if pending.tool == .cx || pending.tool == .cz {
             return pending.pickedQubits.isEmpty ? "Tap the control qubit" : "Now tap the target"
         }
-        return "Tap \(remain) more qubit(s) for \(pending.tool.title)"
+        return "Tap \(remain) more \(remain == 1 ? "qubit" : "qubits") for \(pending.tool.title)"
     }
 }
 

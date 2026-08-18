@@ -3,7 +3,7 @@
 
 import PackageDescription
 
-// MARK: - H11 lite (packaging MVP)
+// MARK: - Packaging
 //
 // Choice: **A** — single library product / target `QuantumKit`.
 //
@@ -30,7 +30,7 @@ import PackageDescription
 // 5. Re-validate macOS 13 / iOS 16 platforms and Metal resource copy rules after any split.
 //
 // Product aliases / documentation-only modules remain optional later; they are not required
-// for H11 lite while the single target remains the shipped surface.
+// for a single-target package while the single target remains the shipped surface.
 
 let package = Package(
     name: "QuantumKit",
@@ -59,7 +59,7 @@ let package = Package(
                 // scan/collapse path. Using a non-`.metal` extension keeps the raw text in the
                 // bundle on every toolchain, so CLI and Xcode behave identically.
                 //
-                // H11: these resources MUST remain on whichever target owns QuantumEngine /
+                // These resources MUST remain on whichever target owns QuantumEngine /
                 // DensityMatrixEngine (today: this single QuantumKit target).
                 .copy("Metal/Gates.metalsrc"),
                 .copy("Metal/GateKernels.metalsrc"),

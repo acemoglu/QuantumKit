@@ -1,6 +1,6 @@
 import Foundation
 
-/// Axis for single-qubit coherent rotation error channels (C6).
+/// Axis for single-qubit coherent rotation error channels.
 public enum CoherentRotationAxis: String, Sendable, Equatable, Codable, CaseIterable {
     case x, y, z
 }
@@ -21,7 +21,7 @@ public enum QuantumChannelError: Error, Equatable {
 
 /// A physical noise channel attachable to specific gates or qubits.
 ///
-/// ## Extension point (B14 lite)
+/// ## Extension point
 ///
 /// Build channels with the static helpers / cases below, then attach via
 /// ``NoiseModel/adding(_:for:)`` (or composition helpers). Custom *channel builder*

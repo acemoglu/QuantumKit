@@ -21,8 +21,8 @@ public enum EstimatorError: Error, Equatable {
 /// ## Resilience
 /// ``resilience`` (when enabled) applies host-side readout mitigation to each shot
 /// ensemble before parity moments, optionally **zero-noise extrapolation** (``ZNEOptions``),
-/// **PEC lite** (``PECOptions``), and/or **Pauli twirling** (``PauliTwirlingOptions``) on
-/// the shot path. Active ZNE, PEC, and twirling are pairwise incompatible in this MVP.
+/// **PEC** (``PECOptions``), and/or **Pauli twirling** (``PauliTwirlingOptions``) on
+/// the shot path. Active ZNE, PEC, and twirling are pairwise incompatible in this release.
 /// If ``resilience`` is ``disabled``, the estimator falls back to
 /// ``QuantumRunOptions/resilience``. Exact paths ignore resilience (including ZNE/PEC/twirl).
 /// Resolved resilience is included in ``EstimatorResult/metadata`` ``pipelineHash``.

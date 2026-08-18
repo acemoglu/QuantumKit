@@ -6,18 +6,31 @@ public enum QuantumSimulationMethod: String, Codable, Sendable, Equatable {
     case densityMatrix
     /// Monte-Carlo statevector unraveling ensemble (shared global noise channels).
     case trajectory
-    /// Host CPU stabilizer / tableau simulation for Clifford+measure circuits (B19).
+    /// Host CPU stabilizer / tableau simulation for Clifford+measure circuits.
     ///
     /// Not selected by ``QuantumBackendFactory/recommendMethod(qubitCount:noise:policy:)``.
     /// Construct with ``QuantumBackendFactory/makeStabilizer()``, or opt in via
     /// ``SimulationPolicy/preferStabilizerWhenClifford`` and the circuit-aware
     /// ``QuantumBackendFactory/recommendMethod(circuit:noise:policy:)``.
     case stabilizer
-    /// Host CPU matrix-product-state simulation for 1D-ish circuits (B18 MVP).
+    /// Host CPU matrix-product-state simulation for 1D open-chain circuits.
     ///
     /// Not selected by ``recommendMethod``. Construct with
     /// ``QuantumBackendFactory/makeMPS(configuration:)``.
     case mps
+}
+
+extension QuantumSimulationMethod {
+    /// Title for UI and logs. Codable ``rawValue`` is unchanged.
+    public var displayName: String {
+        switch self {
+        case .statevector: return "Statevector"
+        case .densityMatrix: return "Density matrix"
+        case .trajectory: return "Trajectory"
+        case .stabilizer: return "Stabilizer"
+        case .mps: return "MPS"
+        }
+    }
 }
 
 /// Options for a single ``QuantumBackend/run(circuit:options:)`` invocation.
@@ -141,7 +154,7 @@ public struct QuantumResult: Sendable, Equatable {
 
 /// Common entry point for state-vector and density-matrix simulation backends.
 ///
-/// ## Extension point (B14 lite)
+/// ## Extension point
 ///
 /// Conform to ``QuantumBackend`` and construct via your own factory or
 /// ``QuantumBackendFactory`` helpers. Custom backend *discovery registries* are
@@ -183,7 +196,7 @@ public enum QuantumBackendFactory {
 ///
 /// Construct with ``init(renormalizationInterval:)`` or ``QuantumBackendFactory`` — no
 /// ``MTLDevice`` is required. Explicit Metal device selection is an advanced path reserved
-/// for H6b / interop; prefer ``MetalRuntime`` when sharing a device is unavoidable.
+/// for interop; prefer ``MetalRuntime`` when sharing a device is unavoidable.
 ///
 /// Thread-safety: safe to share the backend/engine across threads. Do not mutate one
 /// ``StateVector`` concurrently; concurrent runs on distinct states (including batched shots)

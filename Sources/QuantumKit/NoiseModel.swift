@@ -2,7 +2,7 @@ import Foundation
 
 /// Stochastic noise applied after each unitary gate during execution.
 ///
-/// ## Extension point (B14 lite)
+/// ## Extension point
 ///
 /// Attach custom ``QuantumChannel`` values with ``adding(_:for:)`` / composition
 /// helpers. Channel *builder registries* are not shipped; see ``CompilerPassRegistry``
@@ -69,7 +69,7 @@ public struct NoiseModel: Sendable, Equatable, Codable {
     /// the measurement update (measurement-induced dephasing, C10).
     public var measurementDephasingProbability: QFloat
 
-    /// Quantum-state update semantics for ``Gate/measure`` (C10).
+    /// Quantum-state update semantics for ``Gate/measure``.
     public var measurementMode: MeasurementMode
 
     /// Per-gate, per-qubit localized noise rules applied after matching gates execute.
@@ -205,7 +205,7 @@ public struct NoiseModel: Sendable, Equatable, Codable {
         thermalRelaxationOnDelay && (t1 > 0 || t2 > 0)
     }
 
-    /// Measurement-induced dephasing / non-projective measure semantics (C10).
+    /// Measurement-induced dephasing / non-projective measure semantics.
     public var hasMeasurementChannelNoise: Bool {
         measurementDephasingProbability > 0 || measurementMode != .projective
     }

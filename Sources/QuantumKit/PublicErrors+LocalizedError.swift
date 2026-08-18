@@ -446,7 +446,7 @@ extension PECError: LocalizedError {
         case .nonInvertibleChannel(let detail):
             return "PEC channel is not invertible: \(detail)."
         case .unsupportedMultiQubitGate(let detail):
-            return "PEC lite does not support this multi-qubit gate site: \(detail)."
+            return "PEC does not support this multi-qubit gate site: \(detail)."
         case .emptyCircuitNoPECSites:
             return "Circuit has no PEC quasi-probability sites."
         case .invalidCircuitSampleCount(let count):
@@ -465,7 +465,7 @@ extension PECError: LocalizedError {
         case .missingNoiseModel:
             return "Attach a NoiseModel with supported local depolarizing / Pauli channels before enabling PEC."
         case .unsupportedNoiseModel, .nonInvertibleChannel:
-            return "Use invertible local depolarizing (p < 3/4) or matching Pauli-channel rates supported by PEC lite."
+            return "Use invertible local depolarizing (p < 3/4) or matching Pauli-channel rates supported by PEC."
         case .unsupportedMultiQubitGate:
             return "Decompose multi-qubit gates so PEC sites are 1Q (or supported) channels only."
         case .invalidCircuitSampleCount:

@@ -1,6 +1,6 @@
 import Foundation
 
-/// Truncation / width knobs for host MPS simulation (B18).
+/// Truncation / width knobs for host MPS simulation.
 ///
 /// Singular values with `σ_i / σ_max < svdTruncationThreshold` are dropped, and at most
 /// ``maxBondDimension`` (χ) values are kept after each adjacent two-qubit SVD (tensor path)
@@ -53,7 +53,7 @@ public enum MPSError: Error, Equatable, CustomStringConvertible {
         case .unsupportedGate(let gate):
             return "MPS backend rejected unsupported gate: \(gate)."
         case .unsupportedMultiQubitGate(let count):
-            return "MPS MVP supports at most 2-qubit unitaries after expansion (got \(count)-qubit)."
+            return "MPS supports at most 2-qubit unitaries after expansion (got \(count)-qubit)."
         case .amplitudeExportTooWide(let n, let max):
             return "MPS amplitude export requires n ≤ \(max) (got \(n))."
         case .noiseNotSupported:

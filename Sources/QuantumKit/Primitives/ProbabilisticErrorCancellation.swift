@@ -1,7 +1,7 @@
 import Foundation
 
 /*
- PEC lite (C13) — probabilistic error cancellation for a single 1Q noise family
+ PEC — probabilistic error cancellation for a single 1Q noise family
  =============================================================================
 
  Coverage
@@ -14,7 +14,7 @@ import Foundation
  Shot ``Estimator`` samples mitigation Paulis after each **1-qubit unitary** gate
  site, runs the weighted circuits, and returns `γ_tot · ⟨sign · E⟩`.
 
- Deferred (not this MVP)
+ Deferred
  -----------------------
  Full gate-set PEC, 2Q/correlated depolarizing inverses, unitary folding, stacking with
  ZNE or Pauli twirling, noise-free recovery unitaries (recovery Paulis also see global
@@ -27,7 +27,7 @@ import Foundation
  Total for `n` independent sites: `Γ = γ^n` (shot variance scales ~ `Γ²`).
  */
 
-/// Opt-in PEC lite knobs (C13). Presence on ``ResilienceOptions/pec`` enables mitigation.
+/// Opt-in PEC knobs. Presence on ``ResilienceOptions/pec`` enables mitigation.
 public struct PECOptions: Sendable, Equatable {
     /// Channel whose inverse QPR is sampled at each 1Q gate site.
     public var channel: PECInverseChannel
@@ -47,7 +47,7 @@ public struct PECOptions: Sendable, Equatable {
     public var isActive: Bool { true }
 }
 
-/// Which inverse quasiprobability to use for PEC lite.
+/// Which inverse quasiprobability to use for PEC.
 public enum PECInverseChannel: Sendable, Equatable {
     /// Invert ``NoiseModel/depolarizingProbability`` (1Q jump form).
     case globalDepolarizing
@@ -97,7 +97,7 @@ public struct PauliQuasiprobability: Sendable, Equatable {
     }
 }
 
-/// Metadata attached to ``EstimatorResult`` when PEC lite ran.
+/// Metadata attached to ``EstimatorResult`` when PEC ran.
 public struct PECMetadata: Sendable, Equatable {
     public let channel: PECInverseChannel
     /// Per-site overhead `γ`.
@@ -138,7 +138,7 @@ public enum PECError: Error, Equatable {
     case pauliChannelMismatch(expectedP: QFloat, actualDepolarizing: QFloat)
 }
 
-/// Host-side PEC lite helpers (C13).
+/// Host-side PEC helpers.
 public enum ProbabilisticErrorCancellation {
 
     /// QPR for engine 1Q depolarizing jump probability `p` (`p < 3/4`).
@@ -220,7 +220,7 @@ public enum ProbabilisticErrorCancellation {
         }
     }
 
-    /// Validate noise + circuit for PEC lite; returns 1Q unitary gate indices that are sites.
+    /// Validate noise + circuit for PEC; returns 1Q unitary gate indices that are sites.
     public static func validatedPECSites(
         circuit: QuantumCircuit,
         noise: NoiseModel?
@@ -245,32 +245,32 @@ public enum ProbabilisticErrorCancellation {
 
     public static func validateNoiseModelForPEC(_ noise: NoiseModel) throws {
         guard noise.appliesDepolarizing else {
-            throw PECError.unsupportedNoiseModel("PEC lite requires global depolarizingProbability > 0")
+            throw PECError.unsupportedNoiseModel("PEC requires global depolarizingProbability > 0")
         }
         if noise.appliesAmplitudeDamping {
-            throw PECError.unsupportedNoiseModel("amplitude damping not supported by PEC lite")
+            throw PECError.unsupportedNoiseModel("amplitude damping not supported by PEC")
         }
         if noise.appliesPhaseDamping {
-            throw PECError.unsupportedNoiseModel("phase damping not supported by PEC lite")
+            throw PECError.unsupportedNoiseModel("phase damping not supported by PEC")
         }
         if noise.hasLocalizedGateNoise {
-            throw PECError.unsupportedNoiseModel("localized gate noise not supported by PEC lite")
+            throw PECError.unsupportedNoiseModel("localized gate noise not supported by PEC")
         }
         if noise.hasPreparationNoise {
-            throw PECError.unsupportedNoiseModel("preparation/reset noise not supported by PEC lite")
+            throw PECError.unsupportedNoiseModel("preparation/reset noise not supported by PEC")
         }
         if noise.hasIdleNoise {
-            throw PECError.unsupportedNoiseModel("idle thermal noise not supported by PEC lite")
+            throw PECError.unsupportedNoiseModel("idle thermal noise not supported by PEC")
         }
         if noise.measurementDephasingProbability > 0 {
-            throw PECError.unsupportedNoiseModel("measurement dephasing not supported by PEC lite")
+            throw PECError.unsupportedNoiseModel("measurement dephasing not supported by PEC")
         }
         // Readout flips / confusion are not part of the inverse QPR — refuse rather than
         // silently return a biased mitigated expectation. Use ``ResilienceOptions/readoutMitigation``
-        // for assignment-matrix correction (orthogonal to PEC lite).
+        // for assignment-matrix correction (orthogonal to PEC).
         if noise.appliesReadoutError {
             throw PECError.unsupportedNoiseModel(
-                "NoiseModel readout error/confusion not supported by PEC lite; use ResilienceOptions.readoutMitigation"
+                "NoiseModel readout error/confusion not supported by PEC; use ResilienceOptions.readoutMitigation"
             )
         }
     }

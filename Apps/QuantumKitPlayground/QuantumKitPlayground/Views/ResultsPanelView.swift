@@ -59,11 +59,11 @@ private struct MetadataSection: View {
     var body: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 6) {
-                labeled("Method", output.metadata.method.rawValue, systemImage: "cpu")
+                labeled("Method", output.metadata.method.displayName, systemImage: "cpu")
                 if let device = output.metadata.deviceName {
                     labeled("Device", device, systemImage: "memorychip")
                 }
-                labeled("Wall", String(format: "%.2f ms", output.wallClockMilliseconds), systemImage: "timer")
+                labeled("Time", String(format: "%.2f ms", output.wallClockMilliseconds), systemImage: "timer")
                 labeled("Qubits", "\(output.metadata.qubitCount)", systemImage: "circle.grid.2x1")
                 labeled("Gates", "\(output.metadata.gateCount)", systemImage: "square.stack.3d.up")
                 if let seed = output.metadata.seed {
@@ -75,7 +75,7 @@ private struct MetadataSection: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         } label: {
-            Label("Run Metadata", systemImage: "info.circle")
+            Label("Run details", systemImage: "info.circle")
         }
     }
 
@@ -104,13 +104,13 @@ private struct ExecutionSection: View {
                         .font(.system(.body, design: .monospaced))
                 }
                 if let memory = output.result.memorySlots, !memory.isEmpty {
-                    Text("Classical memory: \(memory.map(String.init).joined(separator: ", "))")
+                    Text("Classical bits: \(memory.map(String.init).joined(separator: ", "))")
                         .font(.system(.body, design: .monospaced))
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         } label: {
-            Label("State Evolution", systemImage: "arrow.triangle.branch")
+            Label("Execution", systemImage: "arrow.triangle.branch")
         }
     }
 }
@@ -121,11 +121,15 @@ private struct ParsedSummarySection: View {
 
     var body: some View {
         GroupBox {
-            Text("\(qubitCount) qubit(s), \(gateCount) gate(s). Press Run to simulate.")
+            Text("\(Self.countPhrase(qubitCount, singular: "qubit", plural: "qubits")), \(Self.countPhrase(gateCount, singular: "gate", plural: "gates")). Press Run to simulate.")
                 .foregroundStyle(.secondary)
         } label: {
             Label("Parsed Circuit", systemImage: "checkmark.circle")
         }
+    }
+
+    private static func countPhrase(_ count: Int, singular: String, plural: String) -> String {
+        "\(count) \(count == 1 ? singular : plural)"
     }
 }
 
@@ -136,7 +140,7 @@ private struct PlaceholderSection: View {
             Text("No Results Yet")
                 .font(.title3.weight(.semibold))
                 .foregroundStyle(Color.quantumInk)
-            Text("Parse OpenQASM to preview the circuit, then Run to simulate with QuantumKit.")
+            Text("Build a circuit or open Code, then Run to simulate with QuantumKit.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

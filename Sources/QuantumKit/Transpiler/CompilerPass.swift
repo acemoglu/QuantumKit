@@ -2,7 +2,7 @@ import Foundation
 
 /// A single transformation applied to a ``QuantumCircuit`` during compilation.
 ///
-/// ## Extension point (B14 lite)
+/// ## Extension point
 ///
 /// Implement ``CompilerPass`` (or ``DAGCompilerPass`` + ``DAGCompilerPassAdapter``) and
 /// hand instances to ``PassManager``. For named discovery without changing existing

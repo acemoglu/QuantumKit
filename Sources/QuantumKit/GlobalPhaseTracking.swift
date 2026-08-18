@@ -1,6 +1,6 @@
 import Foundation
 
-/// Cumulative global-phase bookkeeping for **statevector** unitary evolution (roadmap B16).
+/// Cumulative global-phase bookkeeping for **statevector** unitary evolution.
 ///
 /// ## Convention
 /// - **Units:** radians, unwrapped (not reduced modulo \(2\pi\)).
@@ -18,7 +18,7 @@ import Foundation
 /// - Tracked on CPU and Metal **statevector** paths (`CPUStateVector` / `StateVector`,
 ///   ``CircuitExecutionResult/cumulativeGlobalPhaseRadians``, ``QuantumResultMetadata``).
 /// - Density-matrix, MPS, and stabilizer engines leave the field `nil` (mixed-state gauge
-///   tracking is out of scope for B16).
+///   tracking is out of scope).
 /// - Only **circuit** unitary pieces update \(\Phi\). Measure / reset collapse, noise
 ///   unraveling Paulis, and stochastic reset/preparation error flips do **not**.
 public enum GlobalPhaseTracking: Sendable {

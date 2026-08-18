@@ -87,7 +87,7 @@ extension NoiseModel {
         return copy
     }
 
-    /// Layered composition (C1): concatenate localized rules (`self` then `other`) and take
+    /// Layered composition: concatenate localized rules (`self` then `other`) and take
     /// the element-wise max of shared global probabilities. `other`'s non-default
     /// measurement mode / confusion matrix wins when set.
     public func merging(_ other: NoiseModel) -> NoiseModel {

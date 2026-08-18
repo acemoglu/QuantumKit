@@ -15,11 +15,11 @@ import Metal
 /// external buffer interop, diagnostics). Prefer **not** to call it from ordinary simulation
 /// paths — use device-free inits instead.
 ///
-/// ## Public `MTLDevice` inventory (H6c)
+/// ## Public `MTLDevice` inventory
 /// - ``MetalRuntime/sharedDevice()`` — **kept** (advanced / discouraged)
 /// - ``MetalRuntime/deviceName`` — **kept** (diagnostics; wraps ``sharedDevice()``)
 ///
-/// Removed in H6c (previously soft-deprecated public device surfaces):
+/// Removed public device surfaces:
 /// - `StateVector.init(qubitCount:device:)`
 /// - `DensityMatrix.init(qubitCount:device:)`
 /// - `StateVectorBatch.init(qubitCount:device:capacity:)`
@@ -31,18 +31,18 @@ import Metal
 /// - `StateVectorBatch.init(qubitCount:on:capacity:)`
 /// - engine `device` properties (`QuantumEngine`, `DensityMatrixEngine`)
 ///
-/// Removed in H6b (previously deprecated **ignore-device** shims — `_ = device`; not honored):
+/// Removed deprecated **ignore-device** shims (`_ = device`; not honored):
 /// - `QuantumMeasurement.runSampleCounts(...device:...)`
 /// - `QuantumMeasurement.runSampleCountsRNG(...device:...)`
 /// - `QuantumEngine.executeTrajectorySampleCounts(...device:...)`
 /// - `QuantumEngine.executeTrajectorySampleCountsRNG(...device:...)`
 ///
-/// ## Public `MTLBuffer` inventory (H7b)
+/// ## Public `MTLBuffer` inventory
 /// Amplitude storage is package-`internal` `metalRealBuffer` / `metalImagBuffer`
 /// (same-module / `@testable` visible — not Swift `private`). Normal clients use
 /// amplitudes / probabilities / snapshot APIs — no public `MTLBuffer`.
 ///
-/// Removed in H7b (previously soft-deprecated public shims):
+/// Removed public buffer shims:
 /// - `StateVector.realBuffer` / `StateVector.imagBuffer`
 /// - `DensityMatrix.realBuffer` / `DensityMatrix.imagBuffer`
 /// - `QuantumEngine.executeProbabilityKernel(on:outputBuffer:)`

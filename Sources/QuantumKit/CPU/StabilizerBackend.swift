@@ -1,6 +1,6 @@
 import Foundation
 
-/// Host CPU stabilizer / tableau backend for Clifford+measure circuits (B19).
+/// Host CPU stabilizer / tableau backend for Clifford+measure circuits.
 ///
 /// Construct explicitly via ``QuantumBackendFactory/makeStabilizer()``. Width-only
 /// ``QuantumBackendFactory/recommendMethod(qubitCount:noise:policy:)`` never selects this

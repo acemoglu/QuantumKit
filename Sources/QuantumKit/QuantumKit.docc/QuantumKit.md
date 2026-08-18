@@ -6,7 +6,7 @@ QuantumKit evolves circuits on-device: Metal GPU statevector and density-matrix 
 
 It is for Swift developers who want a local simulator in the same process as their app — not a Python stack, not NVIDIA / CUDA, and not a cloud backend. One SPM product: `QuantumKit`.
 
-The SwiftUI app under `Apps/QuantumKitPlayground` composes and runs circuits against this library. Depend on the library, not the playground UI.
+The SwiftUI app under `Apps/QuantumKitPlayground` composes and runs circuits against this library. Depend on the library, not the app UI.
 
 Source: [github.com/acemoglu/QuantumKit](https://github.com/acemoglu/QuantumKit.git).
 
@@ -130,7 +130,7 @@ Time is **width × gates**, not shot count, for noiseless terminal sampling. Fir
 
 | Width | Role | What to expect |
 | --- | --- | --- |
-| 2–8 qubits | Everyday circuits and the playground canvas | Sub-second on Automatic after warmup |
+| 2–8 qubits | Everyday circuits and the visual canvas | Sub-second on Automatic after warmup |
 | ≤ 16 | CPU statevector cap (``CPUStateVector/maxQubitCount``) | CPU cannot go wider; Metal continues |
 | ~20 | Wide Metal statevector | Seconds, not milliseconds |
 | ~30 | Metal stress (n = 30 ≈ 8 GB) | Tens of seconds and gigabytes of GPU buffers |
@@ -239,7 +239,7 @@ CPU independent shots and Metal sequential measurement RNGs are **not** bit-iden
 
 ## OpenQASM
 
-QuantumKit lowers OpenQASM 2 and a core OpenQASM 3 subset into ``QuantumCircuit``. The façade is ``OpenQASM``; ``QuantumCircuit/init(openQASM:options:)`` is the convenience entry.
+QuantumKit lowers OpenQASM 2 and a core OpenQASM 3 subset into ``QuantumCircuit``. The entry type is ``OpenQASM``; ``QuantumCircuit/init(openQASM:options:)`` is the convenience initializer.
 
 Engine **LSB = qubit 0**. OpenQASM `q[0]` is engine qubit `0`. Multiple `qreg` / `qubit` declarations concatenate in declaration order. Classical registers stay separate ``ClassicalRegisterSpec`` entries. Display histograms still default to MSB.
 

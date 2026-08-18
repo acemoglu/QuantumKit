@@ -58,9 +58,9 @@ public struct ShotBudget: Sendable, Equatable {
 ///   (`ZNEOptions/isActive`, ≥ 2 scale factors) enable ZNE; inactive `zne` values are ignored.
 ///   Ignored on exact Estimator and on ``Sampler``. When active, per-scale runs still honor
 ///   ``readoutMitigation``. Requires a ``NoiseModel`` with ``NoiseModel/appliesDepolarizing``.
-/// - ``pec``: PEC lite on **shot** ``Estimator`` only — inverse quasiprobability for 1Q
+/// - ``pec``: PEC on **shot** ``Estimator`` only — inverse quasiprobability for 1Q
 ///   global depolarizing / equal-rate Pauli channel (see ``PECOptions``). Incompatible with
-///   **active** ``zne`` and with ``pauliTwirling`` in this MVP. Ignored on exact Estimator
+///   **active** ``zne`` and with ``pauliTwirling``. Ignored on exact Estimator
 ///   and ``Sampler``.
 /// - ``pauliTwirling``: Clifford 1Q/2Q **layer** Pauli twirling on **shot** ``Estimator``
 ///   only (randomized compiling; see ``PauliTwirlingOptions``). Incompatible with **active**
@@ -80,14 +80,14 @@ public struct ResilienceOptions: Sendable, Equatable {
     public var readoutMitigation: ReadoutConfusionMatrix?
 
     /// When non-`nil` and ``ZNEOptions/isActive``, shot ``Estimator`` amplifies global
-    /// depolarizing by each scale factor and linearly extrapolates to zero noise (C13).
+    /// depolarizing by each scale factor and linearly extrapolates to zero noise.
     /// Inactive values (`scaleFactors.count < 2`) are ignored.
     public var zne: ZNEOptions?
 
-    /// When non-`nil`, shot ``Estimator`` runs PEC lite (C13).
+    /// When non-`nil`, shot ``Estimator`` runs PEC.
     public var pec: PECOptions?
 
-    /// When non-`nil`, shot ``Estimator`` runs Clifford 1Q/2Q layer Pauli twirling (E8).
+    /// When non-`nil`, shot ``Estimator`` runs Clifford 1Q/2Q layer Pauli twirling.
     public var pauliTwirling: PauliTwirlingOptions?
 
     public init(

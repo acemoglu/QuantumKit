@@ -30,10 +30,10 @@ enum PaletteTool: String, Codable, CaseIterable, Identifiable, Hashable, Sendabl
         case .cx: return "CNOT"
         case .cz: return "CZ"
         case .swap: return "SWAP"
-        case .ccx: return "CCX"
-        case .measure: return "M"
-        case .barrier: return "‖"
-        case .reset: return "Rst"
+        case .ccx: return "Toffoli"
+        case .measure: return "Measure"
+        case .barrier: return "Barrier"
+        case .reset: return "Reset"
         }
     }
 
@@ -122,7 +122,7 @@ enum PaletteSection: String, CaseIterable, Identifiable {
         case .oneQubit: return "1-qubit"
         case .rotations: return "Rotations"
         case .multiQubit: return "2/3-qubit"
-        case .ops: return "Measure"
+        case .ops: return "Measure & reset"
         }
     }
 }

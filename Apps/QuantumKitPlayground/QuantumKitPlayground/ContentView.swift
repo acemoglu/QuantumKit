@@ -82,7 +82,11 @@ struct ContentView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
+            #if os(iOS)
+            Text("Stored under My Circuits in Samples.")
+            #else
             Text("Stored in the sidebar under My Circuits.")
+            #endif
         }
         .sheet(isPresented: $viewModel.isPresentingHelp) {
             MacHowToView {
@@ -90,13 +94,11 @@ struct ContentView: View {
                 viewModel.isPresentingHelp = false
             }
         }
-        #if os(macOS)
         .onAppear {
             if !MacHowTo.hasSeen {
                 viewModel.isPresentingHelp = true
             }
         }
-        #endif
     }
 
     /// Compact chrome: iPhone (including Plus/Max landscape) and iPad slide over.

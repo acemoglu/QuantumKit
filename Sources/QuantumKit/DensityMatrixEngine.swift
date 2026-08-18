@@ -914,7 +914,7 @@ public final class DensityMatrixEngine: @unchecked Sendable {
         )
     }
 
-    /// Computational-basis measurement with optional measurement-induced dephasing (C10).
+    /// Computational-basis measurement with optional measurement-induced dephasing.
     ///
     /// For each qubit: optional pre-measure phase damping, Born-rule sample, then either
     /// projective collapse (``MeasurementMode/projective``) or full Z-dephasing without

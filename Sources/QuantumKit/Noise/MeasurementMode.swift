@@ -1,6 +1,6 @@
 import Foundation
 
-/// How a computational-basis ``Gate/measure`` updates the quantum state (C10).
+/// How a computational-basis ``Gate/measure`` updates the quantum state.
 public enum MeasurementMode: String, Sendable, Equatable, Codable, CaseIterable {
     /// Born-rule sample + projective collapse (default).
     case projective

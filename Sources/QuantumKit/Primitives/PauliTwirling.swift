@@ -1,10 +1,10 @@
 import Foundation
 
 /*
- Pauli twirling lite (E8) — Clifford 1Q/2Q layer ensembles
+ Pauli twirling — Clifford 1Q/2Q layer ensembles
  =========================================================
 
- Exact model (this MVP)
+ Exact model
  ----------------------
  Opt-in on shot ``Estimator`` only. For each **Clifford** 1Q/2Q unitary gate site,
  sample a uniform random Pauli string `P` on the gate support and rewrite the site as
@@ -35,7 +35,7 @@ and 3Q+ gates are left untouched (not twirled).
  or PEC; noise-free virtual frames that avoid engine noise on inserted Paulis.
  */
 
-/// Opt-in Pauli twirling knobs (E8 lite). Presence on ``ResilienceOptions/pauliTwirling`` enables.
+/// Opt-in Pauli twirling knobs. Presence on ``ResilienceOptions/pauliTwirling`` enables.
 public struct PauliTwirlingOptions: Sendable, Equatable {
     /// Number of distinct twirled circuits.
     ///
@@ -78,7 +78,7 @@ public enum PauliTwirlingError: Error, Equatable {
     case ensembleExceedsShots(ensemble: Int, shots: Int)
 }
 
-/// Host-side Pauli twirling helpers (E8 lite).
+/// Host-side Pauli twirling helpers.
 public enum PauliTwirling {
 
     /// Gate indices that are Clifford 1Q/2Q unitary twirl sites.

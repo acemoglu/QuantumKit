@@ -1,13 +1,13 @@
 import Foundation
 
-/// Zero-noise extrapolation (C13) — shot Estimator only.
+/// Zero-noise extrapolation — shot Estimator only.
 ///
-/// ## Scaling method (this MVP)
+/// ## Scaling method
 /// **Global depolarizing stretch:** for each scale factor `λ`, run the shot Estimator with
 /// `NoiseModel.depolarizingProbability` replaced by `clamp(p · λ)` (other noise channels
 /// unchanged). `λ = 1` is the physical / nominal model; `λ > 1` amplifies global depolarizing
 /// only. This is a **simulator** noise-amplification ZNE — not unitary folding / identity
-/// insertion (those are out of scope for this MVP).
+/// insertion (those are out of scope).
 ///
 /// Requires ``NoiseModel/appliesDepolarizing`` (`p > 0`). Scaling with `p = 0` / missing noise
 /// is rejected — otherwise per-scale seed offsets would extrapolate shot noise alone.
@@ -27,7 +27,7 @@ import Foundation
 public struct ZNEOptions: Sendable, Equatable {
     /// Noise scale factors `λ` (must contain ≥ 2 distinct values). Default `[1, 3, 5]`.
     public var scaleFactors: [QFloat]
-    /// Fit used to extrapolate to `λ = 0`. Only ``linear`` is available in this MVP.
+    /// Fit used to extrapolate to `λ = 0`. Only ``linear`` is available.
     public var extrapolator: ZNEExtrapolator
 
     public init(
@@ -45,13 +45,13 @@ public struct ZNEOptions: Sendable, Equatable {
     public var isActive: Bool { scaleFactors.count >= 2 }
 }
 
-/// Extrapolator choice for ``ZNEOptions`` (C13).
+/// Extrapolator choice for ``ZNEOptions``.
 public enum ZNEExtrapolator: String, Sendable, Equatable, Codable, CaseIterable {
     /// Least-squares fit `E(λ) = a + bλ` → report `a`.
     case linear
 }
 
-/// Fixed scaling method token hashed into ``PipelineFingerprint`` (only one MVP method).
+/// Fixed scaling method token hashed into ``PipelineFingerprint``.
 public enum ZNEScalingMethod: String, Sendable, Equatable, Codable, CaseIterable {
     /// Stretch ``NoiseModel/depolarizingProbability`` by `λ` (clamped to `[0, 1]`).
     case globalDepolarizing
@@ -95,7 +95,7 @@ public enum ZNEError: Error, Equatable {
     case missingGlobalDepolarizing
 }
 
-/// Host-side zero-noise fit helpers (C13).
+/// Host-side zero-noise fit helpers.
 public enum ZeroNoiseExtrapolation {
     /// Linear least-squares `E(λ) = a + bλ`; returns `a` (value at `λ = 0`).
     public static func extrapolateLinear(

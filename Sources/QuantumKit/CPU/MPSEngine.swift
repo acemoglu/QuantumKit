@@ -2,7 +2,7 @@ import Foundation
 
 /// Host CPU MPS engine (1D open-boundary). No Metal kernels.
 ///
-/// **Gate / topology limits (B18 MVP):**
+/// **Gate / topology limits:**
 /// - Single-qubit unitaries (including `unitary1`) after ``QuantumEngine/expandForExecution``.
 /// - Two-qubit unitaries: applied on adjacent sites when possible; **non-adjacent pairs use a
 ///   SWAP bubble chain** (then reverse) so GHZ-style `CX(0,n-1)` works on a 1D chain.
