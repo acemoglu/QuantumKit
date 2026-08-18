@@ -19,7 +19,7 @@ import PackageDescription
 //
 // Follow-up split plan (when the graph is made explicit — do not half-do this):
 // 1. Extract `QuantumKitCore` first: Gate, QuantumCircuit, IR, parameters, public errors,
-//    QuantumKitInfo / APIPolicy — no Metal, no Bundle.module.
+//    QuantumKitInfo — no Metal, no Bundle.module.
 // 2. Then `QuantumKitSimulator`: Engine/, CPU/, Backend/, Measure/, StateVector,
 //    DensityMatrix*, MetalRuntime, BatchExecution, plus **all** `.metalsrc` resources
 //    on that target only (loaders must stay here).

@@ -16,15 +16,7 @@ extension QuantumKitTests {
         }
     }
 
-    /// `0.2.0` is the honesty bump for H6c/H7b removals plus Pipelines/TRNGCollapse demotion
-    /// documented on ``QuantumKitAPIPolicy``.
-    func testQuantumKitInfoVersionIsPointTwoBreakingBump() {
-        XCTAssertEqual(QuantumKitInfo.version, "0.2.0")
-    }
-
-    func testAPIPolicySymbolExistsForDocumentationAnchor() {
-        // Public-module linkage smoke: policy enum is part of the exported surface
-        // (DocC lists H6c/H7b removals and Pipelines / TRNGCollapse package-internal demotion).
-        let _: QuantumKitAPIPolicy.Type = QuantumKitAPIPolicy.self
+    func testQuantumKitInfoVersionIsOneZero() {
+        XCTAssertEqual(QuantumKitInfo.version, "1.0.0")
     }
 }

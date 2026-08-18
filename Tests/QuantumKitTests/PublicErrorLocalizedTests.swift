@@ -391,7 +391,6 @@ extension QuantumKitTests {
             CircuitExecutionCancellationError.cancelled
         )
         XCTAssertEqual(ShorClassicalError.invalidModulus(0), ShorClassicalError.invalidModulus(0))
-        XCTAssertEqual(QuantumKitInfo.version, "0.2.0")
     }
 
     /// `densityMatrixRequiredButTooWide` is thrown when DM is required but too wide *and*

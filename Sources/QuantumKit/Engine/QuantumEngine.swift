@@ -358,9 +358,9 @@ public final class QuantumEngine: @unchecked Sendable {
         return try device.makeLibrary(source: source, options: options)
     }
 
-    /// The Metal shader sources are split across multiple `.metal` files for readability
-    /// (`Gates.metal` holds the precision-critical scan/collapse path and the `df_*` helpers;
-    /// `GateKernels.metal` holds the unitary gate kernels). Both libraries are compiled at runtime
+    /// The Metal shader sources are split across multiple `.metalsrc` files for readability
+    /// (`Gates.metalsrc` holds the precision-critical scan/collapse path and the `df_*` helpers;
+    /// `GateKernels.metalsrc` holds the unitary gate kernels). Both libraries are compiled at runtime
     /// from these sources, so they are concatenated into a single translation unit here. Duplicate
     /// `#include <metal_stdlib>` / `using namespace metal;` lines across the files are harmless.
     static func metalShaderSource() throws -> String {
