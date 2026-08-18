@@ -30,7 +30,7 @@ Two targets share the same sources:
 
 ## Layout
 
-- **Mac:** sample sidebar; **Circuit | Code** in the center; results + run settings on the right.
+- **Mac:** sample sidebar; **Circuit | Code** in the center; results + run settings on the right. First launch opens **How to Use** (also **⌘?** / toolbar **?**). Keep everyday runs on the bundled samples (Bell, GHZ-4); 20+ qubits is seconds by design, ~30 qubits can be tens of seconds.
 - **iOS (iPhone and iPad):** bottom tab bar — **Circuit**, **Code**, **Results**. Samples and Run sit in the navigation bar; Open / Save / Parse are in the overflow menu. On iPhone, tap a palette gate then a qubit wire. Drag-and-drop still works on iPad. Run jumps to Results.
 
 ## Requirements

@@ -24,6 +24,12 @@ struct QuantumKitPlaygroundApp: App {
                 }
                 .keyboardShortcut("s", modifiers: .command)
             }
+            CommandGroup(after: .help) {
+                Button("How to Use QuantumKit") {
+                    viewModel.isPresentingHelp = true
+                }
+                .keyboardShortcut("?", modifiers: .command)
+            }
             CommandGroup(after: .sidebar) {
                 Button("Parse") {
                     viewModel.parse()

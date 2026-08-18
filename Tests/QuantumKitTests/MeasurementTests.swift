@@ -334,4 +334,89 @@ extension QuantumKitTests {
         let again = try engine.sampleComputationalBasisCounts(on: state, shots: 256, rng: &replay)
         XCTAssertEqual(again, counts)
     }
+
+    func testOneQubitGPUMarginalThreadgroupMemoryIs16ByteAligned() {
+        XCTAssertEqual(QuantumEngine.alignedThreadgroupMemoryLength(floatCount: 1) % 16, 0)
+        XCTAssertEqual(QuantumEngine.alignedThreadgroupMemoryLength(floatCount: 2), 16)
+        XCTAssertEqual(QuantumEngine.alignedThreadgroupMemoryLength(floatCount: 4), 16)
+        XCTAssertEqual(QuantumEngine.alignedThreadgroupMemoryLength(floatCount: 256) % 16, 0)
+    }
+
+    func testSequentialSingleQubitMidCircuitMeasuresOnThreeQubits() throws {
+        let engine = try QuantumEngine()
+        guard makeDevice() != nil else {
+            XCTFail("Apple Silicon GPU not found!")
+            return
+        }
+
+        let creg = try ClassicalRegisterSpec(bitCount: 3)
+        var circuit = try QuantumCircuit(qubitCount: 3, classicalRegisters: [creg])
+        try circuit.h(0)
+        try circuit.cx(0, 1)
+        try circuit.measure(qubits: [0], classicalRegister: 0, classicalBitOffset: 0)
+        try circuit.measure(qubits: [1], classicalRegister: 0, classicalBitOffset: 1)
+        try circuit.t(0)
+        try circuit.t(1)
+        try circuit.sdg(0)
+
+        let state = try StateVector(qubitCount: 3)
+        var rng: QuantumRNG = .seeded(7)
+        let execution = try engine.executeRNG(circuit, on: state, rng: &rng)
+        XCTAssertEqual(execution.measurementOutcomes.count, 2)
+        XCTAssertEqual(execution.measurementOutcomes[0].count, 1)
+        XCTAssertEqual(execution.measurementOutcomes[1].count, 1)
+    }
+
+    /// n=9 is the smallest width where a 1-qubit GPU marginal has more than one 256-wide leaf
+    /// block, so the compensated reduce runs with `outElements = 2`. That dispatch is the
+    /// remaining small-grid cousin of the 8-byte threadgroup-memory assert.
+    func testOneQubitGPUMarginalReduceOnNineQubits() throws {
+        let engine = try QuantumEngine()
+        guard makeDevice() != nil else {
+            XCTFail("Apple Silicon GPU not found!")
+            return
+        }
+
+        let creg = try ClassicalRegisterSpec(bitCount: 9)
+        var circuit = try QuantumCircuit(qubitCount: 9, classicalRegisters: [creg])
+        try circuit.h(0)
+        try circuit.measure(qubits: [0], classicalRegister: 0, classicalBitOffset: 0)
+
+        let state = try StateVector(qubitCount: 9)
+        var rng: QuantumRNG = .seeded(11)
+        let execution = try engine.executeRNG(circuit, on: state, rng: &rng)
+        XCTAssertEqual(execution.measurementOutcomes.count, 1)
+        XCTAssertEqual(execution.measurementOutcomes[0].count, 1)
+        XCTAssertTrue(execution.measurementOutcomes[0][0] == 0 || execution.measurementOutcomes[0][0] == 1)
+    }
+
+    /// Bundled teleport sample: two separate 1-qubit measures, then classical control.
+    /// Same GPU 1-qubit marginal as the playground crash; reset uses this path too.
+    func testTeleportStyleSequentialMeasuresThenClassicalControl() throws {
+        let engine = try QuantumEngine()
+        guard makeDevice() != nil else {
+            XCTFail("Apple Silicon GPU not found!")
+            return
+        }
+
+        let creg = try ClassicalRegisterSpec(bitCount: 2)
+        var circuit = try QuantumCircuit(qubitCount: 3, classicalRegisters: [creg])
+        try circuit.h(1)
+        try circuit.cx(1, 2)
+        try circuit.cx(0, 1)
+        try circuit.h(0)
+        try circuit.measure(qubits: [0], classicalRegister: 0, classicalBitOffset: 0)
+        try circuit.measure(qubits: [1], classicalRegister: 0, classicalBitOffset: 1)
+        try circuit.c_if(classicalRegister: 0, equals: 1, apply: .z(target: 2))
+        try circuit.c_if(classicalRegister: 0, equals: 2, apply: .x(target: 2))
+        try circuit.c_if(classicalRegister: 0, equals: 3, apply: .z(target: 2))
+        try circuit.c_if(classicalRegister: 0, equals: 3, apply: .x(target: 2))
+
+        let state = try StateVector(qubitCount: 3)
+        var rng: QuantumRNG = .seeded(3)
+        let execution = try engine.executeRNG(circuit, on: state, rng: &rng)
+        XCTAssertEqual(execution.measurementOutcomes.count, 2)
+        XCTAssertEqual(execution.measurementOutcomes[0].count, 1)
+        XCTAssertEqual(execution.measurementOutcomes[1].count, 1)
+    }
 }

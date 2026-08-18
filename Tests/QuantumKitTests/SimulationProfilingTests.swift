@@ -403,13 +403,26 @@ extension QuantumKitTests {
         try circuit.rz(theta: QFloat(0.37), 0)
 
         let shotCount = 8
+        // Summation is only visible on the per-shot trajectory path. Prepared sampling
+        // evolves once, so 8-shot gate ns would stay in the same ballpark as 1-shot.
+        let sampleOptions = SampleCountOptions(preferPreparedSampling: false)
         let one = try backend.run(
             circuit: circuit,
-            options: QuantumRunOptions(seed: 17, shots: 1, profiling: .detailed)
+            options: QuantumRunOptions(
+                seed: 17,
+                shots: 1,
+                sampleOptions: sampleOptions,
+                profiling: .detailed
+            )
         )
         let many = try backend.run(
             circuit: circuit,
-            options: QuantumRunOptions(seed: 17, shots: shotCount, profiling: .detailed)
+            options: QuantumRunOptions(
+                seed: 17,
+                shots: shotCount,
+                sampleOptions: sampleOptions,
+                profiling: .detailed
+            )
         )
 
         let oneGates = try XCTUnwrap(one.profile?.gateTimings)

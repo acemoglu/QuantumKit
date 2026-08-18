@@ -84,6 +84,19 @@ struct ContentView: View {
         } message: {
             Text("Stored in the sidebar under My Circuits.")
         }
+        .sheet(isPresented: $viewModel.isPresentingHelp) {
+            MacHowToView {
+                MacHowTo.markSeen()
+                viewModel.isPresentingHelp = false
+            }
+        }
+        #if os(macOS)
+        .onAppear {
+            if !MacHowTo.hasSeen {
+                viewModel.isPresentingHelp = true
+            }
+        }
+        #endif
     }
 
     /// Compact chrome: iPhone (including Plus/Max landscape) and iPad slide over.
@@ -252,6 +265,14 @@ struct ContentView: View {
     @ToolbarContentBuilder
     private var desktopToolbar: some ToolbarContent {
         ToolbarItemGroup(placement: .automatic) {
+            Button {
+                viewModel.isPresentingHelp = true
+            } label: {
+                Label("How to Use", systemImage: "questionmark.circle")
+            }
+            .delayedHoverHint("How to use QuantumKit on this Mac", activeHint: $toolbarHint)
+            .help("How to use QuantumKit on this Mac")
+
             Button {
                 viewModel.presentOpen()
             } label: {

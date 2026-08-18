@@ -11,6 +11,15 @@ struct SettingsPanelView: View {
                 devicePicker
                 shotsRow
                 seedRow
+                #if os(macOS)
+                Button {
+                    viewModel.isPresentingHelp = true
+                } label: {
+                    Label("How to Use", systemImage: "questionmark.circle")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                #endif
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         } label: {

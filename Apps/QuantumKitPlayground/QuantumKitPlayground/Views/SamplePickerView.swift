@@ -51,6 +51,14 @@ struct SamplePickerView: View {
                 } label: {
                     Label("Reset", systemImage: "arrow.counterclockwise")
                 }
+
+                #if os(macOS)
+                Button {
+                    viewModel.isPresentingHelp = true
+                } label: {
+                    Label("How to Use", systemImage: "questionmark.circle")
+                }
+                #endif
             }
         }
         #if os(iOS)

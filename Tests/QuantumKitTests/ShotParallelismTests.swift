@@ -880,7 +880,7 @@ extension QuantumKitTests {
             shots: 32,
             rng: &rng,
             noise: nil,
-            options: SampleCountOptions(batchSize: 8),
+            options: SampleCountOptions(batchSize: 8, preferPreparedSampling: false),
             seed: nil
         )
         // `rng` must not be advanced on the independent path.

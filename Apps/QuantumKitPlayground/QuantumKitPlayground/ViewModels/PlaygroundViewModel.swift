@@ -23,6 +23,7 @@ final class PlaygroundViewModel: ObservableObject {
     @Published var isPresentingOpen = false
     @Published var isPresentingSave = false
     @Published var isPresentingSaveToLibrary = false
+    @Published var isPresentingHelp = false
     @Published var libraryNameDraft = ""
     @Published var savedCircuits: [SavedCircuit] = CircuitLibraryStore.load()
     @Published var selectedCompactTab: PlaygroundTab = .circuit

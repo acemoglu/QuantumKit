@@ -171,6 +171,13 @@ extension QuantumEngine {
     /// host fold, which is `O(2ⁿ)` either way — no regression versus the previous behavior.
     static let maxGPUMarginalQubits = 8
 
+    /// Metal debug devices assert unless threadgroup memory length is a multiple of 16 bytes.
+    /// A 1-qubit marginal is `2 × sizeof(Float) = 8`, which trips that check.
+    static func alignedThreadgroupMemoryLength(floatCount: Int) -> Int {
+        let bytes = max(floatCount, 0) * MemoryLayout<Float>.stride
+        return max(16, (bytes + 15) & ~15)
+    }
+
     func samplePartialOutcome(on state: StateVector, qubits: [Int], diceRoll: Double) throws -> Int {
         if qubits.count <= Self.maxGPUMarginalQubits {
             return try samplePartialOutcomeOnGPU(on: state, qubits: qubits, diceRoll: diceRoll)
@@ -227,7 +234,10 @@ extension QuantumEngine {
         encoder.setBytes(&binCountValue, length: MemoryLayout<UInt32>.stride, index: 4)
         encoder.setBytes(&elementCount, length: MemoryLayout<UInt32>.stride, index: 5)
         encoder.setBuffer(hiA, offset: 0, index: 6)
-        encoder.setThreadgroupMemoryLength(binCount * MemoryLayout<Float>.stride, index: 0)
+        encoder.setThreadgroupMemoryLength(
+            Self.alignedThreadgroupMemoryLength(floatCount: binCount),
+            index: 0
+        )
         encoder.dispatchThreadgroups(
             MTLSize(width: blockCount, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: blockSize, height: 1, depth: 1)
