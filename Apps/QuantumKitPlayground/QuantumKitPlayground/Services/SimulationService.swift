@@ -46,7 +46,11 @@ struct SimulationService: Sendable {
         policy: SimulationPolicy
     ) throws -> any QuantumBackend {
         do {
-            return try QuantumBackendFactory.makeRecommended(circuit: circuit, policy: policy)
+            return try QuantumBackendFactory.makeRecommended(
+                circuit: circuit,
+                policy: policy,
+                renormalizationInterval: settings.renormalizationInterval
+            )
         } catch {
             throw SimulationServiceError.backendUnavailable(
                 (error as? LocalizedError)?.errorDescription ?? error.localizedDescription

@@ -27,6 +27,8 @@ Stabilizer and MPS exist if you construct them. The width-only recommender never
 
 n = 30 is about 8 GB of amplitude buffers. Host prepared-sampling copies a `2ⁿ` CDF only for n ≤ 20; wider Metal shots keep the map on the GPU and return a histogram. Mid-circuit `Gate.measure` and `Gate.c_if` are serial (not in the tables below).
 
+Metal statevector and density-matrix engines use Float32. They renormalize every **50** gates by default (`renormalizationInterval` on `QuantumBackendFactory.makeRecommended`; `0` disables). That bounds norm drift; it is not exact arithmetic. Shot sampling uses a compensated CDF so tiny probabilities are not swallowed.
+
 First Metal run at a width compiles shaders — time the next one. Start with Bell or GHZ-4. n ≈ 30 is a memory stress test.
 
 ## Install

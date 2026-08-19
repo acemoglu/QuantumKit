@@ -11,6 +11,7 @@ struct SettingsPanelView: View {
                 devicePicker
                 shotsRow
                 seedRow
+                renormRow
                 #if os(macOS)
                 Button {
                     viewModel.isPresentingHelp = true
@@ -97,6 +98,33 @@ struct SettingsPanelView: View {
         }
     }
 
+    private var renormRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Renormalize every")
+                .font(.subheadline.weight(.semibold))
+            HStack(spacing: 8) {
+                TextField(
+                    "Gates",
+                    value: renormBinding,
+                    format: IntegerFormatStyle<Int>().grouping(.never)
+                )
+                .textFieldStyle(.roundedBorder)
+                .font(.body.monospaced())
+                .frame(maxWidth: 120)
+                #if os(iOS)
+                .keyboardType(.numberPad)
+                #endif
+                Text("gates")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+            Text("Default 50. 0 turns periodic renormalization off.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
     private var shotsBinding: Binding<Int> {
         Binding(
             get: { viewModel.settings.shots },
@@ -104,6 +132,18 @@ struct SettingsPanelView: View {
                 viewModel.settings.shots = min(
                     max(newValue, PlaygroundSettings.shotsRange.lowerBound),
                     PlaygroundSettings.shotsRange.upperBound
+                )
+            }
+        )
+    }
+
+    private var renormBinding: Binding<Int> {
+        Binding(
+            get: { viewModel.settings.renormalizationInterval },
+            set: { newValue in
+                viewModel.settings.renormalizationInterval = min(
+                    max(newValue, PlaygroundSettings.renormalizationIntervalRange.lowerBound),
+                    PlaygroundSettings.renormalizationIntervalRange.upperBound
                 )
             }
         )

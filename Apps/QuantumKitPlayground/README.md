@@ -28,7 +28,7 @@ The visual circuit, the ASCII preview, and the OpenQASM stay in sync.
 
 ### Run
 
-**Run** (⌘R on Mac) simulates locally. Set device (leave **Automatic** unless you have a reason), shots, and seed.
+**Run** (⌘R on Mac) simulates locally. Set device (leave **Automatic** unless you have a reason), shots, seed, and optionally how often to renormalize (default every 50 gates; 0 off).
 
 Results: method, device, wall time, qubit/gate counts, and an MSB histogram. Errors show after Run, not while you type.
 
