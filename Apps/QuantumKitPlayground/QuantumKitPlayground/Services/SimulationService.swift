@@ -21,7 +21,11 @@ struct SimulationService: Sendable {
     nonisolated func run(circuit: QuantumCircuit, settings: PlaygroundSettings) throws -> PlaygroundRunOutput {
         var policy = SimulationPolicy.default
         policy.devicePreference = settings.devicePreference
-        let backend = try makeBackend(for: circuit, policy: policy)
+        let backend = try makeBackend(
+            for: circuit,
+            policy: policy,
+            renormalizationInterval: settings.renormalizationInterval
+        )
         let options = QuantumRunOptions(
             seed: settings.effectiveSeed,
             shots: settings.shots
@@ -43,13 +47,14 @@ struct SimulationService: Sendable {
 
     private nonisolated func makeBackend(
         for circuit: QuantumCircuit,
-        policy: SimulationPolicy
+        policy: SimulationPolicy,
+        renormalizationInterval: Int
     ) throws -> any QuantumBackend {
         do {
             return try QuantumBackendFactory.makeRecommended(
                 circuit: circuit,
                 policy: policy,
-                renormalizationInterval: settings.renormalizationInterval
+                renormalizationInterval: renormalizationInterval
             )
         } catch {
             throw SimulationServiceError.backendUnavailable(

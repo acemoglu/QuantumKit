@@ -26,7 +26,7 @@ struct GatePaletteView: View {
                     Button("Cancel") { viewModel.cancelPendingPlacement() }
                         .font(.caption.weight(.semibold))
                 } else {
-                    Text("Tap a gate, then a qubit wire")
+                    Text("Tap a gate or block, then a qubit")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Spacer(minLength: 0)
@@ -34,8 +34,8 @@ struct GatePaletteView: View {
             }
 
             VStack(alignment: .leading, spacing: 8) {
-                phoneChipRow(PaletteTool.allCases.filter { $0.section == .oneQubit || $0.section == .rotations })
-                phoneChipRow(PaletteTool.allCases.filter { $0.section == .multiQubit || $0.section == .ops })
+                phoneChipRow(PaletteTool.allCases)
+                phoneBlockRow()
             }
         }
         .padding(.horizontal, 12)
@@ -48,6 +48,9 @@ struct GatePaletteView: View {
             HStack(spacing: 8) {
                 ForEach(tools) { tool in
                     chip(tool, minWidth: 44, minHeight: 36)
+                        .draggable(tool) {
+                            PaletteChipView(tool: tool, isSelected: true)
+                        }
                 }
             }
             .padding(.vertical, 1)
@@ -85,6 +88,14 @@ struct GatePaletteView: View {
                             }
                         }
                     }
+                    HStack(spacing: 6) {
+                        Text("Blocks")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        ForEach(CircuitBlock.allCases) { block in
+                            blockChip(block, minWidth: 44, minHeight: 28)
+                        }
+                    }
                 }
                 .padding(.vertical, 2)
             }
@@ -93,11 +104,34 @@ struct GatePaletteView: View {
         .playgroundPanel()
     }
 
+    private func phoneBlockRow() -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(CircuitBlock.allCases) { block in
+                    blockChip(block, minWidth: 52, minHeight: 36)
+                }
+            }
+            .padding(.vertical, 1)
+        }
+    }
+
     private func chip(_ tool: PaletteTool, minWidth: CGFloat, minHeight: CGFloat) -> some View {
         PaletteChipView(tool: tool, isSelected: viewModel.selectedPaletteTool == tool, minWidth: minWidth, minHeight: minHeight)
             .onTapGesture { viewModel.selectPaletteTool(tool) }
             .help(tool.help)
             .accessibilityLabel(tool.help)
+    }
+
+    private func blockChip(_ block: CircuitBlock, minWidth: CGFloat, minHeight: CGFloat) -> some View {
+        PaletteChipView(
+            title: block.title,
+            isSelected: viewModel.selectedCircuitBlock == block,
+            minWidth: minWidth,
+            minHeight: minHeight
+        )
+        .onTapGesture { viewModel.selectCircuitBlock(block) }
+        .help(block.help)
+        .accessibilityLabel(block.help)
     }
 
     private func pendingHint(_ pending: PendingGatePlacement) -> String {
@@ -111,13 +145,27 @@ struct GatePaletteView: View {
 }
 
 struct PaletteChipView: View {
-    let tool: PaletteTool
+    let title: String
     var isSelected: Bool
     var minWidth: CGFloat = 34
     var minHeight: CGFloat = 28
 
+    init(tool: PaletteTool, isSelected: Bool, minWidth: CGFloat = 34, minHeight: CGFloat = 28) {
+        self.title = tool.title
+        self.isSelected = isSelected
+        self.minWidth = minWidth
+        self.minHeight = minHeight
+    }
+
+    init(title: String, isSelected: Bool, minWidth: CGFloat = 34, minHeight: CGFloat = 28) {
+        self.title = title
+        self.isSelected = isSelected
+        self.minWidth = minWidth
+        self.minHeight = minHeight
+    }
+
     var body: some View {
-        Text(tool.title)
+        Text(title)
             .font(.system(.caption, design: .rounded).weight(.bold))
             .foregroundStyle(isSelected ? Color.quantumOnAccent : Color.quantumInk)
             .frame(minWidth: minWidth, minHeight: minHeight)

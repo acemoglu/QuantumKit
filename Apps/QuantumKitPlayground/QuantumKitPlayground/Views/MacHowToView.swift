@@ -20,6 +20,11 @@ struct MacHowToView: View {
                             labeled(row.title, row.body)
                         }
                     }
+                    section("How to use Circuit", systemImage: "point.3.connected.trianglepath.dotted") {
+                        ForEach(circuitHelpRows, id: \.title) { row in
+                            labeled(row.title, row.body)
+                        }
+                    }
                     section("If it feels slow", systemImage: "gauge.with.dots.needle.67percent") {
                         labeled("Width, not shots", "Time is almost entirely qubit count × gates. Raising shots on a noiseless circuit barely changes wall time. Dropping from 30 qubits to 4 does.")
                         labeled("Stay small in the app", "The visual canvas caps at 8 qubits. CPU tops out at 16. Metal can go higher, but 20+ qubits is seconds; ~30 qubits can be tens of seconds and allocates gigabytes. That is expected, not a hang.")
@@ -37,6 +42,8 @@ struct MacHowToView: View {
             }
             Divider()
             HStack {
+                Link("Source on GitHub", destination: PlaygroundChrome.githubURL)
+                    .font(.callout)
                 Spacer()
                 Button("Got it") {
                     onDismiss()
@@ -47,7 +54,7 @@ struct MacHowToView: View {
             .padding(16)
         }
         #if os(macOS)
-        .frame(minWidth: 520, idealWidth: 560, minHeight: 560, idealHeight: 640)
+        .frame(minWidth: 520, idealWidth: 560, minHeight: 620, idealHeight: 720)
         #endif
         .background(Color.quantumCanvas)
     }
@@ -108,13 +115,19 @@ struct MacHowToView: View {
     private var layoutSymbol: String { "square.split.2x1" }
     private var layoutRows: [(title: String, body: String)] {
         [
-            ("Circuit", "Tap a gate, then a qubit wire (CNOT/CZ/SWAP need two taps). Samples and Run sit in the navigation bar."),
+            ("Circuit", "Build on the canvas. See How to use Circuit below."),
             ("Code", "OpenQASM. Open and Save live in the overflow menu. On iPad you can also drop a .qasm file onto the editor."),
-            ("Results", "Device, shots, seed, then the histogram after Run."),
+            ("Results", "Device, shots, seed, then the histogram after Run. Export CSV from the histogram to save counts."),
         ]
     }
-    private var limitsBody: String {
-        "This app composes, parses, runs, and histograms circuits locally. It is not a cloud backend or a pulse IDE."
+    private var circuitHelpRows: [(title: String, body: String)] {
+        [
+            ("Place", "Tap a gate, or drag it onto a qubit wire. CNOT, CZ, and SWAP need two taps (control then target). The dashed + at the right appends. The small + between columns inserts in the middle."),
+            ("Insert", "Tap an existing gate to select it. The next gate you place goes before that one. Tap a thin line between columns to set the insert point."),
+            ("Blocks", "Bell, GHZ-3, H all, Meas all. Tap the block, then a qubit. Bell/GHZ start on that wire and add qubits if needed."),
+            ("Qubits", "Touch and hold a q label to insert a qubit there or below, or to remove that wire if it has no gates."),
+            ("Edit", "Move left/right reorders the selected gate. Delete removes it. Undo walks back canvas edits. The Code tab stays in sync."),
+        ]
     }
     #else
     private var headerSubtitle: String { "Keep runs small, then scale." }
@@ -132,14 +145,24 @@ struct MacHowToView: View {
     private var layoutRows: [(title: String, body: String)] {
         [
             ("Left", "Bundled samples and your saved circuits. Save Circuit is the in-app library. Save… exports a .qasm file."),
-            ("Center", "Circuit: click a gate, then a qubit wire (CNOT/CZ/SWAP need two clicks). Code: OpenQASM. Drag a .qasm file onto the editor to load it."),
-            ("Right", "Device, shots, seed, then the histogram after Run."),
+            ("Center", "Circuit canvas or OpenQASM. Drag a .qasm file onto the editor to load it. How to use Circuit is below."),
+            ("Right", "Device, shots, seed, then the histogram after Run. Export CSV saves bitstring counts."),
         ]
     }
+    private var circuitHelpRows: [(title: String, body: String)] {
+        [
+            ("Place", "Click a gate in the palette, then a qubit wire — or drag the gate onto the wire. CNOT, CZ, and SWAP: first click is control (or first qubit), second is the other. The dashed + at the right appends."),
+            ("Insert", "Click an existing gate to select it. The next gate you place goes before that one. Click a thin line between columns to drop something in the middle."),
+            ("Blocks", "Bell, GHZ-3, H all, Meas all. Click the block, then a qubit. Bell/GHZ start on that wire and add qubits if needed."),
+            ("Qubits", "Right-click a q label to insert a qubit there or below, or to remove that wire if it has no gates. Add/Remove in the header still grow from the last wire."),
+            ("Keyboard", "Click the circuit first. ⌫ deletes the selected gate. ⌘Z undoes the last canvas edit. ⌘[ / ⌘] move the selected gate. ⌘R runs. ⌘? opens this sheet."),
+        ]
+    }
+    #endif
+
     private var limitsBody: String {
         "This app composes, parses, runs, and histograms circuits locally. It is not a cloud backend or a pulse IDE."
     }
-    #endif
 }
 
 enum MacHowTo {

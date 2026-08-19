@@ -73,14 +73,14 @@ enum QASMFileIO {
         providers.contains { $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) }
     }
 
-    static func loadDropped(from providers: [NSItemProvider]) async throws -> String {
+    static func droppedFileURL(from providers: [NSItemProvider]) async throws -> URL {
         guard let provider = providers.first(where: {
             $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
         }) else {
             throw PlaygroundFileError.unreadable
         }
 
-        let url: URL = try await withCheckedThrowingContinuation { continuation in
+        return try await withCheckedThrowingContinuation { continuation in
             provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, error in
                 if let error {
                     continuation.resume(throwing: error)
@@ -93,7 +93,10 @@ enum QASMFileIO {
                 continuation.resume(returning: url)
             }
         }
-        return try load(from: url)
+    }
+
+    static func loadDropped(from providers: [NSItemProvider]) async throws -> String {
+        try load(from: try await droppedFileURL(from: providers))
     }
 
     private static func url(fromDropItem item: NSSecureCoding?) -> URL? {
@@ -128,6 +131,30 @@ struct QASMFileDocument: FileDocument {
             throw PlaygroundFileError.tooLarge
         }
         guard let string = String(data: data, encoding: .utf8) else {
+            throw PlaygroundFileError.unreadable
+        }
+        self.text = string
+    }
+
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        FileWrapper(regularFileWithContents: Data(text.utf8))
+    }
+}
+
+struct HistogramCSVDocument: FileDocument {
+    static var readableContentTypes: [UTType] { [.commaSeparatedText, .plainText] }
+    static var writableContentTypes: [UTType] { [.commaSeparatedText] }
+
+    var text: String
+
+    init(text: String = "") {
+        self.text = text
+    }
+
+    init(configuration: ReadConfiguration) throws {
+        guard let data = configuration.file.regularFileContents,
+              let string = String(data: data, encoding: .utf8)
+        else {
             throw PlaygroundFileError.unreadable
         }
         self.text = string

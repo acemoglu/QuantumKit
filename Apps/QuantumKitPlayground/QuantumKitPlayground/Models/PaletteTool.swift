@@ -139,4 +139,55 @@ extension PaletteTool: Transferable {
 struct PendingGatePlacement: Equatable, Sendable {
     var tool: PaletteTool
     var pickedQubits: [Int]
+    var insertAt: Int?
+}
+
+/// Ready-made fragments stamped onto the canvas from a starting qubit.
+enum CircuitBlock: String, CaseIterable, Identifiable, Hashable, Sendable {
+    case bell
+    case ghz3
+    case hAll
+    case measureAll
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .bell: return "Bell"
+        case .ghz3: return "GHZ-3"
+        case .hAll: return "H all"
+        case .measureAll: return "Meas all"
+        }
+    }
+
+    var help: String {
+        switch self {
+        case .bell: return "H + CNOT on this qubit and the next"
+        case .ghz3: return "H + two CNOTs on this qubit and the next two"
+        case .hAll: return "Hadamard on every qubit"
+        case .measureAll: return "Measure every qubit"
+        }
+    }
+
+    func makeGates(start: Int, qubitCount: Int) -> [Gate] {
+        switch self {
+        case .bell:
+            return [
+                .h(target: start),
+                .cx(control: start, target: start + 1),
+            ]
+        case .ghz3:
+            return [
+                .h(target: start),
+                .cx(control: start, target: start + 1),
+                .cx(control: start, target: start + 2),
+            ]
+        case .hAll:
+            return (0..<qubitCount).map { .h(target: $0) }
+        case .measureAll:
+            return (0..<qubitCount).map { qubit in
+                .measure(MeasureSpec(qubits: [qubit], classicalRegister: 0, classicalBitOffset: qubit))
+            }
+        }
+    }
 }

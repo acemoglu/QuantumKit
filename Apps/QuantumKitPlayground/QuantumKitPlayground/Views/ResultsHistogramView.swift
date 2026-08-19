@@ -9,6 +9,8 @@ struct HistogramBar: Identifiable {
 
 struct ResultsHistogramView: View {
     let bars: [HistogramBar]
+    var canExport = false
+    var onExport: () -> Void = {}
 
     var body: some View {
         GroupBox {
@@ -39,7 +41,17 @@ struct ResultsHistogramView: View {
                 .padding(.top, 4)
             }
         } label: {
-            Label("Measurement Histogram", systemImage: "chart.bar.fill")
+            HStack(spacing: 8) {
+                Label("Measurement Histogram", systemImage: "chart.bar.fill")
+                Spacer(minLength: 8)
+                if canExport {
+                    Button("Export CSV") {
+                        onExport()
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Save bitstring counts as a CSV file")
+                }
+            }
         }
     }
 

@@ -8,6 +8,7 @@ final class PlaygroundViewModel: ObservableObject {
             guard !suppressSourceSideEffects else { return }
             runBanner = nil
             scheduleDebouncedParse()
+            scheduleAutosave()
         }
     }
     @Published var settings = PlaygroundSettings()
@@ -22,6 +23,7 @@ final class PlaygroundViewModel: ObservableObject {
     @Published var selectedLibraryID: String?
     @Published var isPresentingOpen = false
     @Published var isPresentingSave = false
+    @Published var isPresentingHistogramExport = false
     @Published var isPresentingSaveToLibrary = false
     @Published var isPresentingHelp = false
     @Published var libraryNameDraft = ""
@@ -29,8 +31,11 @@ final class PlaygroundViewModel: ObservableObject {
     @Published var selectedCompactTab: PlaygroundTab = .circuit
     @Published var centerPane: CenterPane = .circuit
     @Published var selectedPaletteTool: PaletteTool?
+    @Published var selectedCircuitBlock: CircuitBlock?
     @Published var pendingPlacement: PendingGatePlacement?
     @Published var selectedGateIndex: Int?
+    /// `nil` appends at the end. Otherwise the next placed gate/block inserts here.
+    @Published var insertionIndex: Int?
 
     var editableCircuit: QuantumCircuit? { parsedCircuit }
 
@@ -40,6 +45,8 @@ final class PlaygroundViewModel: ObservableObject {
         if let device = output.metadata.deviceName, !device.isEmpty {
             parts.append(device)
         }
+        parts.append("\(output.metadata.qubitCount)q")
+        parts.append("\(output.metadata.gateCount) gates")
         parts.append(String(format: "%.2f ms", output.wallClockMilliseconds))
         if let shots = output.result.shotCounts?.shots {
             parts.append("\(shots) shots")
@@ -57,6 +64,23 @@ final class PlaygroundViewModel: ObservableObject {
     }
 
     var canUndoCanvas: Bool { !canvasUndoStack.isEmpty }
+
+    var canMoveSelectedGateLeft: Bool {
+        guard let index = selectedGateIndex else { return false }
+        return index > 0
+    }
+
+    var canMoveSelectedGateRight: Bool {
+        guard let index = selectedGateIndex, let circuit = parsedCircuit else { return false }
+        return index + 1 < circuit.gates.count
+    }
+
+    var insertHint: String? {
+        guard let index = insertionIndex, let circuit = parsedCircuit else { return nil }
+        if index <= 0 { return "Insert at start" }
+        if index >= circuit.gates.count { return nil }
+        return "Insert before gate \(index + 1)"
+    }
 
     var selectedSampleName: String? {
         libraryItemName(for: selectedLibraryID)
@@ -77,9 +101,27 @@ final class PlaygroundViewModel: ObservableObject {
         QASMFileDocument(text: sourceText)
     }
 
+    var canExportHistogram: Bool {
+        guard let histogram = runOutput?.histogram else { return false }
+        return !histogram.isEmpty
+    }
+
+    var histogramExportDocument: HistogramCSVDocument {
+        HistogramCSVDocument(text: runOutput?.histogramCSV ?? "")
+    }
+
+    var suggestedHistogramFilename: String {
+        let base = suggestedFilename
+            .replacingOccurrences(of: ".qasm", with: "")
+            .replacingOccurrences(of: ".txt", with: "")
+        let slug = base.isEmpty ? "circuit" : base
+        return "\(slug)-histogram.csv"
+    }
+
     private let service = SimulationService()
     private var suppressSourceSideEffects = false
     private var debounceTask: Task<Void, Never>?
+    private var autosaveTask: Task<Void, Never>?
     private var parseGeneration = UUID()
     private var runGeneration = UUID()
     private var canvasUndoStack: [QuantumCircuit] = []
@@ -89,15 +131,15 @@ final class PlaygroundViewModel: ObservableObject {
         sourceText = SampleCircuit.bundled.first?.loadSource()
             ?? Self.fallbackSource
         selectedLibraryID = SampleCircuit.bundled.first?.id
-        Task { await self.performParse() }
+        applyParseNow()
     }
 
     func loadSample(_ sample: SampleCircuit) {
         selectedLibraryID = sample.id
         if let text = sample.loadSource() {
             replaceSource(text, clearLibrarySelection: false)
+            applyParseNow()
             statusMessage = "Loaded sample “\(sample.name)”."
-            parse()
         } else {
             statusMessage = "Sample missing."
         }
@@ -106,16 +148,16 @@ final class PlaygroundViewModel: ObservableObject {
     func loadSavedCircuit(_ circuit: SavedCircuit) {
         selectedLibraryID = circuit.id.uuidString
         replaceSource(circuit.source, clearLibrarySelection: false)
+        applyParseNow()
         statusMessage = "Loaded “\(circuit.name)”."
-        parse()
     }
 
     func newBlankCircuit() {
         selectedLibraryID = nil
         replaceSource(Self.blankSource, clearLibrarySelection: false)
         selectedLibraryID = nil
+        applyParseNow()
         statusMessage = "New circuit."
-        parse()
     }
 
     func presentSaveToLibrary() {
@@ -202,6 +244,11 @@ final class PlaygroundViewModel: ObservableObject {
         isPresentingSave = true
     }
 
+    func presentHistogramExport() {
+        guard canExportHistogram else { return }
+        isPresentingHistogramExport = true
+    }
+
     func handleOpenResult(_ result: Result<[URL], Error>) {
         switch result {
         case .success(let urls):
@@ -223,10 +270,22 @@ final class PlaygroundViewModel: ObservableObject {
         }
     }
 
+    func handleHistogramExportResult(_ result: Result<URL, Error>) {
+        switch result {
+        case .success:
+            statusMessage = "Exported histogram CSV."
+        case .failure(let error):
+            runBanner = RunBanner(title: "Export Error", message: Self.errorDescription(error))
+            statusMessage = "Histogram export failed."
+        }
+    }
+
     func loadFile(at url: URL) {
         do {
             let text = try QASMFileIO.load(from: url)
             applyOpenedSource(text)
+            let name = libraryName(fromOpenedFile: url)
+            addOpenedSourceToLibrary(name: name, source: text)
             statusMessage = "Opened \(url.lastPathComponent)."
         } catch {
             runBanner = RunBanner(title: "Open Error", message: Self.errorDescription(error))
@@ -236,10 +295,29 @@ final class PlaygroundViewModel: ObservableObject {
 
     func applyOpenedSource(_ text: String) {
         replaceSource(text, clearLibrarySelection: true)
-        parse()
+        applyParseNow()
+    }
+
+    private func libraryName(fromOpenedFile url: URL) -> String {
+        let stem = url.deletingPathExtension().lastPathComponent.trimmingCharacters(in: .whitespacesAndNewlines)
+        return stem.isEmpty ? "Untitled" : stem
+    }
+
+    private func addOpenedSourceToLibrary(name: String, source: String) {
+        if let index = savedCircuits.firstIndex(where: { $0.name.compare(name, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame }) {
+            savedCircuits[index].source = source
+            savedCircuits[index].updatedAt = Date()
+            selectedLibraryID = savedCircuits[index].id.uuidString
+        } else {
+            let item = SavedCircuit(id: UUID(), name: name, source: source, updatedAt: Date())
+            savedCircuits.insert(item, at: 0)
+            selectedLibraryID = item.id.uuidString
+        }
+        CircuitLibraryStore.persist(savedCircuits)
     }
 
     func selectPaletteTool(_ tool: PaletteTool) {
+        selectedCircuitBlock = nil
         if selectedPaletteTool == tool, pendingPlacement == nil {
             selectedPaletteTool = nil
             return
@@ -247,8 +325,19 @@ final class PlaygroundViewModel: ObservableObject {
         selectedPaletteTool = tool
         pendingPlacement = nil
         statusMessage = tool.qubitCount == 1
-            ? "Click or drop onto a qubit wire to place \(tool.title)."
+            ? "Click a column or the + slot to place \(tool.title). Selected gate = insert before it."
             : tool.help
+    }
+
+    func selectCircuitBlock(_ block: CircuitBlock) {
+        selectedPaletteTool = nil
+        pendingPlacement = nil
+        if selectedCircuitBlock == block {
+            selectedCircuitBlock = nil
+            return
+        }
+        selectedCircuitBlock = block
+        statusMessage = block.help
     }
 
     func cancelPendingPlacement() {
@@ -256,9 +345,30 @@ final class PlaygroundViewModel: ObservableObject {
         statusMessage = "Placement cancelled."
     }
 
+    func setInsertionPoint(_ index: Int?) {
+        insertionIndex = index
+        if let index, let count = parsedCircuit?.gates.count, index < count {
+            statusMessage = "Next gate inserts before position \(index + 1)."
+        } else {
+            insertionIndex = nil
+            statusMessage = "Next gate appends at the end."
+        }
+    }
+
+    func handleCanvasTap(qubit: Int, insertBefore: Int?) {
+        if let insertBefore {
+            insertionIndex = insertBefore
+        }
+        handleQubitTap(qubit)
+    }
+
     func handleQubitTap(_ qubit: Int) {
         if let pending = pendingPlacement {
             placePaletteTool(pending.tool, on: qubit)
+            return
+        }
+        if let block = selectedCircuitBlock {
+            placeCircuitBlock(block, startQubit: qubit)
             return
         }
         if let tool = selectedPaletteTool {
@@ -269,6 +379,9 @@ final class PlaygroundViewModel: ObservableObject {
     func placePaletteTool(_ tool: PaletteTool, on qubit: Int) {
         do {
             var picked = pendingPlacement?.tool == tool ? pendingPlacement?.pickedQubits ?? [] : []
+            let insertAt = pendingPlacement?.tool == tool
+                ? pendingPlacement?.insertAt
+                : insertionIndex
             if picked.contains(qubit) {
                 statusMessage = "Pick a different qubit for \(tool.title)."
                 return
@@ -277,7 +390,7 @@ final class PlaygroundViewModel: ObservableObject {
             selectedPaletteTool = tool
 
             if picked.count < tool.qubitCount {
-                pendingPlacement = PendingGatePlacement(tool: tool, pickedQubits: picked)
+                pendingPlacement = PendingGatePlacement(tool: tool, pickedQubits: picked, insertAt: insertAt)
                 statusMessage = tool.qubitCount == 2
                     ? "Now click the second qubit for \(tool.title)."
                     : "Pick \(tool.qubitCount - picked.count) more \(tool.qubitCount - picked.count == 1 ? "qubit" : "qubits") for \(tool.title)."
@@ -288,14 +401,13 @@ final class PlaygroundViewModel: ObservableObject {
                 parseError = "Could not build \(tool.title)."
                 return
             }
+            insertionIndex = insertAt
             let base = try currentOrBlankCircuit()
-            var next = try rebuildCircuit(from: base, gates: base.gates + [gate])
-            // Measure needs a classical bit for this qubit.
+            var next = try inserting(gates: [gate], into: base)
             if case .measure = gate, next.classicalRegisters.first?.bitCount ?? 0 < next.qubitCount {
                 next = try rebuildCircuit(from: next, qubitCount: next.qubitCount, gates: next.gates)
             }
             pendingPlacement = nil
-            selectedGateIndex = next.gates.count - 1
             try commitVisual(next, message: "Placed \(tool.title).")
         } catch {
             parseError = Self.errorDescription(error)
@@ -303,13 +415,37 @@ final class PlaygroundViewModel: ObservableObject {
         }
     }
 
-    func selectGate(at index: Int) {
-        if selectedGateIndex == index {
-            deleteSelectedGate()
-            return
+    func placeCircuitBlock(_ block: CircuitBlock, startQubit: Int) {
+        do {
+            var base = try currentOrBlankCircuit()
+            let needed: Int
+            switch block {
+            case .bell: needed = startQubit + 2
+            case .ghz3: needed = startQubit + 3
+            case .hAll, .measureAll: needed = base.qubitCount
+            }
+            while base.qubitCount < needed {
+                guard base.qubitCount < Self.maxPlaygroundQubits else {
+                    parseError = "Need \(needed) qubits for \(block.title)."
+                    statusMessage = "Add qubits first."
+                    return
+                }
+                base = try rebuildCircuit(from: base, qubitCount: base.qubitCount + 1, gates: base.gates)
+            }
+            let fragment = block.makeGates(start: startQubit, qubitCount: base.qubitCount)
+            let next = try inserting(gates: fragment, into: base)
+            selectedCircuitBlock = nil
+            try commitVisual(next, message: "Placed \(block.title).")
+        } catch {
+            parseError = Self.errorDescription(error)
+            statusMessage = "Could not place \(block.title)."
         }
+    }
+
+    func selectGate(at index: Int) {
         selectedGateIndex = index
-        statusMessage = "Gate \(index) selected — click again or Delete to remove."
+        insertionIndex = index
+        statusMessage = "Selected. Next gate inserts before this one. Delete removes it."
     }
 
     func deleteSelectedGate() {
@@ -320,34 +456,67 @@ final class PlaygroundViewModel: ObservableObject {
             gates.remove(at: index)
             let next = try rebuildCircuit(from: circuit, gates: gates)
             selectedGateIndex = nil
+            insertionIndex = min(index, next.gates.count)
+            if insertionIndex == next.gates.count { insertionIndex = nil }
             try commitVisual(next, message: "Removed gate.")
         } catch {
             parseError = Self.errorDescription(error)
         }
     }
 
+    func moveSelectedGate(by delta: Int) {
+        guard let circuit = parsedCircuit, let index = selectedGateIndex else { return }
+        let destination = index + delta
+        guard circuit.gates.indices.contains(destination) else { return }
+        do {
+            var gates = circuit.gates
+            gates.swapAt(index, destination)
+            let next = try rebuildCircuit(from: circuit, gates: gates)
+            selectedGateIndex = destination
+            insertionIndex = destination
+            try commitVisual(next, message: "Moved gate.")
+        } catch {
+            parseError = Self.errorDescription(error)
+        }
+    }
+
     func addQubit() {
+        insertQubit(at: (try? currentOrBlankCircuit())?.qubitCount ?? 2)
+    }
+
+    func insertQubit(at index: Int) {
         guard let circuit = try? currentOrBlankCircuit() else { return }
         guard circuit.qubitCount < Self.maxPlaygroundQubits else { return }
+        let idx = min(max(index, 0), circuit.qubitCount)
         do {
-            let next = try rebuildCircuit(from: circuit, qubitCount: circuit.qubitCount + 1, gates: circuit.gates)
-            try commitVisual(next, message: "Added qubit q\(next.qubitCount - 1).")
+            let remapped = circuit.gates.map { $0.remappingQubits { $0 >= idx ? $0 + 1 : $0 } }
+            let next = try rebuildCircuit(from: circuit, qubitCount: circuit.qubitCount + 1, gates: remapped)
+            try commitVisual(next, message: "Inserted q\(idx).")
         } catch {
             parseError = Self.errorDescription(error)
         }
     }
 
     func removeLastQubit() {
-        guard let circuit = parsedCircuit, circuit.qubitCount > 1 else { return }
-        let last = circuit.qubitCount - 1
-        if circuit.gates.contains(where: { $0.affectedQubits.contains(last) }) {
-            parseError = "Remove gates on q\(last) before deleting that qubit."
+        removeQubit(at: (parsedCircuit?.qubitCount ?? 1) - 1)
+    }
+
+    func removeQubit(at index: Int) {
+        guard let circuit = parsedCircuit, circuit.qubitCount > 1,
+              (0..<circuit.qubitCount).contains(index) else { return }
+        if circuit.gates.contains(where: { $0.affectedQubits.contains(index) }) {
+            parseError = "Remove gates on q\(index) before deleting that qubit."
             statusMessage = "Qubit still in use."
             return
         }
         do {
-            let next = try rebuildCircuit(from: circuit, qubitCount: last, gates: circuit.gates)
-            try commitVisual(next, message: "Removed q\(last).")
+            let remapped = circuit.gates.map {
+                $0.remappingQubits { qubit in
+                    qubit > index ? qubit - 1 : qubit
+                }
+            }
+            let next = try rebuildCircuit(from: circuit, qubitCount: circuit.qubitCount - 1, gates: remapped)
+            try commitVisual(next, message: "Removed q\(index).")
         } catch {
             parseError = Self.errorDescription(error)
         }
@@ -369,6 +538,7 @@ final class PlaygroundViewModel: ObservableObject {
         guard let previous = canvasUndoStack.popLast() else { return }
         selectedGateIndex = nil
         pendingPlacement = nil
+        insertionIndex = nil
         parsedCircuit = previous
         asciiPreview = previous.asciiDiagram()
         parseError = nil
@@ -408,6 +578,22 @@ final class PlaygroundViewModel: ObservableObject {
         }
         suppressSourceSideEffects = false
         statusMessage = message
+        scheduleAutosave()
+    }
+
+    private func inserting(gates newGates: [Gate], into base: QuantumCircuit) throws -> QuantumCircuit {
+        var gates = base.gates
+        let index = min(insertionIndex ?? gates.count, gates.count)
+        gates.insert(contentsOf: newGates, at: index)
+        let next = try rebuildCircuit(from: base, gates: gates)
+        if !newGates.isEmpty {
+            selectedGateIndex = index + newGates.count - 1
+            insertionIndex = index + newGates.count
+            if insertionIndex == next.gates.count {
+                insertionIndex = nil
+            }
+        }
+        return next
     }
 
     private func rebuildCircuit(
@@ -434,9 +620,8 @@ final class PlaygroundViewModel: ObservableObject {
         guard QASMFileIO.canConsume(providers) else { return false }
         Task { [weak self] in
             do {
-                let text = try await QASMFileIO.loadDropped(from: providers)
-                self?.applyOpenedSource(text)
-                self?.statusMessage = "Loaded dropped OpenQASM."
+                let url = try await QASMFileIO.droppedFileURL(from: providers)
+                self?.loadFile(at: url)
             } catch {
                 self?.runBanner = RunBanner(title: "Open Error", message: Self.errorDescription(error))
                 self?.statusMessage = "Drop failed."
@@ -468,6 +653,47 @@ final class PlaygroundViewModel: ObservableObject {
             try? await Task.sleep(for: .milliseconds(300))
             guard !Task.isCancelled else { return }
             await self?.performParse()
+        }
+    }
+
+    private func scheduleAutosave() {
+        guard selectedSavedCircuit != nil else { return }
+        autosaveTask?.cancel()
+        autosaveTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled else { return }
+            self?.persistSelectedSavedCircuit()
+        }
+    }
+
+    private func persistSelectedSavedCircuit() {
+        guard let existing = selectedSavedCircuit,
+              let index = savedCircuits.firstIndex(where: { $0.id == existing.id }) else { return }
+        savedCircuits[index].source = sourceText
+        savedCircuits[index].updatedAt = Date()
+        CircuitLibraryStore.persist(savedCircuits)
+    }
+
+    /// Parse on the calling actor so the canvas matches the loaded OpenQASM immediately.
+    private func applyParseNow() {
+        debounceTask?.cancel()
+        parseGeneration = UUID()
+        do {
+            let circuit = try service.parse(source: sourceText)
+            parsedCircuit = circuit
+            asciiPreview = circuit.asciiDiagram()
+            parseError = nil
+            selectedGateIndex = nil
+            pendingPlacement = nil
+            canvasUndoStack.removeAll()
+            insertionIndex = nil
+        } catch {
+            parsedCircuit = nil
+            asciiPreview = ""
+            parseError = Self.errorDescription(error)
+            selectedGateIndex = nil
+            pendingPlacement = nil
+            insertionIndex = nil
         }
     }
 
@@ -671,10 +897,8 @@ private enum DetachedRunOutcome: Sendable {
     case runFailure(circuit: QuantumCircuit, ascii: String, message: String)
 }
 
-#if DEBUG
 extension PlaygroundViewModel {
     static func previewFactory() -> PlaygroundViewModel {
         PlaygroundViewModel()
     }
 }
-#endif

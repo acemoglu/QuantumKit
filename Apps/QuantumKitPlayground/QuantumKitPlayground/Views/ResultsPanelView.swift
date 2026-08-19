@@ -29,7 +29,11 @@ struct ResultsPanelView: View {
                             .textSelection(.enabled)
                     }
                     MetadataSection(output: output)
-                    ResultsHistogramView(bars: histogramBars(from: output))
+                    ResultsHistogramView(
+                        bars: histogramBars(from: output),
+                        canExport: viewModel.canExportHistogram,
+                        onExport: { viewModel.presentHistogramExport() }
+                    )
                     if output.histogram.isEmpty, output.result.execution != nil {
                         ExecutionSection(output: output)
                     }
@@ -42,7 +46,17 @@ struct ResultsPanelView: View {
             }
             .padding(isPhoneLayout ? 16 : 16)
             .frame(maxWidth: .infinity, alignment: .leading)
+            #if os(iOS)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                PlaygroundKeyboard.dismiss()
+            }
+            #endif
         }
+        #if os(iOS)
+        .scrollDismissesKeyboard(.immediately)
+        #endif
+        .playgroundKeyboardDismissToolbar()
         .playgroundPanel(enabled: !isPhoneLayout)
     }
 

@@ -44,6 +44,7 @@ struct CircuitEditorView: View {
         .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
             viewModel.applyDroppedProviders(providers)
         }
+        .playgroundKeyboardDismissToolbar()
         #if os(iOS)
         .scrollDismissesKeyboard(.interactively)
         #endif

@@ -1,5 +1,9 @@
 import SwiftUI
 
+#if canImport(AppKit)
+import AppKit
+#endif
+
 @main
 struct QuantumKitPlaygroundApp: App {
     @StateObject private var viewModel = PlaygroundViewModel()
@@ -23,12 +27,22 @@ struct QuantumKitPlaygroundApp: App {
                     viewModel.presentSave()
                 }
                 .keyboardShortcut("s", modifiers: .command)
+
+                Button("Export Histogram…") {
+                    viewModel.presentHistogramExport()
+                }
+                .keyboardShortcut("e", modifiers: [.command, .shift])
+                .disabled(!viewModel.canExportHistogram)
             }
             CommandGroup(after: .help) {
                 Button("How to Use QuantumKit") {
                     viewModel.isPresentingHelp = true
                 }
                 .keyboardShortcut("?", modifiers: .command)
+
+                Button("QuantumKit on GitHub") {
+                    NSWorkspace.shared.open(PlaygroundChrome.githubURL)
+                }
             }
             CommandGroup(after: .sidebar) {
                 Button("Parse") {
@@ -41,6 +55,25 @@ struct QuantumKitPlaygroundApp: App {
                 }
                 .keyboardShortcut("r", modifiers: .command)
                 .disabled(viewModel.isBusy)
+            }
+            CommandGroup(after: .undoRedo) {
+                Button("Undo Circuit") {
+                    viewModel.undoCanvas()
+                }
+                .keyboardShortcut("z", modifiers: .command)
+                .disabled(viewModel.centerPane != .circuit || !viewModel.canUndoCanvas)
+
+                Button("Move Gate Left") {
+                    viewModel.moveSelectedGate(by: -1)
+                }
+                .keyboardShortcut("[", modifiers: .command)
+                .disabled(viewModel.centerPane != .circuit || !viewModel.canMoveSelectedGateLeft)
+
+                Button("Move Gate Right") {
+                    viewModel.moveSelectedGate(by: 1)
+                }
+                .keyboardShortcut("]", modifiers: .command)
+                .disabled(viewModel.centerPane != .circuit || !viewModel.canMoveSelectedGateRight)
             }
         }
         #endif

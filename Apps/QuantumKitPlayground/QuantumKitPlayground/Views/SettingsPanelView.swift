@@ -4,6 +4,7 @@ import QuantumKit
 struct SettingsPanelView: View {
     @EnvironmentObject private var viewModel: PlaygroundViewModel
     @Environment(\.isPhoneLayout) private var isPhoneLayout
+    @State private var isShowingRenormHelp = false
 
     var body: some View {
         GroupBox {
@@ -12,7 +13,6 @@ struct SettingsPanelView: View {
                 shotsRow
                 seedRow
                 renormRow
-                #if os(macOS)
                 Button {
                     viewModel.isPresentingHelp = true
                 } label: {
@@ -20,7 +20,6 @@ struct SettingsPanelView: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
-                #endif
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         } label: {
@@ -100,8 +99,25 @@ struct SettingsPanelView: View {
 
     private var renormRow: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Renormalize every")
-                .font(.subheadline.weight(.semibold))
+            HStack(spacing: 6) {
+                Text("Renormalize every")
+                    .font(.subheadline.weight(.semibold))
+                Button {
+                    isShowingRenormHelp = true
+                } label: {
+                    Image(systemName: "questionmark.circle")
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("About renormalize every")
+                .popover(isPresented: $isShowingRenormHelp, arrowEdge: .trailing) {
+                    Text("Metal uses 32-bit floats. Every N gates the state is scaled back to length 1 so rounding does not pile up. 50 is the default. 0 turns this off. It does not make the math exact.")
+                        .font(.callout)
+                        .frame(maxWidth: 260, alignment: .leading)
+                        .padding(12)
+                }
+            }
             HStack(spacing: 8) {
                 TextField(
                     "Gates",
@@ -119,9 +135,6 @@ struct SettingsPanelView: View {
                     .foregroundStyle(.secondary)
                 Spacer()
             }
-            Text("Default 50. 0 turns periodic renormalization off.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
     }
 

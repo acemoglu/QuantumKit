@@ -34,7 +34,7 @@ struct SampleCircuit: Identifiable, Hashable {
         SampleCircuit(
             id: "parametric",
             name: "Rotations",
-            summary: "RX, RY, and RZ with explicit angles.",
+            summary: "RX, U3, then measure one qubit.",
             filename: "parametric.qasm"
         ),
         SampleCircuit(
@@ -48,9 +48,9 @@ struct SampleCircuit: Identifiable, Hashable {
     func loadSource() -> String? {
         let name = (filename as NSString).deletingPathExtension
         let ext = (filename as NSString).pathExtension
-        guard let url = Bundle.main.url(forResource: name, withExtension: ext, subdirectory: "Samples") else {
-            return nil
-        }
+        let url = Bundle.main.url(forResource: name, withExtension: ext, subdirectory: "Samples")
+            ?? Bundle.main.url(forResource: name, withExtension: ext)
+        guard let url else { return nil }
         return try? String(contentsOf: url, encoding: .utf8)
     }
 }

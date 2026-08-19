@@ -37,4 +37,39 @@ struct PlaygroundRunOutput: Equatable, Sendable {
         }
         return lines
     }
+
+    /// Shot counts for spreadsheets. `#` lines are metadata; then `bitstring,count,probability`.
+    var histogramCSV: String {
+        let shots = result.shotCounts?.shots ?? histogram.values.reduce(0, +)
+        var lines: [String] = []
+        lines.append("# QuantumKit \(metadata.quantumKitVersion)")
+        lines.append("# method,\(csvEscape(metadata.method.rawValue))")
+        if let device = metadata.deviceName, !device.isEmpty {
+            lines.append("# device,\(csvEscape(device))")
+        }
+        lines.append(String(format: "# wall_time_ms,%.4f", wallClockMilliseconds))
+        lines.append("# qubits,\(metadata.qubitCount)")
+        lines.append("# gates,\(metadata.gateCount)")
+        if let seed = metadata.seed {
+            lines.append("# seed,\(seed)")
+        }
+        lines.append("# shots,\(shots)")
+        lines.append("bitstring,count,probability")
+        for row in bitstringHistogram {
+            let probability = shots > 0 ? Double(row.count) / Double(shots) : 0
+            lines.append("\(row.label),\(row.count),\(Self.csvProbability(probability))")
+        }
+        return lines.joined(separator: "\n") + "\n"
+    }
+
+    private func csvEscape(_ value: String) -> String {
+        if value.contains(where: { $0 == "," || $0 == "\"" || $0 == "\n" }) {
+            return "\"\(value.replacingOccurrences(of: "\"", with: "\"\""))\""
+        }
+        return value
+    }
+
+    private static func csvProbability(_ value: Double) -> String {
+        String(format: "%.12g", value)
+    }
 }

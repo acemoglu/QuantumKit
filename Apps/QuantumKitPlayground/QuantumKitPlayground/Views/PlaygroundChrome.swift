@@ -11,7 +11,45 @@ enum PlaygroundChrome {
     /// Matches the rounded CPU-die mark.
     static let cornerRadius: CGFloat = 14
     static let chipRadius: CGFloat = 8
+    static let githubURL = URL(string: "https://github.com/acemoglu/QuantumKit")!
 }
+
+enum PlaygroundKeyboard {
+    static func dismiss() {
+        #if canImport(UIKit)
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        #endif
+    }
+}
+
+extension View {
+    /// Keyboard accessory with a down-chevron. Number pads have no Return key.
+    func playgroundKeyboardDismissToolbar() -> some View {
+        #if os(iOS)
+        modifier(KeyboardDismissToolbarModifier())
+        #else
+        self
+        #endif
+    }
+}
+
+#if os(iOS)
+private struct KeyboardDismissToolbarModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        content.toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button {
+                    PlaygroundKeyboard.dismiss()
+                } label: {
+                    Image(systemName: "keyboard.chevron.compact.down")
+                }
+                .accessibilityLabel("Dismiss keyboard")
+            }
+        }
+    }
+}
+#endif
 
 private struct PhoneLayoutKey: EnvironmentKey {
     static let defaultValue = false
@@ -35,7 +73,6 @@ struct QuantumKitMark: View {
             .interpolation(.high)
             .scaledToFit()
             .frame(width: size, height: size)
-            .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
             .accessibilityLabel("QuantumKit")
     }
 }

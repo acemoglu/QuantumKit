@@ -9,6 +9,10 @@ struct SamplePickerView: View {
                 ForEach(SampleCircuit.bundled) { sample in
                     libraryRow(title: sample.name, summary: sample.summary)
                         .tag(sample.id)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            viewModel.loadSample(sample)
+                        }
                 }
             }
 
@@ -18,9 +22,13 @@ struct SamplePickerView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                ForEach(viewModel.savedCircuits) { circuit in
+                ForEach(viewModel.savedCircuits, id: \.id.uuidString) { circuit in
                     libraryRow(title: circuit.name, summary: Self.dateText(circuit.updatedAt))
                         .tag(circuit.id.uuidString)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            viewModel.loadSavedCircuit(circuit)
+                        }
                         .contextMenu {
                             Button("Delete", role: .destructive) {
                                 viewModel.deleteSavedCircuit(circuit)

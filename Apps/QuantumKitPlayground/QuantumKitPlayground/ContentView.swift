@@ -54,6 +54,14 @@ struct ContentView: View {
         ) { result in
             viewModel.handleSaveResult(result)
         }
+        .fileExporter(
+            isPresented: $viewModel.isPresentingHistogramExport,
+            document: viewModel.histogramExportDocument,
+            contentType: .commaSeparatedText,
+            defaultFilename: viewModel.suggestedHistogramFilename
+        ) { result in
+            viewModel.handleHistogramExportResult(result)
+        }
         .sheet(isPresented: $isPresentingSamples) {
             NavigationStack {
                 SamplePickerView()
@@ -117,10 +125,7 @@ struct ContentView: View {
             .toolbarBackground(Color.quantumCanvas, for: .windowToolbar)
             #endif
             .toolbar {
-                ToolbarItem(placement: .navigation) {
-                    QuantumKitMark(size: 22)
-                        .help("QuantumKit")
-                }
+                logoToolbarItem
                 desktopToolbar
             }
     }
@@ -137,7 +142,7 @@ struct ContentView: View {
     @ViewBuilder
     private var splitWorkspace: some View {
         #if os(macOS)
-        HSplitView {
+        HStack(spacing: 12) {
             centerStage
                 .frame(minWidth: 420)
             ResultsPanelView(showsSettings: true)
@@ -229,6 +234,9 @@ struct ContentView: View {
 
         ToolbarItem(placement: .navigationBarTrailing) {
             Menu {
+                Button("How to Use", systemImage: "questionmark.circle") {
+                    viewModel.isPresentingHelp = true
+                }
                 Button("Open…", systemImage: "folder") {
                     viewModel.presentOpen()
                 }
@@ -238,6 +246,10 @@ struct ContentView: View {
                 Button("Save to My Circuits", systemImage: "tray.and.arrow.down") {
                     viewModel.presentSaveToLibrary()
                 }
+                Button("Export Histogram…", systemImage: "tablecells") {
+                    viewModel.presentHistogramExport()
+                }
+                .disabled(!viewModel.canExportHistogram)
                 Button("Parse", systemImage: "text.alignleft") {
                     viewModel.parse()
                 }
@@ -263,6 +275,22 @@ struct ContentView: View {
         }
     }
     #endif
+
+    @ToolbarContentBuilder
+    private var logoToolbarItem: some ToolbarContent {
+        if #available(macOS 26.0, iOS 26.0, *) {
+            ToolbarItem(placement: .navigation) {
+                QuantumKitMark(size: 22)
+                    .help("QuantumKit")
+            }
+            .sharedBackgroundVisibility(.hidden)
+        } else {
+            ToolbarItem(placement: .navigation) {
+                QuantumKitMark(size: 22)
+                    .help("QuantumKit")
+            }
+        }
+    }
 
     @ToolbarContentBuilder
     private var desktopToolbar: some ToolbarContent {
