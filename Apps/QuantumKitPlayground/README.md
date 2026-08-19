@@ -1,53 +1,52 @@
+<p align="center">
+  <img src="QuantumKitPlayground/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png" width="120" alt="QuantumKit">
+</p>
+
 # QuantumKit (app)
 
-SwiftUI apps for editing OpenQASM, composing circuits visually, and running simulations against the local **QuantumKit** package. Both apps install as **QuantumKit.app** (Dock / home screen / menu bar).
+Circuit editor for Mac and iPhone. Build on the canvas or in OpenQASM, then run the simulation on this device. The Swift package is in the [repo README](../../README.md).
 
-Two targets share the same sources:
+<p align="center">
+  <a href="https://apps.apple.com/app/quantumkit"><img src="https://developer.apple.com/assets/elements/badges/download-on-the-app-store.svg" alt="Download on the App Store" width="160"></a>
+</p>
 
-| Scheme | Platform | Bundle ID |
-|---|---|---|
-| **QuantumKitPlayground** | macOS 14+ | `com.quantumkit.playground` |
-| **QuantumKitPlayground iOS** | iPhone / iPad (iOS 16+) | `com.quantumkit.playground.ios` |
+## How to use
 
-## Open in Xcode
+Start with a sample. **Bell**, **Toffoli**, and **GHZ-4** finish in well under a second. Run, check the histogram, then grow.
 
-1. Open `Apps/QuantumKitPlayground/QuantumKitPlayground.xcodeproj`.
-2. Wait for Xcode to resolve the local Swift package at `../../` (repo root / `Package.swift`).
-3. Pick a scheme:
-   - **QuantumKitPlayground** → destination **My Mac**
-   - **QuantumKitPlayground iOS** → an **iPhone** (or iPad) simulator / device
-4. Press **Run** (⌘R in Xcode). In the Mac app, **⌘R** also runs the circuit.
+### Build a circuit
 
-## What it does
+On the **Circuit** canvas, pick a gate from the palette and drop it on a qubit wire (or tap the gate, then the wire). CNOT, CZ, and SWAP need a second qubit.
 
-- Load bundled `.qasm` samples from `QuantumKitPlayground/Resources/Samples/` (Bell, Toffoli, teleport, Grover 2q, parametric, GHZ-4).
-- Edit OpenQASM in the source pane, **or build visually**: drag gates from the palette onto qubit wires (or click a gate, then a qubit). CNOT/CZ/SWAP ask for a second qubit. The ASCII preview and OpenQASM stay in sync.
-- The ASCII circuit preview updates automatically after a short debounce; **Parse** still forces an immediate refresh.
-- **Open…** and **Save…** load and write `.qasm` files. Drag a `.qasm` or `.txt` file onto the editor (macOS and iPad) to replace the source; files larger than 1 MB are rejected.
-- **Run** simulates via `QuantumBackendFactory.makeRecommended` on a background thread.
-- Choose **Automatic / Metal / CPU**, shots, and a numeric seed (or random).
-- Results show method, device name, wall time, qubit/gate counts, and a histogram of MSB bitstrings.
+**New Circuit** gives a blank 2-qubit canvas. **Save Circuit** keeps it under My Circuits.
 
-## Layout
+The visual circuit, the ASCII preview, and the OpenQASM stay in sync.
 
-- **Mac:** sample sidebar; **Circuit | Code** in the center; results + run settings on the right. First launch opens **How to Use** (also **⌘?** / toolbar **?**). Keep everyday runs on the bundled samples (Bell, GHZ-4); 20+ qubits is seconds by design, ~30 qubits can be tens of seconds.
-- **iOS (iPhone and iPad):** bottom tab bar — **Circuit**, **Code**, **Results**. Samples and Run sit in the navigation bar; Open / Save / Parse are in the overflow menu. On iPhone, tap a palette gate then a qubit wire. Drag-and-drop still works on iPad. Run jumps to Results.
+### Code
 
-## Requirements
+**Code** is the OpenQASM editor. Open or save a `.qasm` file, or drop one onto the editor (Mac and iPad). Files larger than 1 MB are rejected. **Parse** refreshes the circuit immediately.
 
-- Xcode 16+ (Swift 6.2 toolchain matching `Package.swift`)
-- macOS 14+ or iOS 16+ (app targets; QuantumKit itself still supports macOS 13)
+### Run
 
-## Package link
+**Run** (⌘R on Mac) simulates locally. Set device (leave **Automatic** unless you have a reason), shots, and seed.
 
-```
-Apps/QuantumKitPlayground/QuantumKitPlayground.xcodeproj  →  ../../  (repo root)
-```
+Results: method, device, wall time, qubit/gate counts, and an MSB histogram. Errors show after Run, not while you type.
 
-No changes to `Package.swift` or library sources are required to build the apps.
+The first GPU run after launch warms shaders. The next run at the same width is the one that counts. Raising shots on a noiseless circuit barely changes time; qubit count and gate count do.
 
-## Notes
+## Samples
 
-- Simulation uses `SimulationPolicy.devicePreference` (Automatic / Metal / CPU). The apps never construct Metal types themselves.
-- Parse errors and run errors are shown in separate red banners (`LocalizedError.errorDescription`).
-- On iPhone, large statevector jobs are limited by device memory; start with the bundled samples.
+| Sample | What it is |
+| --- | --- |
+| Bell State | H + CNOT, then measure |
+| Toffoli | Three-qubit CCX, then measure |
+| Teleport | Bell pair, measure, classically controlled X and Z |
+| Grover (2 qubits) | Two-qubit amplitude amplification |
+| Rotations | RX, RY, RZ with explicit angles |
+| GHZ (4 qubits) | Four-qubit GHZ, then measure |
+
+## Tips
+
+The visual canvas caps at 8 qubits. Stay on the small samples for everyday use. 20+ qubits is seconds; ~30 qubits can be tens of seconds and uses gigabytes — that is expected, not a hang. On iPhone, start with Bell or GHZ-4.
+
+How to Use is also in the app (⌘? on Mac, **?** in the toolbar).
