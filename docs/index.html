@@ -12,7 +12,7 @@
   <meta property="og:description" content="On-device quantum circuit simulation for Apple silicon. Swift. Metal. No cloud.">
   <meta property="og:image" content="https://acemoglu.github.io/QuantumKit/assets/logo.png">
   <meta property="og:url" content="https://acemoglu.github.io/QuantumKit/">
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css?v=3">
 </head>
 <body>
   <div class="grid" aria-hidden="true"></div>
@@ -25,6 +25,7 @@
     <nav>
       <a href="#install">Install</a>
       <a href="#limits">Limits</a>
+      <a href="privacy.html">Privacy</a>
       <a href="https://github.com/acemoglu/QuantumKit">GitHub</a>
     </nav>
   </header>
@@ -114,6 +115,15 @@ print(result.bitstringCounts ?? [:])</code></pre>
       <h2>The app</h2>
       <p>
         Visual circuit editor for Mac, iPhone, and iPad. Drag gates onto wires or write OpenQASM, then run locally on this library.
+        No account, login, or network is required.
+      </p>
+      <ol>
+        <li>Open Samples</li>
+        <li>Select Bell State (or any other sample)</li>
+        <li>Tap or click Run. A measurement histogram should appear (for Bell, roughly 00 and 11).</li>
+      </ol>
+      <p class="note">
+        You can also write OpenQASM in the Code tab, or build a circuit on the Circuit canvas (tap a gate, then a qubit), then Run.
       </p>
       <a class="store" href="https://apps.apple.com/app/quantumkit">
         <img src="https://developer.apple.com/assets/elements/badges/download-on-the-app-store.svg" width="160" height="54" alt="Download on the App Store">
@@ -122,7 +132,7 @@ print(result.bitstringCounts ?? [:])</code></pre>
   </main>
 
   <footer>
-    <span>Apache 2.0</span>
+    <a href="privacy.html">Privacy &amp; disclaimer</a>
     <a href="https://github.com/acemoglu/QuantumKit">github.com/acemoglu/QuantumKit</a>
   </footer>
 </body>
