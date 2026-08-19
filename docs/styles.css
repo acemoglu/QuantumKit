@@ -1,0 +1,247 @@
+:root {
+  --bg: #070708;
+  --fg: #f4f4f2;
+  --mute: #9a9a94;
+  --line: rgba(255, 255, 255, 0.12);
+  --pad: clamp(1.25rem, 4vw, 2.5rem);
+}
+
+* { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  color: var(--fg);
+  background: var(--bg);
+  font: 16px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+.grid {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(var(--line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--line) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: radial-gradient(ellipse at 50% 0%, black 20%, transparent 70%);
+  opacity: 0.45;
+}
+
+.top {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem var(--pad);
+  border-bottom: 1px solid var(--line);
+  background: rgba(7, 7, 8, 0.86);
+  backdrop-filter: blur(12px);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  color: var(--fg);
+  text-decoration: none;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.brand img {
+  border-radius: 8px;
+}
+
+nav {
+  display: flex;
+  gap: 1.25rem;
+}
+
+nav a {
+  color: var(--mute);
+  text-decoration: none;
+  font-size: 0.92rem;
+}
+
+nav a:hover { color: var(--fg); }
+
+main {
+  position: relative;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 3rem var(--pad) 5rem;
+}
+
+.hero {
+  text-align: center;
+  padding-bottom: 2.5rem;
+}
+
+.mark {
+  border-radius: 22px;
+  box-shadow: 0 0 0 1px var(--line);
+}
+
+.kicker {
+  margin: 1.4rem 0 0.6rem;
+  color: var(--mute);
+  font-size: 0.78rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+h1 {
+  margin: 0 auto;
+  max-width: 18ch;
+  font-size: clamp(1.85rem, 4.5vw, 2.6rem);
+  line-height: 1.15;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+}
+
+.lede {
+  margin: 1rem auto 0;
+  max-width: 42ch;
+  color: var(--mute);
+}
+
+.cta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.75rem;
+  margin-top: 1.6rem;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.65rem 1.1rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--fg);
+  text-decoration: none;
+  font-size: 0.92rem;
+}
+
+.btn.primary {
+  background: var(--fg);
+  color: var(--bg);
+  border-color: var(--fg);
+}
+
+.btn:hover { filter: brightness(1.08); }
+
+.facts {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0;
+  margin: 0.5rem 0 2.5rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.facts article {
+  padding: 1.1rem 1rem;
+  text-align: center;
+}
+
+.facts article + article {
+  border-left: 1px solid var(--line);
+}
+
+.num {
+  display: block;
+  font-size: 1.7rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.04em;
+}
+
+.lbl {
+  display: block;
+  margin-top: 0.2rem;
+  color: var(--mute);
+  font-size: 0.78rem;
+}
+
+section { margin-bottom: 2.4rem; }
+
+h2 {
+  margin: 0 0 0.7rem;
+  font-size: 1.15rem;
+  letter-spacing: -0.02em;
+}
+
+p { margin: 0 0 0.8rem; color: #c9c9c3; }
+
+.note { color: var(--mute); font-size: 0.9rem; }
+
+pre {
+  overflow-x: auto;
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #101012;
+}
+
+pre + pre { margin-top: 0.75rem; }
+
+code {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.82rem;
+}
+
+p code, .lbl code, .note code {
+  padding: 0.05em 0.35em;
+  border-radius: 4px;
+  background: #18181c;
+  font-size: 0.85em;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.95rem;
+}
+
+th, td {
+  padding: 0.65rem 0;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+}
+
+td:last-child, th:last-child {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+th { color: var(--mute); font-weight: 500; }
+
+.app .store { display: inline-block; margin-top: 0.4rem; }
+
+footer {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.5rem 1.5rem;
+  padding: 1.2rem var(--pad) 2rem;
+  border-top: 1px solid var(--line);
+  color: var(--mute);
+  font-size: 0.85rem;
+}
+
+footer a { color: var(--mute); }
+
+@media (max-width: 640px) {
+  .facts { grid-template-columns: 1fr; }
+  .facts article + article { border-left: 0; border-top: 1px solid var(--line); }
+  nav { display: none; }
+}

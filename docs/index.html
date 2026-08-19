@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>QuantumKit — on-device quantum simulation for Apple silicon</title>
+  <meta name="description" content="Swift package for on-device quantum circuit simulation on Apple silicon. Metal statevector and density-matrix engines, CPU fallback. No Python, no cloud.">
+  <link rel="canonical" href="https://acemoglu.github.io/QuantumKit/">
+  <link rel="icon" type="image/png" href="assets/favicon.png">
+  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+  <meta property="og:title" content="QuantumKit">
+  <meta property="og:description" content="On-device quantum circuit simulation for Apple silicon. Swift. Metal. No cloud.">
+  <meta property="og:image" content="https://acemoglu.github.io/QuantumKit/assets/logo.png">
+  <meta property="og:url" content="https://acemoglu.github.io/QuantumKit/">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="grid" aria-hidden="true"></div>
+
+  <header class="top">
+    <a class="brand" href="./">
+      <img src="assets/logo.png" width="36" height="36" alt="">
+      <span>QuantumKit</span>
+    </a>
+    <nav>
+      <a href="#install">Install</a>
+      <a href="#limits">Limits</a>
+      <a href="https://github.com/acemoglu/QuantumKit">GitHub</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero">
+      <img class="mark" src="assets/logo.png" width="112" height="112" alt="QuantumKit">
+      <p class="kicker">Swift · Metal · Apple silicon</p>
+      <h1>Quantum circuits that run in your app process.</h1>
+      <p class="lede">
+        Statevector and density-matrix engines on the GPU, CPU when there is no Metal.
+        No Python. No cloud backend. Version 1.0.0.
+      </p>
+      <div class="cta">
+        <a class="btn primary" href="https://github.com/acemoglu/QuantumKit">View the package</a>
+        <a class="btn" href="https://apps.apple.com/app/quantumkit">Get the app</a>
+      </div>
+    </section>
+
+    <section class="facts" aria-label="Facts">
+      <article>
+        <span class="num">31</span>
+        <span class="lbl">qubits, Metal statevector</span>
+      </article>
+      <article>
+        <span class="num">0</span>
+        <span class="lbl">network calls at run time</span>
+      </article>
+      <article>
+        <span class="num">1</span>
+        <span class="lbl">product: <code>QuantumKit</code></span>
+      </article>
+    </section>
+
+    <section id="install">
+      <h2>Install</h2>
+      <p class="note">macOS 13+, iOS 16+. Xcode: File → Add Package Dependencies… → the URL below.</p>
+      <pre><code>dependencies: [
+    .package(url: "https://github.com/acemoglu/QuantumKit.git", from: "1.0.0")
+]</code></pre>
+      <pre><code>import QuantumKit
+
+var circuit = try QuantumCircuit(qubitCount: 2)
+try circuit.h(0)
+try circuit.cx(0, 1)
+try circuit.measure(0)
+try circuit.measure(1)
+
+let backend = try QuantumBackendFactory.makeRecommended(circuit: circuit)
+let result = try backend.run(
+    circuit: circuit,
+    options: QuantumRunOptions(seed: 1, shots: 1024)
+)
+print(result.bitstringCounts ?? [:])</code></pre>
+      <p class="note">Until a <code>1.0.0</code> git tag exists, add the package from <code>main</code>.</p>
+    </section>
+
+    <section>
+      <h2>How it picks a path</h2>
+      <p>
+        <code>QuantumBackendFactory.makeRecommended</code> uses Metal when a GPU is there, otherwise CPU.
+        Noiseless circuits with trailing measurements evolve once, then sample — time follows width and gates, not shot count.
+        OpenQASM 2 and a core OpenQASM 3 subset import into the same IR.
+      </p>
+    </section>
+
+    <section id="limits">
+      <h2>Width limits</h2>
+      <table>
+        <thead>
+          <tr><th>Path</th><th>Max qubits</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Metal statevector</td><td>31</td></tr>
+          <tr><td>CPU statevector</td><td>16</td></tr>
+          <tr><td>Metal density matrix</td><td>14</td></tr>
+          <tr><td>CPU density matrix</td><td>8</td></tr>
+        </tbody>
+      </table>
+      <p class="note">
+        n = 30 is about 8&nbsp;GB of amplitude buffers. Metal engines use Float32 and renormalize every 50 gates by default.
+        First Metal run at a width compiles shaders — time the next one.
+      </p>
+    </section>
+
+    <section class="app">
+      <h2>The app</h2>
+      <p>
+        Visual circuit editor for Mac, iPhone, and iPad. Drag gates onto wires or write OpenQASM, then run locally on this library.
+      </p>
+      <a class="store" href="https://apps.apple.com/app/quantumkit">
+        <img src="https://developer.apple.com/assets/elements/badges/download-on-the-app-store.svg" width="160" height="54" alt="Download on the App Store">
+      </a>
+    </section>
+  </main>
+
+  <footer>
+    <span>Apache 2.0</span>
+    <a href="https://github.com/acemoglu/QuantumKit">github.com/acemoglu/QuantumKit</a>
+  </footer>
+</body>
+</html>

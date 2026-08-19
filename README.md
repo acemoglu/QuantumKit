@@ -6,7 +6,7 @@
 
 Swift package for on-device quantum circuit simulation on Apple silicon. Metal statevector and density-matrix engines, CPU fallback. Version 1.0.0. macOS 13+, iOS 16+. One product: `QuantumKit`.
 
-[Docs](Sources/QuantumKit/QuantumKit.docc/QuantumKit.md) · [App](#app)
+[Site](https://acemoglu.github.io/QuantumKit/) · [Docs](Sources/QuantumKit/QuantumKit.docc/QuantumKit.md) · [App](#app)
 
 Runs in your app process. No Python, no cloud backend.
 
